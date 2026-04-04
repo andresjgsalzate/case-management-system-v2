@@ -30,7 +30,7 @@ frontend/.env
 frontend/.env.*
 !frontend/.env.example
 
-# Uploads (archivos subidos por usuarios)
+# Uploads
 uploads/
 /var/cms/
 
