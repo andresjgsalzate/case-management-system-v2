@@ -8,6 +8,7 @@ pydantic-settings==2.2.1
 redis[hiredis]==5.0.4
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt>=4.0.0,<5.0.0
 python-multipart==0.0.9
 aiosmtplib==3.0.1
 python-magic==0.4.27
