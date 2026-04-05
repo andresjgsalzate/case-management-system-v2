@@ -55,3 +55,6 @@ coverage.xml
 # OS
 *.tmp
 *.bak
+
+#docs
+*.md
