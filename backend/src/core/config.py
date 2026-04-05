@@ -1,6 +1,6 @@
 from functools import lru_cache
 from typing import List
-from pydantic import field_validator
+from pydantic import field_validator, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    @field_validator("SECRET_KEY")
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters long")
+        return v
+
     # CORS
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
 
@@ -34,7 +41,7 @@ class Settings(BaseSettings):
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USERNAME: str = ""
-    SMTP_PASSWORD: str = ""
+    SMTP_PASSWORD: SecretStr = SecretStr("")
     SMTP_FROM: str = "noreply@example.com"
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
