@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = 10
     UPLOAD_DIR: str = "uploads"
 
+    # SLA
+    SLA_CHECK_INTERVAL_MINUTES: int = 5
+
     # Email (optional)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587

@@ -20,6 +20,8 @@ from backend.src.modules.cases.router import router as cases_router
 from backend.src.modules.activity.router import router as activity_router
 from backend.src.modules.applications.router import router as applications_router
 from backend.src.modules.origins.router import router as origins_router
+from backend.src.modules.classification.router import router as classification_router
+from backend.src.modules.sla.router import router as sla_router
 
 
 @asynccontextmanager
@@ -27,8 +29,13 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_redis()
     register_all_handlers()
+    settings = get_settings()
+    from backend.src.modules.sla.application.jobs import start_sla_scheduler
+    start_sla_scheduler(interval_minutes=settings.SLA_CHECK_INTERVAL_MINUTES)
     yield
     # Shutdown
+    from backend.src.modules.sla.application.jobs import stop_sla_scheduler
+    stop_sla_scheduler()
     await close_redis()
     await engine.dispose()
 
@@ -85,6 +92,8 @@ def create_app() -> FastAPI:
     app.include_router(activity_router)
     app.include_router(applications_router)
     app.include_router(origins_router)
+    app.include_router(classification_router)
+    app.include_router(sla_router)
 
     return app
 

@@ -320,9 +320,51 @@ async def seed_phase_2(session) -> None:
 
 
 # ─── Phase 3: SLA Policies ───────────────────────────────────────────────────
+SLA_POLICIES_SEED = [
+    {"priority_name": "Baja",    "target_resolution_hours": 72},
+    {"priority_name": "Media",   "target_resolution_hours": 24},
+    {"priority_name": "Alta",    "target_resolution_hours": 8},
+    {"priority_name": "Crítica", "target_resolution_hours": 2},
+]
+
+
 async def seed_phase_3(session) -> None:
-    """Seed SLA policies. Populated in Phase 3."""
-    pass
+    """Seed SLA policies por prioridad."""
+    from sqlalchemy import select
+    from src.modules.case_priorities.infrastructure.models import CasePriorityModel
+    from src.modules.sla.infrastructure.models import SLAPolicyModel
+
+    # Construir mapa name → id de prioridades
+    result = await session.execute(
+        select(CasePriorityModel).where(CasePriorityModel.tenant_id == None)
+    )
+    priorities = {p.name: p.id for p in result.scalars().all()}
+
+    count = 0
+    for policy_data in SLA_POLICIES_SEED:
+        priority_id = priorities.get(policy_data["priority_name"])
+        if not priority_id:
+            print(f"  ⚠ Priority '{policy_data['priority_name']}' not found — skipping SLA policy")
+            continue
+        existing = await session.execute(
+            select(SLAPolicyModel).where(
+                SLAPolicyModel.priority_id == priority_id,
+                SLAPolicyModel.tenant_id == None,
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
+        session.add(SLAPolicyModel(
+            id=str(uuid.uuid4()),
+            tenant_id=None,
+            priority_id=priority_id,
+            target_resolution_hours=policy_data["target_resolution_hours"],
+        ))
+        count += 1
+
+    print(f"  ✓ {count} políticas SLA creadas")
+    await session.commit()
+    print("✓ Phase 3 seed complete")
 
 
 async def main() -> None:

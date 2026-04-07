@@ -26,6 +26,9 @@ from backend.src.modules.origins.infrastructure.models import OriginModel
 from backend.src.modules.cases.infrastructure.models import CaseNumberSequenceModel, CaseModel
 from backend.src.modules.assignment.infrastructure.models import CaseAssignmentModel
 from backend.src.modules.activity.infrastructure.models import ActivityEntryModel
+# Phase 3
+from backend.src.modules.classification.infrastructure.models import CaseClassificationModel, ClassificationRuleModel
+from backend.src.modules.sla.infrastructure.models import SLAPolicyModel, SLARecordModel, SLAHolidayModel, SLAWorkScheduleModel
 
 # Alembic Config object
 config = context.config
