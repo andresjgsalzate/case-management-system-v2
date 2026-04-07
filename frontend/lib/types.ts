@@ -1,0 +1,209 @@
+// ─── Core entities ────────────────────────────────────────────────────────────
+
+export interface User {
+  id: string;
+  email: string;
+  full_name: string;
+  role_id?: string;
+  team_id?: string;
+  is_active: boolean;
+  avatar_url?: string;
+  email_notifications: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  description?: string;
+  created_at: string;
+  member_count?: number;
+}
+
+// ─── Cases ────────────────────────────────────────────────────────────────────
+
+export interface CaseStatus {
+  id: string;
+  name: string;
+  color?: string;
+  is_closed: boolean;
+  sort_order: number;
+}
+
+export interface CasePriority {
+  id: string;
+  name: string;
+  level: number;
+  color?: string;
+}
+
+export interface Application {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface Case {
+  id: string;
+  case_number: string;
+  title: string;
+  description?: string;
+  status_id: string;
+  priority_id: string;
+  application_id?: string;
+  origin_id?: string;
+  assigned_to?: string;
+  created_by: string;
+  closed_at?: string;
+  created_at: string;
+  updated_at: string;
+  // Joined fields (may be present depending on endpoint)
+  status?: CaseStatus;
+  priority?: CasePriority;
+  assigned_user?: User;
+}
+
+export interface CaseNote {
+  id: string;
+  case_id: string;
+  content: string;
+  created_by_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  case_id: string;
+  content: string;
+  sender_id: string;
+  created_at: string;
+  edited_at?: string;
+}
+
+// ─── Knowledge Base ───────────────────────────────────────────────────────────
+
+export type KBStatus = 'draft' | 'in_review' | 'approved' | 'published' | 'rejected';
+
+export interface KBTag {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+export interface KBArticle {
+  id: string;
+  title: string;
+  content_json: Record<string, unknown>;
+  content_text: string;
+  status: KBStatus;
+  version: number;
+  created_by_id: string;
+  approved_by_id?: string;
+  published_at?: string;
+  view_count: number;
+  helpful_count: number;
+  not_helpful_count: number;
+  created_at: string;
+  updated_at: string;
+  tags?: KBTag[];
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+export type NotificationType =
+  | 'case_assigned'
+  | 'case_updated'
+  | 'sla_breach'
+  | 'kb_review_request'
+  | 'mention'
+  | 'automation'
+  | 'info';
+
+export interface Notification {
+  id: string;
+  title: string;
+  body: string;
+  notification_type: NotificationType;
+  reference_id?: string;
+  reference_type?: string;
+  is_read: boolean;
+  read_at?: string;
+  created_at: string;
+}
+
+// ─── Audit ────────────────────────────────────────────────────────────────────
+
+export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE';
+
+export interface AuditLog {
+  id: string;
+  action: AuditAction;
+  entity_type: string;
+  entity_id: string;
+  changes?: Record<string, { old: unknown; new: unknown }>;
+  actor_id?: string;
+  ip_address?: string;
+  created_at: string;
+}
+
+// ─── Metrics ──────────────────────────────────────────────────────────────────
+
+export interface DashboardSummary {
+  open_cases: number;
+  created_today: number;
+  resolved_today: number;
+  unassigned: number;
+}
+
+export interface StatusCount {
+  status: string;
+  count: number;
+}
+
+export interface TrendPoint {
+  date: string;
+  count: number;
+}
+
+// ─── Dispositions ─────────────────────────────────────────────────────────────
+
+export interface DispositionCategory {
+  id: string;
+  name: string;
+  description?: string;
+  is_active: boolean;
+}
+
+export interface Disposition {
+  id: string;
+  category_id: string;
+  title: string;
+  content: string;
+  is_active: boolean;
+  usage_count: number;
+}
+
+// ─── API wrapper ──────────────────────────────────────────────────────────────
+
+export interface ApiResponse<T> {
+  success: boolean;
+  data: T;
+  message?: string;
+  error?: string;
+}
+
+export interface PaginatedResponse<T> {
+  success: boolean;
+  data: T[];
+  total?: number;
+  page?: number;
+  page_size?: number;
+}
