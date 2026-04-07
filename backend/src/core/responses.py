@@ -9,6 +9,10 @@ class SuccessResponse(BaseModel, Generic[T]):
     data: T
     message: str = "OK"
 
+    @classmethod
+    def ok(cls, data: T, message: str = "OK") -> "SuccessResponse[T]":
+        return cls(data=data, message=message)
+
 
 class PaginatedResponse(BaseModel, Generic[T]):
     success: bool = True
@@ -34,6 +38,10 @@ class PaginatedResponse(BaseModel, Generic[T]):
             page_size=page_size,
             total_pages=total_pages,
         )
+
+    @classmethod
+    def ok(cls, data: List[T], total: int, page: int, page_size: int) -> "PaginatedResponse[T]":
+        return cls.create(data=data, total=total, page=page, page_size=page_size)
 
 
 class ErrorResponse(BaseModel):

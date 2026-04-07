@@ -34,3 +34,8 @@ class ValidationError(AppError):
 class UnauthorizedError(AppError):
     def __init__(self, message: str = "Authentication required"):
         super().__init__(message=message, code="UNAUTHORIZED")
+
+
+class PermissionDeniedError(AppError):
+    def __init__(self, message: str = "Permission denied"):
+        super().__init__(message=message, code="PERMISSION_DENIED")

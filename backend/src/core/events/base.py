@@ -11,7 +11,10 @@ class BaseEvent:
         default_factory=lambda: datetime.now(timezone.utc)
     )
     payload: dict[str, Any] = field(default_factory=dict)
+    tenant_id: str = field(default="default")
+    actor_id: str = field(default="")
+    event_name: str = field(default="")
 
     @property
     def event_type(self) -> str:
-        return self.__class__.__name__
+        return self.event_name or self.__class__.__name__

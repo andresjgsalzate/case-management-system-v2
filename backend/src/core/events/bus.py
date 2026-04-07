@@ -40,3 +40,7 @@ _event_bus = EventBus()
 
 def get_event_bus() -> EventBus:
     return _event_bus
+
+
+# Module-level alias for convenience imports
+event_bus = _event_bus
