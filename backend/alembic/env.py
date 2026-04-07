@@ -13,6 +13,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from backend.src.core.config import get_settings
 from backend.src.core.database import Base
 
+# Import all models so Alembic can detect them
+from backend.src.modules.roles.infrastructure.models import RoleModel, PermissionModel
+from backend.src.modules.teams.infrastructure.models import TeamModel, TeamMemberModel
+from backend.src.modules.users.infrastructure.models import UserModel
+from backend.src.modules.auth.infrastructure.models import UserSessionModel
+
 # Alembic Config object
 config = context.config
 
