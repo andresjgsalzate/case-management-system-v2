@@ -30,6 +30,7 @@ from backend.src.modules.time_entries.router import router as time_entries_route
 from backend.src.modules.dispositions.router import router as dispositions_router
 from backend.src.modules.metrics.router import router as metrics_router
 from backend.src.modules.search.router import router as search_router
+from backend.src.modules.knowledge_base.router import router as kb_router
 
 
 @asynccontextmanager
@@ -112,6 +113,7 @@ def create_app() -> FastAPI:
     app.include_router(dispositions_router)
     app.include_router(metrics_router)
     app.include_router(search_router)
+    app.include_router(kb_router)
 
     return app
 
