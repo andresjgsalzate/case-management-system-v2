@@ -1,0 +1,32 @@
+[Unit]
+Description=CMS Frontend (Next.js)
+After=network.target cms-backend.service
+Wants=cms-backend.service
+
+[Service]
+Type=exec
+User=cms
+Group=cms
+WorkingDirectory=/opt/cms/frontend/.next/standalone
+EnvironmentFile=/opt/cms/.env.production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+
+ExecStart=/usr/bin/node server.js
+
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/cms/frontend.log
+StandardError=append:/var/log/cms/frontend-error.log
+
+# Hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/cms
+PrivateDevices=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

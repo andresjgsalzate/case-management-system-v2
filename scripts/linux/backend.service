@@ -1,0 +1,37 @@
+[Unit]
+Description=CMS Backend (FastAPI / Uvicorn)
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=exec
+User=cms
+Group=cms
+WorkingDirectory=/opt/cms/backend
+EnvironmentFile=/opt/cms/.env.production
+
+ExecStart=/opt/cms/backend/venv/bin/uvicorn \
+    backend.src.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 4 \
+    --log-level info \
+    --access-log \
+    --no-access-log
+
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/cms/backend.log
+StandardError=append:/var/log/cms/backend-error.log
+
+# Hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/cms /var/log/cms
+PrivateDevices=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
