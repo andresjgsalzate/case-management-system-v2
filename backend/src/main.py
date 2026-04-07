@@ -27,6 +27,9 @@ from backend.src.modules.notes.router import router as notes_router
 from backend.src.modules.attachments.router import router as attachments_router
 from backend.src.modules.todos.router import router as todos_router
 from backend.src.modules.time_entries.router import router as time_entries_router
+from backend.src.modules.dispositions.router import router as dispositions_router
+from backend.src.modules.metrics.router import router as metrics_router
+from backend.src.modules.search.router import router as search_router
 
 
 @asynccontextmanager
@@ -71,6 +74,7 @@ def create_app() -> FastAPI:
             UnauthorizedError,
             PermissionDeniedError,
             BusinessRuleError,
+            ValidationError,
         )
         status_map = {
             NotFoundError: 404,
@@ -79,6 +83,7 @@ def create_app() -> FastAPI:
             UnauthorizedError: 401,
             PermissionDeniedError: 403,
             BusinessRuleError: 422,
+            ValidationError: 400,
         }
         status_code = status_map.get(type(exc), 400)
         return JSONResponse(
@@ -104,6 +109,9 @@ def create_app() -> FastAPI:
     app.include_router(attachments_router)
     app.include_router(todos_router)
     app.include_router(time_entries_router)
+    app.include_router(dispositions_router)
+    app.include_router(metrics_router)
+    app.include_router(search_router)
 
     return app
 

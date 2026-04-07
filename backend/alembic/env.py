@@ -35,6 +35,8 @@ from backend.src.modules.notes.infrastructure.models import CaseNoteModel
 from backend.src.modules.attachments.infrastructure.models import AttachmentModel
 from backend.src.modules.todos.infrastructure.models import CaseTodoModel
 from backend.src.modules.time_entries.infrastructure.models import TimeEntryModel, ActiveTimerModel
+# Phase 5
+from backend.src.modules.dispositions.infrastructure.models import DispositionCategoryModel, DispositionModel
 
 # Alembic Config object
 config = context.config
