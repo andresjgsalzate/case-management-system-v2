@@ -22,3 +22,6 @@ def register_all_handlers() -> None:
         register_handlers as sla_handlers,
     )
     sla_handlers(bus)
+
+    from backend.src.modules.automation.application.handler import register_automation_handler
+    register_automation_handler(bus)

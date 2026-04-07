@@ -32,6 +32,8 @@ class Base(DeclarativeBase):
 
 async def get_db():
     async with AsyncSessionLocal() as session:
+        from backend.src.modules.audit.application.middleware import setup_audit_listener
+        setup_audit_listener(session)
         try:
             yield session
             await session.commit()

@@ -72,6 +72,9 @@ class PermissionChecker:
                 f"Permission denied: {self.module}.{self.action}"
             )
 
+        from backend.src.modules.audit.application.middleware import set_current_actor
+        set_current_actor(user_id)
+
         return CurrentUser(
             user_id=user_id,
             email=email,

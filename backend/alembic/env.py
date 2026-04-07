@@ -42,6 +42,10 @@ from backend.src.modules.knowledge_base.infrastructure.models import (
     KBTagModel, KBArticleModel, KBArticleTagModel,
     KBArticleVersionModel, KBReviewEventModel, KBFavoriteModel, KBFeedbackModel,
 )
+# Phase 7
+from backend.src.modules.notifications.infrastructure.models import NotificationModel
+from backend.src.modules.audit.infrastructure.models import AuditLogModel
+from backend.src.modules.automation.infrastructure.models import AutomationRuleModel
 
 # Alembic Config object
 config = context.config
