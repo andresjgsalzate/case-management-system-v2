@@ -18,6 +18,14 @@ from backend.src.modules.roles.infrastructure.models import RoleModel, Permissio
 from backend.src.modules.teams.infrastructure.models import TeamModel, TeamMemberModel
 from backend.src.modules.users.infrastructure.models import UserModel
 from backend.src.modules.auth.infrastructure.models import UserSessionModel
+# Phase 2
+from backend.src.modules.case_statuses.infrastructure.models import CaseStatusModel
+from backend.src.modules.case_priorities.infrastructure.models import CasePriorityModel
+from backend.src.modules.applications.infrastructure.models import ApplicationModel
+from backend.src.modules.origins.infrastructure.models import OriginModel
+from backend.src.modules.cases.infrastructure.models import CaseNumberSequenceModel, CaseModel
+from backend.src.modules.assignment.infrastructure.models import CaseAssignmentModel
+from backend.src.modules.activity.infrastructure.models import ActivityEntryModel
 
 # Alembic Config object
 config = context.config

@@ -14,6 +14,12 @@ from backend.src.modules.roles.router import router as roles_router
 from backend.src.modules.auth.router import router as auth_router
 from backend.src.modules.users.router import router as users_router
 from backend.src.modules.teams.router import router as teams_router
+from backend.src.modules.case_statuses.router import router as case_statuses_router
+from backend.src.modules.case_priorities.router import router as case_priorities_router
+from backend.src.modules.cases.router import router as cases_router
+from backend.src.modules.activity.router import router as activity_router
+from backend.src.modules.applications.router import router as applications_router
+from backend.src.modules.origins.router import router as origins_router
 
 
 @asynccontextmanager
@@ -47,7 +53,12 @@ def create_app() -> FastAPI:
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         from backend.src.core.exceptions import (
-            ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, PermissionDeniedError,
+            ConflictError,
+            ForbiddenError,
+            NotFoundError,
+            UnauthorizedError,
+            PermissionDeniedError,
+            BusinessRuleError,
         )
         status_map = {
             NotFoundError: 404,
@@ -55,6 +66,7 @@ def create_app() -> FastAPI:
             ForbiddenError: 403,
             UnauthorizedError: 401,
             PermissionDeniedError: 403,
+            BusinessRuleError: 422,
         }
         status_code = status_map.get(type(exc), 400)
         return JSONResponse(
@@ -67,6 +79,12 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(users_router, prefix="/api/v1")
     app.include_router(teams_router, prefix="/api/v1")
+    app.include_router(case_statuses_router)
+    app.include_router(case_priorities_router)
+    app.include_router(cases_router)
+    app.include_router(activity_router)
+    app.include_router(applications_router)
+    app.include_router(origins_router)
 
     return app
 

@@ -7,11 +7,12 @@ class AppError(Exception):
 
 
 class NotFoundError(AppError):
-    def __init__(self, resource: str, identifier: str | int):
-        super().__init__(
-            message=f"{resource} with id '{identifier}' not found",
-            code="NOT_FOUND",
-        )
+    def __init__(self, resource: str, identifier: str | int | None = None):
+        if identifier is None:
+            message = resource  # single-string usage: NotFoundError("Case 123 not found")
+        else:
+            message = f"{resource} with id '{identifier}' not found"
+        super().__init__(message=message, code="NOT_FOUND")
         self.resource = resource
         self.identifier = identifier
 
@@ -39,3 +40,8 @@ class UnauthorizedError(AppError):
 class PermissionDeniedError(AppError):
     def __init__(self, message: str = "Permission denied"):
         super().__init__(message=message, code="PERMISSION_DENIED")
+
+
+class BusinessRuleError(AppError):
+    def __init__(self, message: str):
+        super().__init__(message=message, code="BUSINESS_RULE_VIOLATION")

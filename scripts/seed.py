@@ -181,9 +181,142 @@ async def seed_phase_1(session) -> None:
 
 
 # ─── Phase 2: Cases ──────────────────────────────────────────────────────────
+STATUSES_SEED = [
+    {
+        "name": "Abierto",
+        "slug": "open",
+        "color": "#3B82F6",
+        "order": 1,
+        "is_initial": True,
+        "is_final": False,
+        "transitions": ["in_progress", "closed"],
+    },
+    {
+        "name": "En Progreso",
+        "slug": "in_progress",
+        "color": "#F59E0B",
+        "order": 2,
+        "is_initial": False,
+        "is_final": False,
+        "transitions": ["pending", "resolved", "open"],
+    },
+    {
+        "name": "Pendiente",
+        "slug": "pending",
+        "color": "#8B5CF6",
+        "order": 3,
+        "is_initial": False,
+        "is_final": False,
+        "transitions": ["in_progress", "closed"],
+    },
+    {
+        "name": "Resuelto",
+        "slug": "resolved",
+        "color": "#10B981",
+        "order": 4,
+        "is_initial": False,
+        "is_final": False,
+        "transitions": ["closed", "open"],
+    },
+    {
+        "name": "Cerrado",
+        "slug": "closed",
+        "color": "#6B7280",
+        "order": 5,
+        "is_initial": False,
+        "is_final": True,
+        "transitions": [],
+    },
+]
+
+PRIORITIES_SEED = [
+    {"name": "Baja",    "level": 1, "color": "#6B7280", "is_default": False},
+    {"name": "Media",   "level": 2, "color": "#3B82F6", "is_default": True},
+    {"name": "Alta",    "level": 3, "color": "#F59E0B", "is_default": False},
+    {"name": "Crítica", "level": 4, "color": "#EF4444", "is_default": False},
+]
+
+ORIGINS_SEED = [
+    {"name": "Email",    "code": "EMAIL"},
+    {"name": "Teléfono", "code": "PHONE"},
+    {"name": "Chat",     "code": "CHAT"},
+    {"name": "Portal",   "code": "PORTAL"},
+]
+
+
 async def seed_phase_2(session) -> None:
-    """Seed sample cases. Populated in Phase 2."""
-    pass
+    """Seed case statuses, priorities, and origins."""
+    from sqlalchemy import select
+    from src.modules.case_statuses.infrastructure.models import CaseStatusModel
+    from src.modules.case_priorities.infrastructure.models import CasePriorityModel
+    from src.modules.origins.infrastructure.models import OriginModel
+
+    status_count = 0
+    for s in STATUSES_SEED:
+        existing = await session.execute(
+            select(CaseStatusModel).where(
+                CaseStatusModel.slug == s["slug"],
+                CaseStatusModel.tenant_id == None,
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
+        session.add(CaseStatusModel(
+            id=str(uuid.uuid4()),
+            tenant_id=None,
+            name=s["name"],
+            slug=s["slug"],
+            color=s["color"],
+            order=s["order"],
+            is_initial=s["is_initial"],
+            is_final=s["is_final"],
+            allowed_transitions=s["transitions"],
+        ))
+        status_count += 1
+    print(f"  ✓ {status_count} estados de caso creados")
+
+    priority_count = 0
+    for p in PRIORITIES_SEED:
+        existing = await session.execute(
+            select(CasePriorityModel).where(
+                CasePriorityModel.name == p["name"],
+                CasePriorityModel.tenant_id == None,
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
+        session.add(CasePriorityModel(
+            id=str(uuid.uuid4()),
+            tenant_id=None,
+            name=p["name"],
+            level=p["level"],
+            color=p["color"],
+            is_default=p["is_default"],
+        ))
+        priority_count += 1
+    print(f"  ✓ {priority_count} prioridades de caso creadas")
+
+    origin_count = 0
+    for o in ORIGINS_SEED:
+        existing = await session.execute(
+            select(OriginModel).where(
+                OriginModel.code == o["code"],
+                OriginModel.tenant_id == None,
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
+        session.add(OriginModel(
+            id=str(uuid.uuid4()),
+            tenant_id=None,
+            name=o["name"],
+            code=o["code"],
+        ))
+        origin_count += 1
+    print(f"  ✓ {origin_count} orígenes creados")
+
+    await session.commit()
+    print("✓ Phase 2 seed complete")
 
 
 # ─── Phase 3: SLA Policies ───────────────────────────────────────────────────
