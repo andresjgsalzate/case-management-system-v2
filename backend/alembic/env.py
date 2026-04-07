@@ -29,6 +29,12 @@ from backend.src.modules.activity.infrastructure.models import ActivityEntryMode
 # Phase 3
 from backend.src.modules.classification.infrastructure.models import CaseClassificationModel, ClassificationRuleModel
 from backend.src.modules.sla.infrastructure.models import SLAPolicyModel, SLARecordModel, SLAHolidayModel, SLAWorkScheduleModel
+# Phase 4
+from backend.src.modules.chat.infrastructure.models import ChatMessageModel
+from backend.src.modules.notes.infrastructure.models import CaseNoteModel
+from backend.src.modules.attachments.infrastructure.models import AttachmentModel
+from backend.src.modules.todos.infrastructure.models import CaseTodoModel
+from backend.src.modules.time_entries.infrastructure.models import TimeEntryModel, ActiveTimerModel
 
 # Alembic Config object
 config = context.config

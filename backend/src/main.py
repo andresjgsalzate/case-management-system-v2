@@ -22,6 +22,11 @@ from backend.src.modules.applications.router import router as applications_route
 from backend.src.modules.origins.router import router as origins_router
 from backend.src.modules.classification.router import router as classification_router
 from backend.src.modules.sla.router import router as sla_router
+from backend.src.modules.chat.router import router as chat_router
+from backend.src.modules.notes.router import router as notes_router
+from backend.src.modules.attachments.router import router as attachments_router
+from backend.src.modules.todos.router import router as todos_router
+from backend.src.modules.time_entries.router import router as time_entries_router
 
 
 @asynccontextmanager
@@ -94,6 +99,11 @@ def create_app() -> FastAPI:
     app.include_router(origins_router)
     app.include_router(classification_router)
     app.include_router(sla_router)
+    app.include_router(chat_router)
+    app.include_router(notes_router)
+    app.include_router(attachments_router)
+    app.include_router(todos_router)
+    app.include_router(time_entries_router)
 
     return app
 
