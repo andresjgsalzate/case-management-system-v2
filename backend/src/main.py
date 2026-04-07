@@ -12,6 +12,7 @@ from backend.src.core.redis_client import close_redis, init_redis
 from backend.src.modules.health.router import router as health_router
 from backend.src.modules.roles.router import router as roles_router
 from backend.src.modules.auth.router import router as auth_router
+from backend.src.modules.users.router import router as users_router
 
 
 @asynccontextmanager
@@ -63,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(roles_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(users_router, prefix="/api/v1")
 
     return app
 
