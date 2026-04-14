@@ -19,7 +19,8 @@ async def list_users(
 ):
     uc = UserUseCases(db)
     users, total = await uc.list_users(
-        current_user.tenant_id, pagination.page, pagination.page_size
+        current_user.tenant_id, pagination.page, pagination.page_size,
+        all_tenants=current_user.is_global,
     )
     return PaginatedResponse.ok(users, total, pagination.page, pagination.page_size)
 
@@ -63,3 +64,13 @@ async def deactivate_user(
 ):
     uc = UserUseCases(db)
     await uc.deactivate_user(user_id, current_user.user_id, current_user.tenant_id)
+
+
+@router.post("/{user_id}/reactivate", status_code=204)
+async def reactivate_user(
+    user_id: str,
+    db: DBSession,
+    current_user: CurrentUser = Depends(PermissionChecker("users", "delete")),
+):
+    uc = UserUseCases(db)
+    await uc.reactivate_user(user_id)

@@ -13,7 +13,27 @@ TimeCreate = Depends(PermissionChecker("time_entries", "create"))
 
 class ManualEntryDTO(BaseModel):
     minutes: int
-    description: str | None = None
+    description: str
+
+
+class StopTimerDTO(BaseModel):
+    description: str
+
+
+@router.get("/time-entries/timer/active")
+async def get_active_timer(
+    db: DBSession,
+    current_user: CurrentUser = TimeRead,
+):
+    uc = TimeEntryUseCases(db=db)
+    timer = await uc.get_active_timer(user_id=current_user.user_id)
+    if not timer:
+        return SuccessResponse.ok(None)
+    return SuccessResponse.ok({
+        "id": timer.id,
+        "case_id": timer.case_id,
+        "started_at": timer.started_at.isoformat(),
+    })
 
 
 @router.post("/cases/{case_id}/time-entries/timer/start")
@@ -33,11 +53,12 @@ async def start_timer(
 
 @router.post("/time-entries/timer/stop")
 async def stop_timer(
+    body: StopTimerDTO,
     db: DBSession,
     current_user: CurrentUser = TimeCreate,
 ):
     uc = TimeEntryUseCases(db=db)
-    entry = await uc.stop_timer(user_id=current_user.user_id)
+    entry = await uc.stop_timer(user_id=current_user.user_id, description=body.description)
     return SuccessResponse.ok({
         "id": entry.id,
         "case_id": entry.case_id,
@@ -65,7 +86,7 @@ async def add_manual_entry(
     return SuccessResponse.ok({"id": entry.id, "minutes": entry.minutes})
 
 
-@router.get("/cases/{case_id}/time-entries", response_model=SuccessResponse[list[dict]])
+@router.get("/cases/{case_id}/time-entries", response_model=SuccessResponse[dict])
 async def list_time_entries(
     case_id: str,
     db: DBSession,

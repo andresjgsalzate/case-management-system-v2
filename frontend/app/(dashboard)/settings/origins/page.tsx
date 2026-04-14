@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Globe } from "lucide-react";
+import { Plus, Trash2, Globe, Pencil, Check, X } from "lucide-react";
 import { apiClient } from "@/lib/apiClient";
 import { Spinner } from "@/components/atoms/Spinner";
+import { useConfirm } from "@/components/providers/ConfirmProvider";
 import { Badge } from "@/components/atoms/Badge";
 import type { ApiResponse } from "@/lib/types";
 
@@ -26,11 +27,14 @@ function useOrigins() {
 }
 
 export default function OriginsSettingsPage() {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const { data: origins = [], isLoading } = useOrigins();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", code: "" });
   const [error, setError] = useState("");
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", code: "" });
 
   const createMutation = useMutation({
     mutationFn: (body: { name: string; code: string }) => apiClient.post("/origins", body),
@@ -46,13 +50,27 @@ export default function OriginsSettingsPage() {
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: { name: string; code: string } }) =>
+      apiClient.patch(`/origins/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["origins"] });
+      setEditId(null);
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiClient.delete(`/origins/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["origins"] }),
   });
 
+  async function handleDelete(id: string, name: string) {
+    const ok = await confirm({ description: `¿Desactivar el origen "${name}"?` });
+    if (ok) deleteMutation.mutate(id);
+  }
+
   return (
-    <div className="flex flex-col gap-5 max-w-2xl">
+    <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Orígenes</h1>
@@ -121,33 +139,84 @@ export default function OriginsSettingsPage() {
             {origins.length === 0 && !isLoading && (
               <tr><td colSpan={4} className="px-4 py-10 text-center text-sm text-muted-foreground">Sin orígenes configurados</td></tr>
             )}
-            {origins.map((o) => (
-              <tr key={o.id} className="hover:bg-muted/30 transition-colors">
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <Globe className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium text-foreground">{o.name}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">{o.code}</span>
-                </td>
-                <td className="px-4 py-3">
-                  <Badge variant={o.is_active ? "success" : "outline"} className="text-xs">
-                    {o.is_active ? "Activo" : "Inactivo"}
-                  </Badge>
-                </td>
-                <td className="px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => { if (confirm(`¿Desactivar "${o.name}"?`)) deleteMutation.mutate(o.id); }}
-                    className="text-muted-foreground hover:text-destructive transition-colors"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {origins.map((o) =>
+              editId === o.id ? (
+                <tr key={o.id} className="bg-muted/20">
+                  <td className="px-4 py-2">
+                    <input
+                      className="px-2 py-1.5 text-sm rounded border border-primary bg-background focus:outline-none w-full"
+                      value={editForm.name}
+                      onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                      placeholder="Nombre"
+                      autoFocus
+                    />
+                  </td>
+                  <td className="px-4 py-2">
+                    <input
+                      className="px-2 py-1.5 text-sm rounded border border-border bg-background focus:outline-none w-full font-mono uppercase"
+                      value={editForm.code}
+                      onChange={(e) => setEditForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))}
+                      placeholder="CÓDIGO"
+                    />
+                  </td>
+                  <td className="px-4 py-2">
+                    <Badge variant={o.is_active ? "success" : "outline"} className="text-xs">
+                      {o.is_active ? "Activo" : "Inactivo"}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={!editForm.name.trim() || !editForm.code.trim() || updateMutation.isPending}
+                        onClick={() => updateMutation.mutate({ id: o.id, body: editForm })}
+                        className="text-green-600 hover:text-green-700 disabled:opacity-40"
+                      >
+                        <Check className="h-4 w-4" />
+                      </button>
+                      <button type="button" onClick={() => setEditId(null)} className="text-muted-foreground hover:text-foreground">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={o.id} className="hover:bg-muted/30 transition-colors group">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <Globe className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-medium text-foreground">{o.name}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">{o.code}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge variant={o.is_active ? "success" : "outline"} className="text-xs">
+                      {o.is_active ? "Activo" : "Inactivo"}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { setEditId(o.id); setEditForm({ name: o.name, code: o.code }); }}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(o.id, o.name)}
+                        className="text-muted-foreground hover:text-destructive transition-colors"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            )}
           </tbody>
         </table>
       </div>

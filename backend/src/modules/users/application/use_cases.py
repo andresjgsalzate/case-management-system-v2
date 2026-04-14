@@ -53,9 +53,12 @@ class UserUseCases:
         return self._to_dto(user)
 
     async def list_users(
-        self, tenant_id: str | None, page: int = 1, page_size: int = 20
+        self, tenant_id: str | None, page: int = 1, page_size: int = 20,
+        all_tenants: bool = False,
     ) -> tuple[list[UserResponseDTO], int]:
-        query = select(UserModel).where(UserModel.tenant_id == tenant_id)
+        query = select(UserModel)
+        if not all_tenants:
+            query = query.where(UserModel.tenant_id == tenant_id)
         count_result = await self.db.execute(
             select(func.count()).select_from(query.subquery())
         )
@@ -92,6 +95,13 @@ class UserUseCases:
             payload={"user_id": user_id},
         ))
 
+    async def reactivate_user(self, user_id: str) -> None:
+        user = await self.db.get(UserModel, user_id)
+        if not user:
+            raise NotFoundError("User", user_id)
+        user.is_active = True
+        await self.db.commit()
+
     async def change_password(self, user_id: str, dto: ChangePasswordDTO) -> None:
         user = await self.db.get(UserModel, user_id)
         if not user:
@@ -108,6 +118,7 @@ class UserUseCases:
             full_name=model.full_name,
             role_id=model.role_id,
             team_id=model.team_id,
+            tenant_id=model.tenant_id,
             is_active=model.is_active,
             email_notifications=model.email_notifications,
             avatar_url=model.avatar_url,

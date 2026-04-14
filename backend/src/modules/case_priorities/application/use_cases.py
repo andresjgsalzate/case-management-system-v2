@@ -8,6 +8,7 @@ from backend.src.modules.case_priorities.application.dtos import (
     CasePriorityResponseDTO,
 )
 from backend.src.core.exceptions import NotFoundError, ConflictError
+from backend.src.core.tenant import catalog_filter
 
 
 class CasePriorityUseCases:
@@ -34,7 +35,7 @@ class CasePriorityUseCases:
         result = await self.db.execute(
             select(CasePriorityModel)
             .where(
-                CasePriorityModel.tenant_id == tenant_id,
+                catalog_filter(CasePriorityModel, tenant_id),
                 CasePriorityModel.is_active == True,
             )
             .order_by(CasePriorityModel.level)

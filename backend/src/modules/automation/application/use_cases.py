@@ -49,6 +49,38 @@ class AutomationUseCases:
         result = await self.db.execute(stmt.order_by(AutomationRuleModel.created_at.desc()))
         return list(result.scalars().all())
 
+    async def update_rule(
+        self,
+        rule_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        trigger_event: str | None = None,
+        conditions: list[dict] | None = None,
+        actions: list[dict] | None = None,
+        condition_logic: str | None = None,
+    ) -> AutomationRuleModel:
+        result = await self.db.execute(
+            select(AutomationRuleModel).where(AutomationRuleModel.id == rule_id)
+        )
+        rule = result.scalar_one_or_none()
+        if not rule:
+            raise NotFoundError(f"Regla {rule_id} no encontrada")
+        if name is not None:
+            rule.name = name
+        if description is not None:
+            rule.description = description
+        if trigger_event is not None:
+            rule.trigger_event = trigger_event
+        if conditions is not None:
+            rule.conditions = conditions
+        if actions is not None:
+            rule.actions = actions
+        if condition_logic is not None:
+            rule.condition_logic = condition_logic
+        await self.db.flush()
+        await self.db.refresh(rule)
+        return rule
+
     async def get_rule(self, rule_id: str) -> AutomationRuleModel:
         result = await self.db.execute(
             select(AutomationRuleModel).where(AutomationRuleModel.id == rule_id)

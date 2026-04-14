@@ -27,7 +27,7 @@ from backend.src.modules.cases.infrastructure.models import CaseNumberSequenceMo
 from backend.src.modules.assignment.infrastructure.models import CaseAssignmentModel
 from backend.src.modules.activity.infrastructure.models import ActivityEntryModel
 # Phase 3
-from backend.src.modules.classification.infrastructure.models import CaseClassificationModel, ClassificationRuleModel
+from backend.src.modules.classification.infrastructure.models import CaseClassificationModel, ClassificationRuleModel, ClassificationCriterionModel, ClassificationThresholdModel
 from backend.src.modules.sla.infrastructure.models import SLAPolicyModel, SLARecordModel, SLAHolidayModel, SLAWorkScheduleModel
 # Phase 4
 from backend.src.modules.chat.infrastructure.models import ChatMessageModel
@@ -43,9 +43,10 @@ from backend.src.modules.knowledge_base.infrastructure.models import (
     KBArticleVersionModel, KBReviewEventModel, KBFavoriteModel, KBFeedbackModel,
 )
 # Phase 7
-from backend.src.modules.notifications.infrastructure.models import NotificationModel
+from backend.src.modules.notifications.infrastructure.models import NotificationModel, NotificationTemplateModel
 from backend.src.modules.audit.infrastructure.models import AuditLogModel
 from backend.src.modules.automation.infrastructure.models import AutomationRuleModel
+from backend.src.modules.tenants.infrastructure.models import TenantModel
 
 # Alembic Config object
 config = context.config

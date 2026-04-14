@@ -34,7 +34,7 @@ export default function NewKBArticlePage() {
   }
 
   return (
-    <div className="flex flex-col gap-5 max-w-2xl">
+    <div className="flex flex-col gap-5">
       <div>
         <Link
           href="/kb"

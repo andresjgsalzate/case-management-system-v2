@@ -13,6 +13,7 @@ class UpdateUserDTO(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=300)
     role_id: str | None = None
     team_id: str | None = None
+    tenant_id: str | None = None
     email_notifications: bool | None = None
     avatar_url: str | None = None
 
@@ -28,6 +29,7 @@ class UserResponseDTO(BaseModel):
     full_name: str
     role_id: str | None
     team_id: str | None
+    tenant_id: str | None
     is_active: bool
     email_notifications: bool
     avatar_url: str | None

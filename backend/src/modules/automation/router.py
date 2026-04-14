@@ -11,6 +11,7 @@ from backend.src.modules.automation.application.use_cases import AutomationUseCa
 router = APIRouter(prefix="/api/v1/automation/rules", tags=["automation"])
 AutoRead = Depends(PermissionChecker("automation", "read"))
 AutoWrite = Depends(PermissionChecker("automation", "create"))
+AutoManage = Depends(PermissionChecker("automation", "manage"))
 
 
 class RuleCreateDTO(BaseModel):
@@ -20,6 +21,15 @@ class RuleCreateDTO(BaseModel):
     conditions: list[dict[str, Any]] = []
     actions: list[dict[str, Any]]
     condition_logic: str = "AND"
+
+
+class RuleUpdateDTO(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    trigger_event: str | None = None
+    conditions: list[dict[str, Any]] | None = None
+    actions: list[dict[str, Any]] | None = None
+    condition_logic: str | None = None
 
 
 @router.get("", response_model=SuccessResponse[list[dict]])
@@ -57,7 +67,7 @@ async def create_rule(
 async def toggle_rule(
     rule_id: str,
     db: DBSession,
-    current_user: CurrentUser = AutoWrite,
+    current_user: CurrentUser = AutoManage,
 ):
     uc = AutomationUseCases(db=db)
     rule = await uc.toggle_rule(rule_id=rule_id)
@@ -79,3 +89,38 @@ def _serialize(r) -> dict:
         "created_at": r.created_at.isoformat(),
         "updated_at": r.updated_at.isoformat(),
     }
+
+
+@router.patch("/{rule_id}")
+async def update_rule(
+    rule_id: str,
+    body: RuleUpdateDTO,
+    db: DBSession,
+    current_user: CurrentUser = AutoManage,
+):
+    uc = AutomationUseCases(db=db)
+    rule = await uc.update_rule(
+        rule_id=rule_id,
+        name=body.name,
+        description=body.description,
+        trigger_event=body.trigger_event,
+        conditions=body.conditions,
+        actions=body.actions,
+        condition_logic=body.condition_logic,
+    )
+    return SuccessResponse.ok(_serialize(rule))
+
+
+@router.delete("/{rule_id}", status_code=204)
+async def delete_rule(
+    rule_id: str,
+    db: DBSession,
+    current_user: CurrentUser = AutoManage,
+):
+    from sqlalchemy import select
+    from backend.src.modules.automation.infrastructure.models import AutomationRuleModel
+    result = await db.execute(select(AutomationRuleModel).where(AutomationRuleModel.id == rule_id))
+    rule = result.scalar_one_or_none()
+    if rule:
+        await db.delete(rule)
+        await db.commit()

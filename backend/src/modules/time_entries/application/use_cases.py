@@ -32,9 +32,20 @@ class TimeEntryUseCases:
         self.db.add(timer)
         await self.db.commit()
         await self.db.refresh(timer)
+        await event_bus.publish(
+            BaseEvent(
+                event_name="timer.started",
+                tenant_id=tenant_id or "default",
+                actor_id=user_id,
+                payload={"case_id": case_id},
+            )
+        )
         return timer
 
-    async def stop_timer(self, user_id: str) -> TimeEntryModel:
+    async def get_active_timer(self, user_id: str) -> ActiveTimerModel | None:
+        return await self._get_active_timer(user_id)
+
+    async def stop_timer(self, user_id: str, description: str | None = None) -> TimeEntryModel:
         timer = await self._get_active_timer(user_id)
         if not timer:
             raise NotFoundError("No tienes ningún timer activo")
@@ -52,6 +63,7 @@ class TimeEntryUseCases:
             tenant_id=timer.tenant_id,
             entry_type="auto",
             minutes=minutes,
+            description=description,
             started_at=started,
             stopped_at=now,
         )
@@ -61,7 +73,7 @@ class TimeEntryUseCases:
         await self.db.refresh(entry)
         await event_bus.publish(
             BaseEvent(
-                event_name="time_entry.created",
+                event_name="timer.stopped",
                 tenant_id=timer.tenant_id or "default",
                 actor_id=user_id,
                 payload={"case_id": timer.case_id, "minutes": minutes},
@@ -79,6 +91,8 @@ class TimeEntryUseCases:
     ) -> TimeEntryModel:
         if minutes <= 0:
             raise BusinessRuleError("Los minutos deben ser un número positivo")
+        from backend.src.modules.sla.application.validators import validate_max_hours
+        await validate_max_hours(self.db, case_id, tenant_id, minutes)
         entry = TimeEntryModel(
             id=str(uuid.uuid4()),
             case_id=case_id,
@@ -93,7 +107,7 @@ class TimeEntryUseCases:
         await self.db.refresh(entry)
         await event_bus.publish(
             BaseEvent(
-                event_name="time_entry.created",
+                event_name="time_entry.manual_added",
                 tenant_id=tenant_id or "default",
                 actor_id=user_id,
                 payload={"case_id": case_id, "minutes": minutes},

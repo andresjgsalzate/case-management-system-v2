@@ -17,6 +17,7 @@ from backend.src.modules.teams.router import router as teams_router
 from backend.src.modules.case_statuses.router import router as case_statuses_router
 from backend.src.modules.case_priorities.router import router as case_priorities_router
 from backend.src.modules.cases.router import router as cases_router
+from backend.src.modules.cases.number_sequence_router import router as number_sequence_router
 from backend.src.modules.activity.router import router as activity_router
 from backend.src.modules.applications.router import router as applications_router
 from backend.src.modules.origins.router import router as origins_router
@@ -34,6 +35,7 @@ from backend.src.modules.knowledge_base.router import router as kb_router
 from backend.src.modules.notifications.router import router as notifications_router
 from backend.src.modules.audit.router import router as audit_router
 from backend.src.modules.automation.router import router as automation_router
+from backend.src.modules.tenants.router import router as tenants_router
 
 
 @asynccontextmanager
@@ -103,6 +105,7 @@ def create_app() -> FastAPI:
     app.include_router(case_statuses_router)
     app.include_router(case_priorities_router)
     app.include_router(cases_router)
+    app.include_router(number_sequence_router)
     app.include_router(activity_router)
     app.include_router(applications_router)
     app.include_router(origins_router)
@@ -120,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications_router)
     app.include_router(audit_router)
     app.include_router(automation_router)
+    app.include_router(tenants_router)
 
     return app
 

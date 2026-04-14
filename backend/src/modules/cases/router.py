@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from backend.src.core.dependencies import DBSession, Pagination
 from backend.src.modules.cases.application.dtos import (
@@ -13,12 +13,8 @@ from backend.src.modules.cases.application.dtos import (
 from backend.src.modules.cases.application.use_cases import CaseUseCases
 from backend.src.modules.assignment.application.use_cases import AssignmentUseCases
 from backend.src.modules.archive.application.use_cases import ArchiveUseCases
-from backend.src.modules.cases.application.number_service import format_case_number
-from backend.src.modules.cases.infrastructure.models import CaseNumberSequenceModel
 from backend.src.core.responses import SuccessResponse, PaginatedResponse
 from backend.src.core.middleware.permission_checker import CurrentUser, PermissionChecker
-from sqlalchemy import select
-import uuid
 
 router = APIRouter(prefix="/api/v1/cases", tags=["cases"])
 CasesRead = Depends(PermissionChecker("cases", "read"))
@@ -128,6 +124,52 @@ async def assign_case(
     )
 
 
+@router.get("/{case_id}/assignments")
+async def list_case_assignments(
+    case_id: str,
+    db: DBSession,
+    current_user: CurrentUser = CasesRead,
+):
+    from sqlalchemy import select
+    from backend.src.modules.assignment.infrastructure.models import CaseAssignmentModel
+    from backend.src.modules.users.infrastructure.models import UserModel
+
+    result = await db.execute(
+        select(CaseAssignmentModel)
+        .where(CaseAssignmentModel.case_id == case_id)
+        .order_by(CaseAssignmentModel.assigned_at.desc())
+    )
+    assignments = result.scalars().all()
+
+    user_ids = set()
+    for a in assignments:
+        if a.assigned_to:
+            user_ids.add(a.assigned_to)
+        if a.assigned_by:
+            user_ids.add(a.assigned_by)
+
+    users_map: dict[str, str] = {}
+    if user_ids:
+        users_result = await db.execute(
+            select(UserModel).where(UserModel.id.in_(user_ids))
+        )
+        for u in users_result.scalars().all():
+            users_map[u.id] = u.full_name
+
+    return SuccessResponse.ok([
+        {
+            "id": a.id,
+            "assigned_to": a.assigned_to,
+            "assigned_to_name": users_map.get(a.assigned_to) if a.assigned_to else None,
+            "assigned_by": a.assigned_by,
+            "assigned_by_name": users_map.get(a.assigned_by) if a.assigned_by else None,
+            "team_id": a.team_id,
+            "assigned_at": a.assigned_at.isoformat(),
+        }
+        for a in assignments
+    ])
+
+
 @router.post("/{case_id}/archive", status_code=204)
 async def archive_case(
     case_id: str,
@@ -147,78 +189,3 @@ async def restore_case(
     uc = ArchiveUseCases(db)
     await uc.restore_case(case_id, current_user.user_id, current_user.tenant_id)
 
-
-# ── Case number sequence configuration ────────────────────────────────────────
-
-class CaseNumberSequenceDTO(BaseModel):
-    prefix: str
-    padding: int
-    last_number: int
-    preview: str
-
-
-class UpdateCaseNumberSequenceDTO(BaseModel):
-    prefix: str = Field(min_length=1, max_length=4, pattern=r"^[A-Za-z0-9]+$")
-    padding: int = Field(ge=1, le=8)
-
-
-@router.get("/settings/number-sequence", response_model=SuccessResponse[CaseNumberSequenceDTO])
-async def get_number_sequence(
-    db: DBSession,
-    current_user: CurrentUser = Depends(PermissionChecker("cases", "manage")),
-):
-    result = await db.execute(
-        select(CaseNumberSequenceModel).where(
-            CaseNumberSequenceModel.tenant_id == current_user.tenant_id
-        )
-    )
-    seq = result.scalar_one_or_none()
-    if not seq:
-        seq = CaseNumberSequenceModel(
-            id=str(uuid.uuid4()),
-            tenant_id=current_user.tenant_id,
-            prefix="CASE",
-            padding=4,
-            last_number=0,
-        )
-    data = CaseNumberSequenceDTO(
-        prefix=seq.prefix,
-        padding=seq.padding,
-        last_number=seq.last_number,
-        preview=format_case_number(seq.prefix, seq.padding, seq.last_number + 1),
-    )
-    return SuccessResponse.ok(data)
-
-
-@router.patch("/settings/number-sequence", response_model=SuccessResponse[CaseNumberSequenceDTO])
-async def update_number_sequence(
-    dto: UpdateCaseNumberSequenceDTO,
-    db: DBSession,
-    current_user: CurrentUser = Depends(PermissionChecker("cases", "manage")),
-):
-    result = await db.execute(
-        select(CaseNumberSequenceModel).where(
-            CaseNumberSequenceModel.tenant_id == current_user.tenant_id
-        )
-    )
-    seq = result.scalar_one_or_none()
-    if not seq:
-        seq = CaseNumberSequenceModel(
-            id=str(uuid.uuid4()),
-            tenant_id=current_user.tenant_id,
-            prefix=dto.prefix.upper(),
-            padding=dto.padding,
-            last_number=0,
-        )
-        db.add(seq)
-    else:
-        seq.prefix = dto.prefix.upper()
-        seq.padding = dto.padding
-    await db.flush()
-    data = CaseNumberSequenceDTO(
-        prefix=seq.prefix,
-        padding=seq.padding,
-        last_number=seq.last_number,
-        preview=format_case_number(seq.prefix, seq.padding, seq.last_number + 1),
-    )
-    return SuccessResponse.ok(data)

@@ -9,6 +9,7 @@ from backend.src.modules.case_statuses.application.dtos import (
     CaseStatusResponseDTO,
 )
 from backend.src.core.exceptions import NotFoundError, ConflictError, BusinessRuleError
+from backend.src.core.tenant import catalog_filter
 
 
 def _slugify(name: str) -> str:
@@ -40,6 +41,7 @@ class CaseStatusUseCases:
             order=dto.order,
             is_initial=dto.is_initial,
             is_final=dto.is_final,
+            pauses_sla=dto.pauses_sla,
             allowed_transitions=dto.allowed_transitions,
         )
         self.db.add(status)
@@ -50,7 +52,7 @@ class CaseStatusUseCases:
     async def list_statuses(self, tenant_id: str | None) -> list[CaseStatusResponseDTO]:
         result = await self.db.execute(
             select(CaseStatusModel)
-            .where(CaseStatusModel.tenant_id == tenant_id)
+            .where(catalog_filter(CaseStatusModel, tenant_id))
             .order_by(CaseStatusModel.order)
         )
         return [self._to_dto(s) for s in result.scalars().all()]
@@ -58,7 +60,7 @@ class CaseStatusUseCases:
     async def get_initial_status(self, tenant_id: str | None) -> CaseStatusModel:
         result = await self.db.execute(
             select(CaseStatusModel).where(
-                CaseStatusModel.tenant_id == tenant_id,
+                catalog_filter(CaseStatusModel, tenant_id),
                 CaseStatusModel.is_initial == True,
             )
         )
@@ -92,6 +94,7 @@ class CaseStatusUseCases:
             order=model.order,
             is_initial=model.is_initial,
             is_final=model.is_final,
+            pauses_sla=model.pauses_sla,
             allowed_transitions=model.allowed_transitions or [],
             created_at=model.created_at.isoformat(),
         )

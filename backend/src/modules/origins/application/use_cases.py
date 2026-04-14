@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.src.modules.origins.infrastructure.models import OriginModel
 from backend.src.core.exceptions import NotFoundError, ConflictError
+from backend.src.core.tenant import catalog_filter
 
 
 class CreateOriginDTO(BaseModel):
@@ -55,7 +56,7 @@ class OriginUseCases:
     async def list(self, tenant_id: str | None) -> list[OriginResponseDTO]:
         result = await self.db.execute(
             select(OriginModel).where(
-                OriginModel.tenant_id == tenant_id,
+                catalog_filter(OriginModel, tenant_id),
                 OriginModel.is_active == True,
             )
         )

@@ -5,6 +5,7 @@ from sqlalchemy.orm import selectinload
 from backend.src.modules.roles.infrastructure.models import RoleModel, PermissionModel
 from backend.src.modules.roles.application.dtos import CreateRoleDTO, UpdateRoleDTO, PermissionDTO, RoleResponseDTO
 from backend.src.core.exceptions import NotFoundError, ConflictError
+from backend.src.core.tenant import catalog_filter
 
 
 class RoleUseCases:
@@ -53,9 +54,20 @@ class RoleUseCases:
     async def list_roles(self, tenant_id: str | None = None) -> list[RoleResponseDTO]:
         result = await self.db.execute(
             select(RoleModel).options(selectinload(RoleModel.permissions))
-            .where(RoleModel.tenant_id == tenant_id)
+            .where(catalog_filter(RoleModel, tenant_id))
         )
         return [self._to_dto(r) for r in result.scalars().all()]
+
+    async def update_role(self, role_id: str, dto: UpdateRoleDTO) -> RoleResponseDTO:
+        role = await self.db.get(RoleModel, role_id)
+        if not role:
+            raise NotFoundError("Role", role_id)
+        if dto.name is not None:
+            role.name = dto.name
+        if dto.description is not None:
+            role.description = dto.description
+        await self.db.commit()
+        return await self.get_role(role_id)
 
     async def update_permissions(self, role_id: str, permissions: list[PermissionDTO]) -> RoleResponseDTO:
         role = await self.db.get(RoleModel, role_id)

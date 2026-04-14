@@ -25,3 +25,8 @@ def register_all_handlers() -> None:
 
     from backend.src.modules.automation.application.handler import register_automation_handler
     register_automation_handler(bus)
+
+    from backend.src.modules.notifications.application.handlers import (
+        register_handlers as notification_handlers,
+    )
+    notification_handlers(bus)

@@ -10,6 +10,7 @@ from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
 router = APIRouter(prefix="/api/v1/kb", tags=["knowledge_base"])
 KBRead = Depends(PermissionChecker("knowledge_base", "read"))
 KBCreate = Depends(PermissionChecker("knowledge_base", "create"))
+KBManage = Depends(PermissionChecker("knowledge_base", "manage"))
 
 
 class TagCreateDTO(BaseModel):
@@ -141,7 +142,7 @@ async def transition_article(
     article_id: str,
     body: TransitionDTO,
     db: DBSession,
-    current_user: CurrentUser = KBCreate,
+    current_user: CurrentUser = KBManage,
 ):
     uc = KBUseCases(db=db)
     article = await uc.transition_status(

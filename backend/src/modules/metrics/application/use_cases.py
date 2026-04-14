@@ -19,7 +19,7 @@ class MetricsUseCases:
             ORDER BY count DESC
         """))
         rows = result.fetchall()
-        return [{"status_name": r[0], "count": r[1]} for r in rows]
+        return [{"status": r[0], "count": r[1]} for r in rows]
 
     async def get_cases_by_priority(self) -> list[dict[str, Any]]:
         result = await self.db.execute(text("""
@@ -36,10 +36,10 @@ class MetricsUseCases:
     async def get_cases_by_agent(self, limit: int = 10) -> list[dict[str, Any]]:
         result = await self.db.execute(
             text("""
-                SELECT u.full_name, u.email, COUNT(ca.case_id) AS assigned_cases
-                FROM case_assignments ca
-                JOIN users u ON u.id = ca.agent_id
-                WHERE ca.is_active = true
+                SELECT u.full_name, u.email, COUNT(c.id) AS assigned_cases
+                FROM cases c
+                JOIN users u ON u.id = c.assigned_to
+                WHERE c.is_archived = false AND c.assigned_to IS NOT NULL
                 GROUP BY u.id, u.full_name, u.email
                 ORDER BY assigned_cases DESC
                 LIMIT :limit
@@ -65,10 +65,9 @@ class MetricsUseCases:
         result = await self.db.execute(text("""
             SELECT
                 COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE status = 'breached') AS breached,
-                COUNT(*) FILTER (WHERE status = 'met') AS met
+                COUNT(*) FILTER (WHERE is_breached = true) AS breached,
+                COUNT(*) FILTER (WHERE is_breached = false) AS met
             FROM sla_records
-            WHERE status IN ('met', 'breached')
         """))
         row = result.fetchone()
         total = row[0] or 0

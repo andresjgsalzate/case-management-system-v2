@@ -42,7 +42,9 @@ class CaseResponseDTO(BaseModel):
     priority_color: str
     complexity: str
     application_id: str | None
+    application_name: str | None
     origin_id: str | None
+    origin_name: str | None
     created_by: str
     assigned_to: str | None
     team_id: str | None

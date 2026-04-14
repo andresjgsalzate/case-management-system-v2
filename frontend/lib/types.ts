@@ -55,18 +55,29 @@ export interface Case {
   case_number: string;
   title: string;
   description?: string;
+  complexity: string;
+  // Status (flat fields from backend DTO)
   status_id: string;
+  status_name: string;
+  status_slug: string;
+  status_color: string;
+  // Priority (flat fields from backend DTO)
   priority_id: string;
+  priority_name: string;
+  priority_color: string;
+  // Optional FK fields
   application_id?: string;
+  application_name?: string;
   origin_id?: string;
+  origin_name?: string;
   assigned_to?: string;
+  team_id?: string;
   created_by: string;
+  is_archived: boolean;
   closed_at?: string;
   created_at: string;
   updated_at: string;
-  // Joined fields (may be present depending on endpoint)
-  status?: CaseStatus;
-  priority?: CasePriority;
+  // Enriched optional fields (populated by some endpoints)
   assigned_user?: User;
 }
 

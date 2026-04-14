@@ -9,6 +9,7 @@ from backend.src.modules.notes.application.use_cases import NoteUseCases
 router = APIRouter(prefix="/api/v1/cases/{case_id}/notes", tags=["notes"])
 NotesRead = Depends(PermissionChecker("notes", "read"))
 NotesCreate = Depends(PermissionChecker("notes", "create"))
+NotesDelete = Depends(PermissionChecker("notes", "delete"))
 
 
 class NoteCreate(BaseModel):
@@ -31,6 +32,7 @@ async def list_notes(
         {
             "id": n.id,
             "user_id": n.user_id,
+            "sender_name": n.author.full_name if n.author else "Usuario",
             "content": n.content,
             "created_at": n.created_at.isoformat(),
         }
@@ -73,7 +75,7 @@ async def delete_note(
     case_id: str,
     note_id: str,
     db: DBSession,
-    current_user: CurrentUser = NotesCreate,
+    current_user: CurrentUser = NotesDelete,
 ):
     uc = NoteUseCases(db=db)
     await uc.delete(note_id=note_id, user_id=current_user.user_id)

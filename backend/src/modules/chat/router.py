@@ -37,9 +37,9 @@ async def websocket_endpoint(
     websocket: WebSocket,
     token: str,  # query param: ?token=<jwt>
 ):
-    from backend.src.core.security import decode_token
+    from backend.src.core.security import decode_access_token
     try:
-        payload = decode_token(token)
+        payload = decode_access_token(token)
         user_id = payload.get("sub", "unknown")
     except Exception:
         await websocket.close(code=1008)
@@ -69,6 +69,7 @@ async def list_messages(
         {
             "id": m.id,
             "user_id": m.user_id,
+            "sender_name": m.sender.full_name if m.sender else "Usuario",
             "content": m.content,
             "content_type": m.content_type,
             "is_deleted": m.is_deleted,

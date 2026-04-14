@@ -1,4 +1,6 @@
+import html
 import logging
+import re
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -26,8 +28,8 @@ async def _get_smtp_params() -> dict | None:
                 if config.password:
                     try:
                         password = _get_fernet().decrypt(config.password.encode()).decode()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Fernet decryption failed for SMTP password: %s", e)
                 return {
                     "host": config.host, "port": config.port,
                     "username": config.username, "password": password,
@@ -42,7 +44,7 @@ async def _get_smtp_params() -> dict | None:
         return {
             "host": settings.SMTP_HOST, "port": settings.SMTP_PORT,
             "username": settings.SMTP_USERNAME or None,
-            "password": settings.SMTP_PASSWORD.get_secret_value() or None,
+            "password": settings.SMTP_PASSWORD.get_secret_value() if settings.SMTP_PASSWORD else None,
             "from_email": settings.SMTP_FROM, "from_name": "CaseManager",
             "use_tls": True,
         }
@@ -58,58 +60,73 @@ def _fmt(text: str, variables: dict) -> str:
         return text
 
 
+_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{3,8}$|^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$')
+
+
+def _safe_color(value: object, default: str) -> str:
+    v = str(value).strip()
+    return v if _COLOR_RE.match(v) else default
+
+
+def _safe_int(value: object, default: int, min_val: int = 1, max_val: int = 20) -> int:
+    try:
+        return max(min_val, min(max_val, int(value)))
+    except (ValueError, TypeError):
+        return default
+
+
 def _render_block(block: dict, variables: dict) -> str:
     block_type = block.get("type", "")
     props = block.get("props", {})
 
     if block_type == "header":
-        bg = props.get("bg_color", "#1e40af")
-        title = _fmt(str(props.get("title", "")), variables)
+        bg = _safe_color(props.get("bg_color", ""), "#1e40af")
+        title = html.escape(_fmt(str(props.get("title", "")), variables))
         logo_url = props.get("logo_url", "")
         logo_html = f'<img src="{logo_url}" alt="Logo" style="max-height:40px;display:block;margin-bottom:8px;">' if logo_url else ""
         title_html = f'<h1 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">{title}</h1>' if title else ""
         return f'<tr><td style="background:{bg};padding:24px 32px;">{logo_html}{title_html}</td></tr>'
 
     if block_type == "hero":
-        bg = props.get("bg_color", "#eff6ff")
-        tc = props.get("text_color", "#1e40af")
-        title = _fmt(str(props.get("title", "")), variables)
-        subtitle = _fmt(str(props.get("subtitle", "")), variables)
+        bg = _safe_color(props.get("bg_color", ""), "#eff6ff")
+        tc = _safe_color(props.get("text_color", ""), "#1e40af")
+        title = html.escape(_fmt(str(props.get("title", "")), variables))
+        subtitle = html.escape(_fmt(str(props.get("subtitle", "")), variables))
         t_html = f'<h2 style="margin:0 0 8px;color:{tc};font-size:24px;font-weight:700;">{title}</h2>' if title else ""
         s_html = f'<p style="margin:0;color:{tc};font-size:15px;opacity:.8;">{subtitle}</p>' if subtitle else ""
         return f'<tr><td style="background:{bg};padding:32px;text-align:center;">{t_html}{s_html}</td></tr>'
 
     if block_type in ("body", "text"):
-        content = _fmt(str(props.get("content", "")), variables).replace("\n", "<br>")
+        content = html.escape(_fmt(str(props.get("content", "")), variables)).replace("\n", "<br>")
         return f'<tr><td style="padding:24px 32px;color:#374151;font-size:15px;line-height:1.6;">{content}</td></tr>'
 
     if block_type == "button":
-        label = _fmt(str(props.get("label", "Ver")), variables)
+        label = html.escape(_fmt(str(props.get("label", "Ver")), variables))
         url = _fmt(str(props.get("url", "#")), variables)
-        bg = props.get("bg_color", "#1e40af")
-        tc = props.get("text_color", "#ffffff")
+        bg = _safe_color(props.get("bg_color", ""), "#1e40af")
+        tc = _safe_color(props.get("text_color", ""), "#ffffff")
         return (f'<tr><td style="padding:16px 32px;text-align:center;">'
                 f'<a href="{url}" style="display:inline-block;background:{bg};color:{tc};'
                 f'padding:12px 28px;border-radius:6px;text-decoration:none;font-size:15px;font-weight:600;">'
                 f'{label}</a></td></tr>')
 
     if block_type == "divider":
-        color = props.get("color", "#e5e7eb")
-        thickness = props.get("thickness", 1)
+        color = _safe_color(props.get("color", ""), "#e5e7eb")
+        thickness = _safe_int(props.get("thickness", 1), 1)
         return f'<tr><td style="padding:0 32px;"><hr style="border:none;border-top:{thickness}px solid {color};margin:8px 0;"></td></tr>'
 
     if block_type == "footer":
-        bg = props.get("bg_color", "#f9fafb")
-        tc = props.get("text_color", "#6b7280")
-        content = _fmt(str(props.get("content", "")), variables)
+        bg = _safe_color(props.get("bg_color", ""), "#f9fafb")
+        tc = _safe_color(props.get("text_color", ""), "#6b7280")
+        content = html.escape(_fmt(str(props.get("content", "")), variables))
         return f'<tr><td style="background:{bg};padding:16px 32px;text-align:center;color:{tc};font-size:12px;">{content}</td></tr>'
 
     if block_type == "data_table":
         rows = props.get("rows", [])
         rows_html = "".join(
             f'<tr style="border-bottom:1px solid #e5e7eb;">'
-            f'<td style="color:#6b7280;font-size:13px;padding:8px 4px;width:40%;">{r.get("label","")}</td>'
-            f'<td style="color:#111827;font-size:13px;font-weight:500;padding:8px 4px;">{_fmt(str(r.get("value","")), variables)}</td>'
+            f'<td style="color:#6b7280;font-size:13px;padding:8px 4px;width:40%;">{html.escape(str(r.get("label", "")))}</td>'
+            f'<td style="color:#111827;font-size:13px;font-weight:500;padding:8px 4px;">{html.escape(_fmt(str(r.get("value", "")), variables))}</td>'
             f'</tr>'
             for r in rows
         )
@@ -119,7 +136,7 @@ def _render_block(block: dict, variables: dict) -> str:
 
     if block_type == "alert":
         alert_type = props.get("alert_type", "info")
-        message = _fmt(str(props.get("message", "")), variables)
+        message = html.escape(_fmt(str(props.get("message", "")), variables))
         colors = {
             "info":    ("#eff6ff", "#1e40af", "#bfdbfe"),
             "warning": ("#fffbeb", "#92400e", "#fde68a"),
@@ -135,6 +152,7 @@ def _render_block(block: dict, variables: dict) -> str:
         url = props.get("url", "")
         alt = props.get("alt", "")
         width = props.get("width", "100%")
+        width = width if re.match(r'^\d+(%|px)?$', str(width)) else "100%"
         if not url:
             return ""
         return (f'<tr><td style="padding:16px 32px;text-align:center;">'

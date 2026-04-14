@@ -4,7 +4,7 @@ import { CaseForm } from "@/components/organisms/CaseForm";
 
 export default function NewCasePage() {
   return (
-    <div className="flex flex-col gap-5 max-w-2xl">
+    <div className="flex flex-col gap-5">
       <div>
         <Link
           href="/cases"

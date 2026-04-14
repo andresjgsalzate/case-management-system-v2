@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, or_
+from sqlalchemy.orm import joinedload
 
 from backend.src.core.dependencies import DBSession
 from backend.src.modules.sla.infrastructure.models import (
@@ -11,7 +12,9 @@ from backend.src.modules.sla.infrastructure.models import (
     SLARecordModel,
     SLAHolidayModel,
     SLAWorkScheduleModel,
+    SLAIntegrationConfigModel,
 )
+from backend.src.modules.case_priorities.infrastructure.models import CasePriorityModel
 from backend.src.core.middleware.permission_checker import CurrentUser, PermissionChecker
 from backend.src.core.responses import SuccessResponse
 
@@ -37,21 +40,39 @@ class UpdateWorkScheduleDTO(BaseModel):
     work_end_time: str
 
 
+class UpsertIntegrationConfigDTO(BaseModel):
+    enabled: bool = False
+    pause_on_timer: bool = True
+    low_max_hours: float | None = None
+    medium_max_hours: float | None = None
+    high_max_hours: float | None = None
+
+
 # ─── Policies ────────────────────────────────────────────────────────────────
 
 @router.get("/policies", response_model=SuccessResponse[list[dict]])
 async def list_policies(db: DBSession, current_user: CurrentUser = SLARead):
     result = await db.execute(
-        select(SLAPolicyModel).where(SLAPolicyModel.tenant_id == current_user.tenant_id)
+        select(SLAPolicyModel, CasePriorityModel)
+        .join(CasePriorityModel, SLAPolicyModel.priority_id == CasePriorityModel.id)
+        .where(or_(
+            SLAPolicyModel.tenant_id == current_user.tenant_id,
+            SLAPolicyModel.tenant_id.is_(None),
+        ))
     )
-    policies = result.scalars().all()
+    rows = result.all()
     return SuccessResponse.ok([
         {
             "id": p.id,
             "priority_id": p.priority_id,
             "target_resolution_hours": p.target_resolution_hours,
+            "priority": {
+                "name": pri.name,
+                "level": pri.level,
+                "color": pri.color,
+            },
         }
-        for p in policies
+        for p, pri in rows
     ])
 
 
@@ -203,4 +224,42 @@ async def get_sla_record(
         "target_at": record.target_at.isoformat(),
         "is_breached": record.is_breached,
         "breached_at": record.breached_at.isoformat() if record.breached_at else None,
+        "paused_at": record.paused_at.isoformat() if record.paused_at else None,
+        "status_paused_at": record.status_paused_at.isoformat() if record.status_paused_at else None,
     })
+
+
+# ─── Integration Config ───────────────────────────────────────────────────────
+
+@router.get("/integration-config", response_model=SuccessResponse[dict])
+async def get_integration_config(db: DBSession, current_user: CurrentUser = SLARead):
+    from backend.src.modules.sla.application.use_cases import get_integration_config as _get
+    config = await _get(db, current_user.tenant_id)
+    return SuccessResponse.ok(config)
+
+
+@router.put("/integration-config")
+async def upsert_integration_config(
+    dto: UpsertIntegrationConfigDTO, db: DBSession, current_user: CurrentUser = SLAManage
+):
+    result = await db.execute(
+        select(SLAIntegrationConfigModel).where(
+            SLAIntegrationConfigModel.tenant_id == current_user.tenant_id
+        )
+    )
+    config = result.scalar_one_or_none()
+    if config:
+        config.enabled = dto.enabled
+        config.pause_on_timer = dto.pause_on_timer
+        config.low_max_hours = dto.low_max_hours
+        config.medium_max_hours = dto.medium_max_hours
+        config.high_max_hours = dto.high_max_hours
+    else:
+        config = SLAIntegrationConfigModel(
+            id=str(uuid.uuid4()),
+            tenant_id=current_user.tenant_id,
+            **dto.model_dump(),
+        )
+        db.add(config)
+    await db.commit()
+    return SuccessResponse.ok({"updated": True})

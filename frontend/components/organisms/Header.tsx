@@ -10,10 +10,24 @@ import { ThemeToggle } from "@/components/molecules/ThemeToggle";
 import { useAuthStore } from "@/store/auth.store";
 
 export function Header() {
-  const { user, logout } = useAuthStore();
+  const { user, logout, setUser } = useAuthStore();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  // Fetch profile if user object is missing (e.g. session restored from token only)
+  useEffect(() => {
+    if (!user) {
+      const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+      if (token) {
+        import("@/lib/apiClient").then(({ apiClient }) => {
+          apiClient.get("/auth/me").then(({ data }) => {
+            if (data?.data) setUser(data.data);
+          }).catch(() => {});
+        });
+      }
+    }
+  }, [user, setUser]);
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {

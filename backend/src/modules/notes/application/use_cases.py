@@ -1,6 +1,7 @@
 import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from backend.src.modules.notes.infrastructure.models import CaseNoteModel
 from backend.src.core.exceptions import NotFoundError, ForbiddenError
@@ -38,6 +39,7 @@ class NoteUseCases:
     async def list_for_case(self, case_id: str) -> list[CaseNoteModel]:
         result = await self.db.execute(
             select(CaseNoteModel)
+            .options(selectinload(CaseNoteModel.author))
             .where(CaseNoteModel.case_id == case_id, CaseNoteModel.is_deleted == False)
             .order_by(CaseNoteModel.created_at.desc())
         )

@@ -17,6 +17,7 @@ class CaseStatusModel(Base):
     order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_initial: Mapped[bool] = mapped_column(Boolean, default=False)
     is_final: Mapped[bool] = mapped_column(Boolean, default=False)
+    pauses_sla: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     allowed_transitions: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

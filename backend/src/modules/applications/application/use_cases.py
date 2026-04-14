@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.src.modules.applications.infrastructure.models import ApplicationModel
 from backend.src.core.exceptions import NotFoundError, ConflictError
+from backend.src.core.tenant import catalog_filter
 
 
 class CreateApplicationDTO(BaseModel):
@@ -57,7 +58,7 @@ class ApplicationUseCases:
     async def list(self, tenant_id: str | None) -> list[ApplicationResponseDTO]:
         result = await self.db.execute(
             select(ApplicationModel).where(
-                ApplicationModel.tenant_id == tenant_id,
+                catalog_filter(ApplicationModel, tenant_id),
                 ApplicationModel.is_active == True,
             )
         )

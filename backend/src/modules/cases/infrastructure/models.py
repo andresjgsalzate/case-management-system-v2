@@ -7,6 +7,7 @@ from backend.src.core.database import Base
 
 
 class CaseNumberSequenceModel(Base):
+    """Legacy — kept for migration compatibility. Use CaseNumberRangeModel instead."""
     __tablename__ = "case_number_sequences"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -14,6 +15,27 @@ class CaseNumberSequenceModel(Base):
     prefix: Mapped[str] = mapped_column(String(4), nullable=False, default="CASE")
     padding: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
     last_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class CaseNumberRangeModel(Base):
+    """
+    Defines a numbered range for a prefix (e.g. REQ 000001–200000).
+    Multiple consecutive ranges can exist per prefix+tenant.
+    The active range is the first non-exhausted one (ordered by range_start).
+    """
+    __tablename__ = "case_number_ranges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(4), nullable=False)
+    range_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    range_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    # current_number starts at range_start - 1 (no number generated yet).
+    # When current_number == range_end the range is exhausted.
+    current_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
 
 
 class CaseModel(Base):
@@ -50,6 +72,12 @@ class CaseModel(Base):
     )
     priority: Mapped["CasePriorityModel"] = relationship(  # type: ignore[name-defined]
         "CasePriorityModel", foreign_keys=[priority_id]
+    )
+    application: Mapped["ApplicationModel"] = relationship(  # type: ignore[name-defined]
+        "ApplicationModel", foreign_keys=[application_id]
+    )
+    origin: Mapped["OriginModel"] = relationship(  # type: ignore[name-defined]
+        "OriginModel", foreign_keys=[origin_id]
     )
     assignments: Mapped[list["CaseAssignmentModel"]] = relationship(  # type: ignore[name-defined]
         "CaseAssignmentModel", back_populates="case", cascade="all, delete-orphan"

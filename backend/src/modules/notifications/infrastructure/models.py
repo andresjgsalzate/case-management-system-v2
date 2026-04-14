@@ -1,9 +1,34 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.src.core.database import Base
+
+
+class NotificationTemplateModel(Base):
+    """
+    Configurable template per event type.
+    Stores title/body with {variable} placeholders and enable/disable toggle.
+    """
+    __tablename__ = "notification_templates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    event_name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    notification_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # JSON list of available variable names, e.g. ["case_number", "case_title", "assigned_by"]
+    variables: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class NotificationModel(Base):

@@ -48,6 +48,7 @@ class EmailTemplateUseCases:
         is_active: bool | None = None,
     ) -> EmailTemplateModel:
         tpl = await self.get(template_id)
+        original_scope = tpl.scope
         now = datetime.now(timezone.utc)
 
         if name is not None:
@@ -62,7 +63,7 @@ class EmailTemplateUseCases:
             await self.db.execute(
                 update(EmailTemplateModel)
                 .where(
-                    EmailTemplateModel.scope == tpl.scope,
+                    EmailTemplateModel.scope == original_scope,
                     EmailTemplateModel.id != template_id,
                 )
                 .values(is_active=False, updated_at=now)

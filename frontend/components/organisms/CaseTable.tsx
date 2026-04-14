@@ -68,18 +68,10 @@ export function CaseTable({ cases, isLoading, className }: CaseTableProps) {
                 </Link>
               </td>
               <td className="px-4 py-3 whitespace-nowrap">
-                {c.status ? (
-                  <StatusBadge status={c.status.name} />
-                ) : (
-                  <StatusBadge status={c.status_id} />
-                )}
+                <StatusBadge status={c.status_name} />
               </td>
               <td className="px-4 py-3 whitespace-nowrap">
-                {c.priority ? (
-                  <PriorityBadge priority={c.priority.name} />
-                ) : (
-                  <PriorityBadge priority={c.priority_id} />
-                )}
+                <PriorityBadge priority={c.priority_name} />
               </td>
               <td className="px-4 py-3 whitespace-nowrap">
                 {c.assigned_user ? (

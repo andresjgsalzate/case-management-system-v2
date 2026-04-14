@@ -40,3 +40,35 @@ async def deactivate_priority(
 ):
     uc = CasePriorityUseCases(db)
     await uc.deactivate_priority(priority_id)
+
+
+from pydantic import BaseModel as _BM
+
+class _UpdatePriorityDTO(_BM):
+    name: str | None = None
+    color: str | None = None
+    level: int | None = None
+    is_default: bool | None = None
+
+@router.patch("/{priority_id}", response_model=SuccessResponse[CasePriorityResponseDTO])
+async def update_priority(
+    priority_id: str,
+    dto: _UpdatePriorityDTO,
+    db: DBSession,
+    current_user: CurrentUser = Manage,
+):
+    from sqlalchemy import select
+    from backend.src.modules.case_priorities.infrastructure.models import CasePriorityModel
+    result = await db.execute(select(CasePriorityModel).where(CasePriorityModel.id == priority_id))
+    p = result.scalar_one_or_none()
+    if not p:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Priority not found")
+    if dto.name is not None: p.name = dto.name
+    if dto.color is not None: p.color = dto.color
+    if dto.level is not None: p.level = dto.level
+    if dto.is_default is not None: p.is_default = dto.is_default
+    await db.commit()
+    await db.refresh(p)
+    uc = CasePriorityUseCases(db)
+    return SuccessResponse.ok(uc._to_dto(p))

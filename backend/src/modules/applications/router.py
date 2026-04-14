@@ -40,3 +40,38 @@ async def deactivate_application(
 ):
     uc = ApplicationUseCases(db)
     await uc.deactivate(app_id)
+
+
+class UpdateApplicationDTO:
+    pass
+
+from pydantic import BaseModel as _BM
+
+class _UpdateDTO(_BM):
+    name: str | None = None
+    description: str | None = None
+
+@router.patch("/{app_id}", response_model=SuccessResponse[ApplicationResponseDTO])
+async def update_application(
+    app_id: str,
+    dto: _UpdateDTO,
+    db: DBSession,
+    current_user: CurrentUser = Manage,
+):
+    from sqlalchemy import select
+    from backend.src.modules.applications.infrastructure.models import ApplicationModel
+    result = await db.execute(select(ApplicationModel).where(ApplicationModel.id == app_id))
+    app = result.scalar_one_or_none()
+    if not app:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Application not found")
+    if dto.name is not None:
+        app.name = dto.name
+    if dto.description is not None:
+        app.description = dto.description
+    await db.commit()
+    await db.refresh(app)
+    return SuccessResponse.ok(ApplicationResponseDTO(
+        id=app.id, name=app.name, code=app.code,
+        description=app.description, is_active=app.is_active,
+    ))

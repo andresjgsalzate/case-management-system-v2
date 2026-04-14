@@ -19,6 +19,8 @@ class AddMemberDTO(BaseModel):
 
 class TeamMemberResponseDTO(BaseModel):
     user_id: str
+    full_name: str | None
+    email: str | None
     team_role: str
     joined_at: str
 

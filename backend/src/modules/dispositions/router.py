@@ -9,6 +9,7 @@ from backend.src.modules.dispositions.application.use_cases import DispositionUs
 router = APIRouter(prefix="/api/v1/dispositions", tags=["dispositions"])
 DispRead = Depends(PermissionChecker("dispositions", "read"))
 DispCreate = Depends(PermissionChecker("dispositions", "create"))
+DispManage = Depends(PermissionChecker("dispositions", "manage"))
 
 
 class CategoryCreateDTO(BaseModel):
@@ -135,7 +136,7 @@ async def apply_disposition(
 async def deactivate_disposition(
     disposition_id: str,
     db: DBSession,
-    current_user: CurrentUser = DispCreate,
+    current_user: CurrentUser = DispManage,
 ):
     uc = DispositionUseCases(db=db)
     await uc.deactivate(disposition_id=disposition_id)

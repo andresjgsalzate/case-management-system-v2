@@ -40,3 +40,41 @@ async def delete_status(
 ):
     uc = CaseStatusUseCases(db)
     await uc.delete_status(status_id)
+
+
+from pydantic import BaseModel as _BM
+
+class _UpdateStatusDTO(_BM):
+    name: str | None = None
+    color: str | None = None
+    order: int | None = None
+    is_initial: bool | None = None
+    is_final: bool | None = None
+    pauses_sla: bool | None = None
+    allowed_transitions: list[str] | None = None
+
+@router.patch("/{status_id}", response_model=SuccessResponse[CaseStatusResponseDTO])
+async def update_status(
+    status_id: str,
+    dto: _UpdateStatusDTO,
+    db: DBSession,
+    current_user: CurrentUser = Manage,
+):
+    from sqlalchemy import select
+    from backend.src.modules.case_statuses.infrastructure.models import CaseStatusModel
+    result = await db.execute(select(CaseStatusModel).where(CaseStatusModel.id == status_id))
+    s = result.scalar_one_or_none()
+    if not s:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Status not found")
+    if dto.name is not None: s.name = dto.name
+    if dto.color is not None: s.color = dto.color
+    if dto.order is not None: s.order = dto.order
+    if dto.is_initial is not None: s.is_initial = dto.is_initial
+    if dto.is_final is not None: s.is_final = dto.is_final
+    if dto.pauses_sla is not None: s.pauses_sla = dto.pauses_sla
+    if dto.allowed_transitions is not None: s.allowed_transitions = dto.allowed_transitions
+    await db.commit()
+    await db.refresh(s)
+    uc = CaseStatusUseCases(db)
+    return SuccessResponse.ok(uc._to_dto(s))

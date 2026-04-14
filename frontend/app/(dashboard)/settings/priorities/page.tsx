@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Star } from "lucide-react";
+import { Plus, Trash2, Star, Pencil, Check, X } from "lucide-react";
 import { apiClient } from "@/lib/apiClient";
 import { Spinner } from "@/components/atoms/Spinner";
+import { useConfirm } from "@/components/providers/ConfirmProvider";
 import { Badge } from "@/components/atoms/Badge";
 import type { ApiResponse } from "@/lib/types";
 
@@ -34,12 +35,15 @@ function ColorDot({ color }: { color: string }) {
 }
 
 export default function PrioritiesSettingsPage() {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const { data: priorities = [], isLoading } = usePriorities();
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", level: 2, color: "#3B82F6", is_default: false });
   const [error, setError] = useState("");
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", color: "#3B82F6", level: 2, is_default: false });
 
   const createMutation = useMutation({
     mutationFn: (body: typeof form) => apiClient.post("/case-priorities", body),
@@ -55,15 +59,29 @@ export default function PrioritiesSettingsPage() {
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: typeof editForm }) =>
+      apiClient.patch(`/case-priorities/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["case-priorities"] });
+      setEditId(null);
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiClient.delete(`/case-priorities/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["case-priorities"] }),
   });
 
+  async function handleDelete(id: string, name: string) {
+    const ok = await confirm({ description: `¿Desactivar la prioridad "${name}"?` });
+    if (ok) deleteMutation.mutate(id);
+  }
+
   const sorted = [...priorities].sort((a, b) => a.level - b.level);
 
   return (
-    <div className="flex flex-col gap-5 max-w-2xl">
+    <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Prioridades</h1>
@@ -157,34 +175,100 @@ export default function PrioritiesSettingsPage() {
             {sorted.length === 0 && !isLoading && (
               <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-muted-foreground">Sin prioridades</td></tr>
             )}
-            {sorted.map((p) => (
-              <tr key={p.id} className="hover:bg-muted/30 transition-colors">
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <ColorDot color={p.color} />
-                    <span className="font-medium text-foreground">{p.name}</span>
-                    {p.is_default && <Star className="h-3.5 w-3.5 text-yellow-500 fill-yellow-500" />}
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <Badge variant="outline" className="text-xs">{LEVEL_LABELS[p.level] ?? `Nivel ${p.level}`}</Badge>
-                </td>
-                <td className="px-4 py-3">
-                  <Badge variant={p.is_active ? "success" : "outline"} className="text-xs">
-                    {p.is_active ? "Activa" : "Inactiva"}
-                  </Badge>
-                </td>
-                <td className="px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => { if (confirm(`¿Desactivar prioridad "${p.name}"?`)) deleteMutation.mutate(p.id); }}
-                    className="text-muted-foreground hover:text-destructive transition-colors"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {sorted.map((p) =>
+              editId === p.id ? (
+                <tr key={p.id} className="bg-muted/20">
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={editForm.color}
+                        onChange={(e) => setEditForm((f) => ({ ...f, color: e.target.value }))}
+                        className="h-7 w-9 cursor-pointer rounded border border-border p-0.5"
+                      />
+                      <input
+                        className="px-2 py-1.5 text-sm rounded border border-primary bg-background focus:outline-none flex-1"
+                        value={editForm.name}
+                        onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                        placeholder="Nombre"
+                        autoFocus
+                      />
+                    </div>
+                  </td>
+                  <td className="px-4 py-2">
+                    <input
+                      type="number"
+                      min={1} max={10}
+                      className="px-2 py-1.5 text-sm rounded border border-border bg-background focus:outline-none w-20"
+                      value={editForm.level}
+                      onChange={(e) => setEditForm((f) => ({ ...f, level: Number(e.target.value) }))}
+                    />
+                  </td>
+                  <td className="px-4 py-2">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                      <input
+                        type="checkbox"
+                        checked={editForm.is_default}
+                        onChange={(e) => setEditForm((f) => ({ ...f, is_default: e.target.checked }))}
+                        className="h-4 w-4 rounded"
+                      />
+                      Por defecto
+                    </label>
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={!editForm.name.trim() || updateMutation.isPending}
+                        onClick={() => updateMutation.mutate({ id: p.id, body: editForm })}
+                        className="text-green-600 hover:text-green-700 disabled:opacity-40"
+                      >
+                        <Check className="h-4 w-4" />
+                      </button>
+                      <button type="button" onClick={() => setEditId(null)} className="text-muted-foreground hover:text-foreground">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={p.id} className="hover:bg-muted/30 transition-colors group">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <ColorDot color={p.color} />
+                      <span className="font-medium text-foreground">{p.name}</span>
+                      {p.is_default && <Star className="h-3.5 w-3.5 text-yellow-500 fill-yellow-500" />}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge variant="outline" className="text-xs">{LEVEL_LABELS[p.level] ?? `Nivel ${p.level}`}</Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge variant={p.is_active ? "success" : "outline"} className="text-xs">
+                      {p.is_active ? "Activa" : "Inactiva"}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { setEditId(p.id); setEditForm({ name: p.name, color: p.color, level: p.level, is_default: p.is_default }); }}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(p.id, p.name)}
+                        className="text-muted-foreground hover:text-destructive transition-colors"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            )}
           </tbody>
         </table>
       </div>

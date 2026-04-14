@@ -8,11 +8,24 @@ EVENT_DESCRIPTIONS = {
     "case.status_changed": lambda p: (
         f"Estado cambiado de '{p.get('from_status', '')}' a '{p.get('to_status', '')}'"
     ),
-    "case.assigned": lambda p: f"Asignado a usuario {p.get('assigned_to', 'sin asignar')}",
+    "case.assigned": lambda p: (
+        f"Asignado a {p.get('assigned_to_name', p.get('assigned_to', ''))}"
+        if p.get("assigned_to") else "Asignación removida"
+    ),
     "case.closed": lambda p: "Caso cerrado",
     "case.archived": lambda p: "Caso archivado",
     "case.restored": lambda p: "Caso restaurado",
-    "note.created": lambda p: "Nota agregada",
+    "case.classified": lambda p: (
+        f"Caso clasificado como {p.get('complexity_level', '').upper()} "
+        f"({p.get('total_score', '')} pts)"
+    ),
+    "note.created": lambda p: "Nota interna agregada",
+    "chat.message.sent": lambda p: "Mensaje enviado en el chat",
+    "chat.message.edited": lambda p: "Mensaje del chat editado",
+    "chat.message.deleted": lambda p: "Mensaje del chat eliminado",
+    "timer.started": lambda p: "Timer de trabajo iniciado",
+    "timer.stopped": lambda p: f"Timer detenido — {p.get('minutes', 0)} min registrados",
+    "time_entry.manual_added": lambda p: f"Tiempo manual agregado: {p.get('minutes', 0)} min",
     "todo.completed": lambda p: f"Tarea completada: {p.get('title', '')}",
     "attachment.uploaded": lambda p: f"Archivo adjunto: {p.get('filename', '')}",
     "sla.breached": lambda p: "SLA vencido",
@@ -60,7 +73,14 @@ def register_handlers(bus) -> None:
         "case.closed",
         "case.archived",
         "case.restored",
+        "case.classified",
         "note.created",
+        "chat.message.sent",
+        "chat.message.edited",
+        "chat.message.deleted",
+        "timer.started",
+        "timer.stopped",
+        "time_entry.manual_added",
         "todo.completed",
         "attachment.uploaded",
         "sla.breached",

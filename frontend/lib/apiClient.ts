@@ -22,6 +22,17 @@ function getRefreshToken(): string | null {
   return localStorage.getItem("refresh_token");
 }
 
+export function getCurrentUserId(): string | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return payload.sub ?? null;
+  } catch {
+    return null;
+  }
+}
+
 let isRefreshing = false;
 let failedQueue: Array<{
   resolve: (value: string) => void;

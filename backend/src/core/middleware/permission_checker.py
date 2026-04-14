@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.src.core.database import get_db
 from backend.src.core.security import decode_access_token
 from backend.src.core.exceptions import UnauthorizedError, PermissionDeniedError
-from backend.src.modules.roles.infrastructure.models import PermissionModel
+from backend.src.modules.roles.infrastructure.models import PermissionModel, RoleModel
 
 http_bearer = HTTPBearer(auto_error=False)
 
@@ -19,6 +19,7 @@ class CurrentUser:
     role_id: str
     tenant_id: str
     scope: str = "own"
+    is_global: bool = False
 
 
 class PermissionChecker:
@@ -72,6 +73,11 @@ class PermissionChecker:
                 f"Permission denied: {self.module}.{self.action}"
             )
 
+        role_result = await db.execute(
+            select(RoleModel.is_global).where(RoleModel.id == role_id)
+        )
+        is_global = role_result.scalar_one_or_none() or False
+
         from backend.src.modules.audit.application.middleware import set_current_actor
         set_current_actor(user_id)
 
@@ -81,6 +87,7 @@ class PermissionChecker:
             role_id=role_id,
             tenant_id=tenant_id,
             scope=permission.scope,
+            is_global=is_global,
         )
 
 

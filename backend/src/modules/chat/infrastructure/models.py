@@ -29,6 +29,9 @@ class ChatMessageModel(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    sender: Mapped["UserModel"] = relationship(  # type: ignore[name-defined]
+        "UserModel", foreign_keys=[user_id], lazy="select"
+    )
     edits: Mapped[list["ChatMessageEditModel"]] = relationship(
         "ChatMessageEditModel", back_populates="message", lazy="select"
     )

@@ -28,7 +28,7 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
   }
 
   return (
-    <div className="flex flex-col gap-5 max-w-3xl">
+    <div className="flex flex-col gap-5">
       <Link
         href="/kb"
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"

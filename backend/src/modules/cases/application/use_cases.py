@@ -70,6 +70,8 @@ class CaseUseCases:
             .options(
                 selectinload(CaseModel.status),
                 selectinload(CaseModel.priority),
+                selectinload(CaseModel.application),
+                selectinload(CaseModel.origin),
             )
             .where(CaseModel.id == case_id)
         )
@@ -89,7 +91,12 @@ class CaseUseCases:
     ) -> tuple[list[CaseResponseDTO], int]:
         query = (
             select(CaseModel)
-            .options(selectinload(CaseModel.status), selectinload(CaseModel.priority))
+            .options(
+                selectinload(CaseModel.status),
+                selectinload(CaseModel.priority),
+                selectinload(CaseModel.application),
+                selectinload(CaseModel.origin),
+            )
             .where(CaseModel.tenant_id == tenant_id, CaseModel.is_archived == False)
         )
 
@@ -118,18 +125,27 @@ class CaseUseCases:
     async def update_case(
         self, case_id: str, dto: UpdateCaseDTO, actor_id: str, tenant_id: str
     ) -> CaseResponseDTO:
+        from backend.src.modules.users.infrastructure.models import UserModel
         case = await self.db.get(CaseModel, case_id)
         if not case:
             raise NotFoundError(f"Case {case_id} not found")
+        assigned_to = case.assigned_to
         for field, value in dto.model_dump(exclude_none=True).items():
             setattr(case, field, value)
         await self.db.commit()
+        actor = await self.db.get(UserModel, actor_id)
         await event_bus.publish(
             BaseEvent(
                 event_name="case.updated",
                 tenant_id=tenant_id,
                 actor_id=actor_id,
-                payload={"case_id": case_id},
+                payload={
+                    "case_id": case_id,
+                    "case_number": case.case_number,
+                    "case_title": case.title,
+                    "assigned_to": assigned_to,
+                    "updated_by": actor.full_name if actor else "Sistema",
+                },
             )
         )
         return await self.get_case(case_id)
@@ -166,6 +182,9 @@ class CaseUseCases:
                 actor_id=actor_id,
                 payload={
                     "case_id": case_id,
+                    "case_number": case.case_number,
+                    "case_title": case.title,
+                    "created_by": case.created_by,
                     "from_status": old_status_name,
                     "to_status": target_status.name,
                     "to_status_id": target_status.id,
@@ -228,7 +247,9 @@ class CaseUseCases:
             priority_color=model.priority.color if model.priority else "",
             complexity=model.complexity,
             application_id=model.application_id,
+            application_name=model.application.name if model.application else None,
             origin_id=model.origin_id,
+            origin_name=model.origin.name if model.origin else None,
             created_by=model.created_by,
             assigned_to=model.assigned_to,
             team_id=model.team_id,

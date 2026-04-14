@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { apiClient } from "@/lib/apiClient";
 import type { Notification, ApiResponse } from "@/lib/types";
 
@@ -14,7 +14,7 @@ export function useNotifications(unreadOnly = false) {
       });
       return data.data ?? [];
     },
-    refetchInterval: 30_000, // Poll every 30s as fallback
+    refetchInterval: 8_000, // Poll every 8s as fallback when SSE is unavailable
   });
 }
 
@@ -27,7 +27,7 @@ export function useUnreadCount() {
       );
       return data.data?.unread_count ?? 0;
     },
-    refetchInterval: 15_000,
+    refetchInterval: 8_000,
   });
 }
 
@@ -47,29 +47,99 @@ export function useMarkAllRead() {
   });
 }
 
-/** Optional: connect to SSE stream for real-time notifications */
+export function useDeleteNotification() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete(`/notifications/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [NOTIF_KEY] }),
+  });
+}
+
+export function useDeleteReadNotifications() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.delete("/notifications"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [NOTIF_KEY] }),
+  });
+}
+
+/**
+ * SSE stream usando fetch (no EventSource) para poder enviar
+ * el header Authorization que EventSource no soporta.
+ * Reconecta automáticamente si el stream se cierra o falla.
+ */
 export function useNotificationStream(onNotification?: (n: Notification) => void) {
   const qc = useQueryClient();
+  const onNotificationRef = useRef(onNotification);
+  onNotificationRef.current = onNotification;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const token = localStorage.getItem("access_token");
-    if (!token) return;
 
-    const source = new EventSource("/api/proxy/notifications/stream");
+    let aborted = false;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+    let controller = new AbortController();
 
-    source.onmessage = (event) => {
+    async function connect() {
+      const token = localStorage.getItem("access_token");
+      if (!token || aborted) return;
+
       try {
-        const notif: Notification = JSON.parse(event.data);
-        qc.invalidateQueries({ queryKey: [NOTIF_KEY] });
-        onNotification?.(notif);
+        const res = await fetch("/api/notifications/stream", {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          // No reconectar en 401 (token inválido)
+          if (res.status === 401) return;
+          scheduleReconnect();
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (!aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            try {
+              const notif: Notification = JSON.parse(line.slice(5).trim());
+              qc.invalidateQueries({ queryKey: [NOTIF_KEY] });
+              onNotificationRef.current?.(notif);
+            } catch {
+              // ignore malformed events
+            }
+          }
+        }
       } catch {
-        // ignore malformed events
+        // AbortError al desmontar — ignorar; otros errores: reconectar
       }
+
+      if (!aborted) scheduleReconnect();
+    }
+
+    function scheduleReconnect() {
+      retryTimeout = setTimeout(() => {
+        controller = new AbortController();
+        connect();
+      }, 5_000);
+    }
+
+    connect();
+
+    return () => {
+      aborted = true;
+      controller.abort();
+      if (retryTimeout) clearTimeout(retryTimeout);
     };
-
-    source.onerror = () => source.close();
-
-    return () => source.close();
-  }, [qc, onNotification]);
+  }, [qc]); // onNotification se lee via ref — no recrea el efecto
 }

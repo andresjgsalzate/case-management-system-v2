@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Boolean, Integer, Float, ForeignKey, JSON
+from sqlalchemy import String, DateTime, Boolean, Integer, Float, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.src.core.database import Base
@@ -33,6 +33,9 @@ class SLARecordModel(Base):
     escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_breached: Mapped[bool] = mapped_column(Boolean, default=False)
     is_escalated: Mapped[bool] = mapped_column(Boolean, default=False)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    total_paused_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
 
 
 class SLAHolidayModel(Base):
@@ -58,3 +61,16 @@ class SLAWorkScheduleModel(Base):
     work_days: Mapped[list] = mapped_column(JSON, default=lambda: [0, 1, 2, 3, 4])
     work_start_time: Mapped[str] = mapped_column(String(5), nullable=False, default="00:00")
     work_end_time: Mapped[str] = mapped_column(String(5), nullable=False, default="23:59")
+
+
+class SLAIntegrationConfigModel(Base):
+    __tablename__ = "sla_integration_config"
+    __table_args__ = (UniqueConstraint("tenant_id", name="uq_sla_integration_config_tenant"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    pause_on_timer: Mapped[bool] = mapped_column(Boolean, default=True)
+    low_max_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    medium_max_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    high_max_hours: Mapped[float | None] = mapped_column(Float, nullable=True)

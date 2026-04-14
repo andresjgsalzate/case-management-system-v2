@@ -30,20 +30,50 @@ async function proxyRequest(
       ? await request.text()
       : undefined;
 
-  const backendResponse = await fetch(targetUrl, {
-    method: request.method,
-    headers,
-    body,
-  });
+  let backendResponse: Response;
+  try {
+    backendResponse = await fetch(targetUrl, {
+      method: request.method,
+      headers,
+      body,
+    });
+  } catch (err) {
+    const isConnRefused =
+      err instanceof Error && err.message.includes("ECONNREFUSED");
+    return NextResponse.json(
+      {
+        detail: isConnRefused
+          ? "El servidor backend no está disponible"
+          : "Error al conectar con el servidor",
+      },
+      { status: 503 }
+    );
+  }
 
-  // Forward the response
+  // Forward the response — 204/205 No Content cannot have a body
+  if (backendResponse.status === 204 || backendResponse.status === 205) {
+    return new NextResponse(null, { status: backendResponse.status });
+  }
+
+  const contentType = backendResponse.headers.get("content-type") ?? "application/json";
+
+  // SSE: pipe the stream directly — never buffer it
+  if (contentType.includes("text/event-stream") && backendResponse.body) {
+    return new NextResponse(backendResponse.body, {
+      status: backendResponse.status,
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        "x-accel-buffering": "no",
+        "connection": "keep-alive",
+      },
+    });
+  }
+
   const responseBody = await backendResponse.text();
   return new NextResponse(responseBody, {
     status: backendResponse.status,
-    headers: {
-      "content-type":
-        backendResponse.headers.get("content-type") ?? "application/json",
-    },
+    headers: { "content-type": contentType },
   });
 }
 

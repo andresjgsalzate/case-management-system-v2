@@ -13,6 +13,7 @@ from backend.src.modules.sla.infrastructure.models import (
 from backend.src.modules.case_priorities.infrastructure.models import CasePriorityModel
 from backend.src.modules.cases.infrastructure.models import CaseModel
 from backend.src.modules.sla.application.calculator import calculate_target_at
+from backend.src.core.tenant import catalog_filter
 
 
 async def get_schedule(db: AsyncSession, tenant_id: str | None) -> dict:
@@ -55,7 +56,7 @@ async def start_sla_for_case(db: AsyncSession, case_id: str, tenant_id: str) -> 
 
     policy_result = await db.execute(
         select(SLAPolicyModel).where(
-            SLAPolicyModel.tenant_id == tenant_id,
+            catalog_filter(SLAPolicyModel, tenant_id),
             SLAPolicyModel.priority_id == case.priority_id,
         )
     )
@@ -90,6 +91,39 @@ async def start_sla_for_case(db: AsyncSession, case_id: str, tenant_id: str) -> 
     await db.commit()
 
 
+async def get_integration_config(db: AsyncSession, tenant_id: str) -> dict:
+    from backend.src.modules.sla.infrastructure.models import SLAIntegrationConfigModel
+    result = await db.execute(
+        select(SLAIntegrationConfigModel).where(
+            SLAIntegrationConfigModel.tenant_id == tenant_id
+        )
+    )
+    cfg = result.scalar_one_or_none()
+    if not cfg:
+        return {
+            "enabled": False,
+            "pause_on_timer": True,
+            "low_max_hours": None,
+            "medium_max_hours": None,
+            "high_max_hours": None,
+        }
+    return {
+        "enabled": cfg.enabled,
+        "pause_on_timer": cfg.pause_on_timer,
+        "low_max_hours": cfg.low_max_hours,
+        "medium_max_hours": cfg.medium_max_hours,
+        "high_max_hours": cfg.high_max_hours,
+    }
+
+
+async def recalculate_target_at(db: AsyncSession, record: SLARecordModel) -> None:
+    """Extends target_at by the accumulated paused duration (linear, not work-hours)."""
+    from datetime import timedelta
+    if record.total_paused_seconds and record.total_paused_seconds > 0:
+        record.target_at = record.target_at + timedelta(seconds=record.total_paused_seconds)
+        record.total_paused_seconds = 0
+
+
 async def check_sla_breaches(db: AsyncSession) -> None:
     """Job periódico: detecta casos con SLA vencido y emite eventos."""
     from backend.src.core.events.bus import event_bus
@@ -100,6 +134,7 @@ async def check_sla_breaches(db: AsyncSession) -> None:
         select(SLARecordModel).where(
             SLARecordModel.is_breached == False,
             SLARecordModel.target_at <= now,
+            SLARecordModel.paused_at.is_(None),  # No verificar SLAs pausados
         )
     )
     breached = result.scalars().all()

@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from backend.src.modules.chat.infrastructure.models import ChatMessageModel, ChatMessageEditModel
 from backend.src.core.exceptions import NotFoundError, ForbiddenError, BusinessRuleError
@@ -53,6 +54,7 @@ class ChatUseCases:
     ) -> list[ChatMessageModel]:
         result = await self.db.execute(
             select(ChatMessageModel)
+            .options(selectinload(ChatMessageModel.sender))
             .where(ChatMessageModel.case_id == case_id)
             .order_by(ChatMessageModel.created_at.asc())
             .limit(limit)

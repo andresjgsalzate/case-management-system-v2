@@ -78,3 +78,25 @@ class NotificationUseCases:
             )
         )
         return result.scalar() or 0
+
+    async def delete(self, notification_id: str, user_id: str) -> None:
+        result = await self.db.execute(
+            select(NotificationModel).where(NotificationModel.id == notification_id)
+        )
+        notif = result.scalar_one_or_none()
+        if not notif:
+            raise NotFoundError(f"Notificación {notification_id} no encontrada")
+        if notif.user_id != user_id:
+            raise ForbiddenError("Sin permiso para eliminar esta notificación")
+        await self.db.delete(notif)
+        await self.db.flush()
+
+    async def delete_all_read(self, user_id: str) -> int:
+        from sqlalchemy import delete as sa_delete
+        result = await self.db.execute(
+            sa_delete(NotificationModel).where(
+                NotificationModel.user_id == user_id,
+                NotificationModel.is_read.is_(True),
+            )
+        )
+        return result.rowcount

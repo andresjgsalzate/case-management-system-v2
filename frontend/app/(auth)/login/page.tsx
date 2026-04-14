@@ -24,7 +24,7 @@ interface LoginResponse {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { setTokens } = useAuthStore();
+  const { setTokens, setUser } = useAuthStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -41,8 +41,9 @@ export default function LoginPage() {
         email,
         password,
       });
-      const { access_token, refresh_token } = data.data;
+      const { access_token, refresh_token, user } = data.data;
       setTokens(access_token, refresh_token);
+      if (user) setUser({ is_active: true, email_notifications: false, created_at: "", updated_at: "", team_id: undefined, avatar_url: undefined, ...user });
       // Also set the keys that apiClient.ts interceptors use
       localStorage.setItem("access_token", access_token);
       localStorage.setItem("refresh_token", refresh_token);

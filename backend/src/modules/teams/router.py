@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from backend.src.core.dependencies import DBSession
 from backend.src.modules.teams.application.dtos import (
-    CreateTeamDTO, AddMemberDTO, TeamResponseDTO,
+    CreateTeamDTO, UpdateTeamDTO, AddMemberDTO, TeamResponseDTO,
 )
 from backend.src.modules.teams.application.use_cases import TeamUseCases
 from backend.src.core.responses import SuccessResponse
@@ -33,6 +33,23 @@ async def get_team(team_id: str, db: DBSession, current_user: CurrentUser = Team
     uc = TeamUseCases(db)
     team = await uc.get_team(team_id)
     return SuccessResponse.ok(team)
+
+
+@router.patch("/{team_id}", response_model=SuccessResponse[TeamResponseDTO])
+async def update_team(
+    team_id: str, dto: UpdateTeamDTO, db: DBSession, current_user: CurrentUser = TeamsManage
+):
+    uc = TeamUseCases(db)
+    team = await uc.update_team(team_id, dto)
+    return SuccessResponse.ok(team)
+
+
+@router.delete("/{team_id}", status_code=204)
+async def delete_team(
+    team_id: str, db: DBSession, current_user: CurrentUser = TeamsManage
+):
+    uc = TeamUseCases(db)
+    await uc.delete_team(team_id)
 
 
 @router.post("/{team_id}/members", status_code=201)

@@ -40,3 +40,30 @@ async def deactivate_origin(
 ):
     uc = OriginUseCases(db)
     await uc.deactivate(origin_id)
+
+
+from pydantic import BaseModel as _BM
+
+class _UpdateOriginDTO(_BM):
+    name: str | None = None
+    code: str | None = None
+
+@router.patch("/{origin_id}", response_model=SuccessResponse[OriginResponseDTO])
+async def update_origin(
+    origin_id: str,
+    dto: _UpdateOriginDTO,
+    db: DBSession,
+    current_user: CurrentUser = Manage,
+):
+    from sqlalchemy import select
+    from backend.src.modules.origins.infrastructure.models import OriginModel
+    result = await db.execute(select(OriginModel).where(OriginModel.id == origin_id))
+    o = result.scalar_one_or_none()
+    if not o:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Origin not found")
+    if dto.name is not None: o.name = dto.name
+    if dto.code is not None: o.code = dto.code.upper()
+    await db.commit()
+    await db.refresh(o)
+    return SuccessResponse.ok(OriginResponseDTO(id=o.id, name=o.name, code=o.code, is_active=o.is_active))
