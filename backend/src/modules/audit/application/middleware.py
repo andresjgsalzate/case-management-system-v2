@@ -128,8 +128,13 @@ def _get_changes(instance) -> dict:
                 continue
             hist = attr.history
             if hist.has_changes():
-                old = hist.deleted[0] if hist.deleted else None
-                new = hist.added[0] if hist.added else None
+                old_raw = hist.deleted[0] if hist.deleted else None
+                new_raw = hist.added[0] if hist.added else None
+                old = _serialize_value(old_raw)
+                new = _serialize_value(new_raw)
+                # Skip relationship attributes — ORM objects serialize to None
+                if (old_raw is not None and old is None) or (new_raw is not None and new is None):
+                    continue
                 if old != new:
                     changes[attr.key] = {"old": old, "new": new}
     except Exception as e:
