@@ -10,34 +10,112 @@ Uso:
         setup_audit_listener(session)
         yield session
 
-    # Para inyectar el actor del request:
-    from backend.src.modules.audit.application.middleware import set_current_actor
-    set_current_actor(current_user.user_id)
+    # Para inyectar el contexto del request:
+    from backend.src.modules.audit.application.middleware import set_audit_context
+    set_audit_context(actor_id=user_id, correlation_id=corr_id, user_agent=ua, request_path=path)
 """
 import logging
+import uuid
 from contextvars import ContextVar
+from datetime import date, datetime
 
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import InstanceState
 
 logger = logging.getLogger(__name__)
 
-# ContextVar para pasar el user_id al listener sin acoplamiento de capas
+# ── ContextVars — uno por campo de contexto ────────────────────────────────────
 _current_actor: ContextVar[str | None] = ContextVar("current_actor", default=None)
+_current_correlation: ContextVar[str | None] = ContextVar("current_correlation", default=None)
+_current_user_agent: ContextVar[str | None] = ContextVar("current_user_agent", default=None)
+_current_request_path: ContextVar[str | None] = ContextVar("current_request_path", default=None)
 
 # Tablas excluidas para evitar recursión y ruido de baja utilidad
 EXCLUDED_TABLES = {
-    "audit_logs",       # no auditamos el auditor
-    "notifications",    # demasiado frecuentes
-    "active_timers",    # estado efímero
-    "user_sessions",    # manejado por auth
-    "sla_records",      # actualizado por job periódico
+    "audit_logs",
+    "notifications",
+    "active_timers",
+    "user_sessions",
+    "sla_records",
 }
+
+_SKIP_SNAPSHOT_FIELDS = {"hashed_password", "password"}
+
+
+def set_audit_context(
+    actor_id: str | None,
+    correlation_id: str | None = None,
+    user_agent: str | None = None,
+    request_path: str | None = None,
+) -> None:
+    """Establece el contexto completo del request actual para el listener de auditoría."""
+    _current_actor.set(actor_id)
+    _current_correlation.set(correlation_id)
+    _current_user_agent.set(user_agent)
+    _current_request_path.set(request_path)
 
 
 def set_current_actor(user_id: str | None) -> None:
-    """Establece el actor del request actual para el listener de auditoría."""
+    """Alias de compatibilidad — solo actualiza el actor, no toca el correlation_id."""
     _current_actor.set(user_id)
+
+
+def _serialize_value(value):
+    """Serializa un valor de campo para almacenamiento JSON."""
+    if value is None or isinstance(value, (str, int, float, bool, dict, list)):
+        return value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    return None  # skip relationship proxies
+
+
+def _get_snapshot(instance) -> dict:
+    """Captura todos los campos escalares del objeto (para INSERT/DELETE)."""
+    snapshot: dict = {}
+    try:
+        state: InstanceState = inspect(instance)
+        for attr in state.attrs:
+            if attr.key in _SKIP_SNAPSHOT_FIELDS:
+                continue
+            try:
+                value = getattr(instance, attr.key)
+                serialized = _serialize_value(value)
+                if serialized is not None or value is None:
+                    snapshot[attr.key] = serialized
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug("Error capturando snapshot de auditoría: %s", e)
+    return snapshot
+
+
+def _get_before_snapshot(instance) -> dict:
+    """
+    Para UPDATE: reconstruye el estado ANTERIOR al cambio.
+    Usa attr.history.deleted para campos modificados; valor actual para sin cambios.
+    """
+    snapshot: dict = {}
+    try:
+        state: InstanceState = inspect(instance)
+        for attr in state.attrs:
+            if attr.key in _SKIP_SNAPSHOT_FIELDS:
+                continue
+            try:
+                hist = attr.history
+                if hist.has_changes():
+                    value = hist.deleted[0] if hist.deleted else None
+                else:
+                    value = getattr(instance, attr.key, None)
+                serialized = _serialize_value(value)
+                if serialized is not None or value is None:
+                    snapshot[attr.key] = serialized
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug("Error capturando before_snapshot de auditoría: %s", e)
+    return snapshot
 
 
 def _get_changes(instance) -> dict:
@@ -46,6 +124,8 @@ def _get_changes(instance) -> dict:
     try:
         state: InstanceState = inspect(instance)
         for attr in state.attrs:
+            if attr.key in _SKIP_SNAPSHOT_FIELDS:
+                continue
             hist = attr.history
             if hist.has_changes():
                 old = hist.deleted[0] if hist.deleted else None
@@ -69,6 +149,9 @@ def setup_audit_listener(async_session) -> None:
     @event.listens_for(sync_session, "before_flush")
     def before_flush(session, flush_context, instances):
         actor_id = _current_actor.get()
+        correlation_id = _current_correlation.get()
+        user_agent = _current_user_agent.get()
+        request_path = _current_request_path.get()
         pending_audit: list[AuditLogModel] = []
 
         for instance in list(session.new):
@@ -76,12 +159,17 @@ def setup_audit_listener(async_session) -> None:
             if table in EXCLUDED_TABLES:
                 continue
             entity_id = str(getattr(instance, "id", "unknown"))
+            snapshot = _get_snapshot(instance)
             pending_audit.append(AuditLogModel(
                 action="INSERT",
                 entity_type=table,
                 entity_id=entity_id,
-                changes=None,
+                changes={"_snapshot": snapshot} if snapshot else None,
+                before_snapshot=None,
                 actor_id=actor_id,
+                correlation_id=correlation_id,
+                user_agent=user_agent,
+                request_path=request_path,
             ))
 
         for instance in list(session.dirty):
@@ -98,7 +186,11 @@ def setup_audit_listener(async_session) -> None:
                     entity_type=table,
                     entity_id=entity_id,
                     changes=changes,
+                    before_snapshot=_get_before_snapshot(instance),
                     actor_id=actor_id,
+                    correlation_id=correlation_id,
+                    user_agent=user_agent,
+                    request_path=request_path,
                 ))
 
         for instance in list(session.deleted):
@@ -106,12 +198,17 @@ def setup_audit_listener(async_session) -> None:
             if table in EXCLUDED_TABLES:
                 continue
             entity_id = str(getattr(instance, "id", "unknown"))
+            snapshot = _get_snapshot(instance)
             pending_audit.append(AuditLogModel(
                 action="DELETE",
                 entity_type=table,
                 entity_id=entity_id,
-                changes=None,
+                changes={"_snapshot": snapshot} if snapshot else None,
+                before_snapshot=None,
                 actor_id=actor_id,
+                correlation_id=correlation_id,
+                user_agent=user_agent,
+                request_path=request_path,
             ))
 
         for log in pending_audit:
