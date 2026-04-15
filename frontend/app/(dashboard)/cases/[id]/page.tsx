@@ -88,7 +88,7 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className="font-mono text-xs text-muted-foreground">{c.case_number}</span>
-              <StatusBadge status={c.status_name} />
+              <StatusBadge status={c.status_name} pulse />
               <PriorityBadge priority={c.priority_name} />
             </div>
             <h1 className="text-xl font-semibold text-foreground">{c.title}</h1>

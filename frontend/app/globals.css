@@ -65,3 +65,17 @@
     @apply bg-background text-foreground;
   }
 }
+
+@keyframes breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--breathe-color, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+.animate-breathe {
+  animation: breathe 2.2s ease-in-out infinite;
+  box-shadow: 0 0 0 0 var(--breathe-color, transparent);
+}
