@@ -76,14 +76,14 @@ def _get_snapshot(instance) -> dict:
     snapshot: dict = {}
     try:
         state: InstanceState = inspect(instance)
-        for attr in state.attrs:
-            if attr.key in _SKIP_SNAPSHOT_FIELDS:
+        for prop in state.mapper.column_attrs:
+            if prop.key in _SKIP_SNAPSHOT_FIELDS:
                 continue
             try:
-                value = getattr(instance, attr.key)
+                value = getattr(instance, prop.key)
                 serialized = _serialize_value(value)
                 if serialized is not None or value is None:
-                    snapshot[attr.key] = serialized
+                    snapshot[prop.key] = serialized
             except Exception:
                 pass
     except Exception as e:
@@ -99,18 +99,19 @@ def _get_before_snapshot(instance) -> dict:
     snapshot: dict = {}
     try:
         state: InstanceState = inspect(instance)
-        for attr in state.attrs:
-            if attr.key in _SKIP_SNAPSHOT_FIELDS:
+        for prop in state.mapper.column_attrs:
+            if prop.key in _SKIP_SNAPSHOT_FIELDS:
                 continue
             try:
+                attr = state.attrs[prop.key]
                 hist = attr.history
                 if hist.has_changes():
                     value = hist.deleted[0] if hist.deleted else None
                 else:
-                    value = getattr(instance, attr.key, None)
+                    value = getattr(instance, prop.key, None)
                 serialized = _serialize_value(value)
                 if serialized is not None or value is None:
-                    snapshot[attr.key] = serialized
+                    snapshot[prop.key] = serialized
             except Exception:
                 pass
     except Exception as e:
@@ -123,20 +124,16 @@ def _get_changes(instance) -> dict:
     changes: dict = {}
     try:
         state: InstanceState = inspect(instance)
-        for attr in state.attrs:
-            if attr.key in _SKIP_SNAPSHOT_FIELDS:
+        for prop in state.mapper.column_attrs:
+            if prop.key in _SKIP_SNAPSHOT_FIELDS:
                 continue
+            attr = state.attrs[prop.key]
             hist = attr.history
             if hist.has_changes():
-                old_raw = hist.deleted[0] if hist.deleted else None
-                new_raw = hist.added[0] if hist.added else None
-                old = _serialize_value(old_raw)
-                new = _serialize_value(new_raw)
-                # Skip relationship attributes — ORM objects serialize to None
-                if (old_raw is not None and old is None) or (new_raw is not None and new is None):
-                    continue
+                old = _serialize_value(hist.deleted[0] if hist.deleted else None)
+                new = _serialize_value(hist.added[0] if hist.added else None)
                 if old != new:
-                    changes[attr.key] = {"old": old, "new": new}
+                    changes[prop.key] = {"old": old, "new": new}
     except Exception as e:
         logger.debug("Error extrayendo cambios de auditoría: %s", e)
     return changes
