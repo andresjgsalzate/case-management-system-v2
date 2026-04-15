@@ -1,7 +1,7 @@
 import Link from "next/link";
 import {
   Users, Shield, Clock, Zap, Bell, Tag,
-  AlertTriangle, Flag, Layers, Globe, Hash, LayoutGrid, Building2,
+  AlertTriangle, Flag, Layers, Globe, Hash, LayoutGrid, Building2, Mail,
 } from "lucide-react";
 
 const SETTINGS_SECTIONS = [
@@ -30,6 +30,7 @@ const SETTINGS_SECTIONS = [
     items: [
       { href: "/settings/sla",           icon: Clock, color: "text-red-500",    bg: "bg-red-50 dark:bg-red-950/40",       title: "Políticas SLA",  description: "Define plazos de respuesta y resolución" },
       { href: "/settings/notifications", icon: Bell,  color: "text-orange-500", bg: "bg-orange-50 dark:bg-orange-950/40", title: "Notificaciones", description: "Configuración de alertas y emails" },
+      { href: "/settings/email",         icon: Mail,  color: "text-sky-500",    bg: "bg-sky-50 dark:bg-sky-950/40",       title: "Email",          description: "Configuración SMTP y plantillas de correo" },
       { href: "/settings/automation",    icon: Zap,   color: "text-yellow-500", bg: "bg-yellow-50 dark:bg-yellow-950/40", title: "Automatización", description: "Reglas de automatización y acciones" },
       { href: "/dispositions",           icon: Tag,   color: "text-cyan-500",   bg: "bg-cyan-50 dark:bg-cyan-950/40",     title: "Disposiciones",  description: "Respuestas y plantillas predefinidas" },
     ],
