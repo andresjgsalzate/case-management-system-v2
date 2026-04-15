@@ -107,7 +107,9 @@ def _enrich_changes(changes: dict, fk_values: dict[str, str]) -> dict:
 
 def _enrich_snapshot(snapshot: dict | None, fk_values: dict[str, str]) -> dict | None:
     """Replace UUID values in FK fields of a before_snapshot dict."""
-    if not snapshot or not fk_values:
+    if not snapshot:
+        return None
+    if not fk_values:
         return snapshot
     return {
         k: (fk_values[str(v)] if k in _FK_FIELDS and isinstance(v, str) and v in fk_values else v)
