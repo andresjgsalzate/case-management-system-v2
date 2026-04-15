@@ -176,20 +176,26 @@ class AuditUseCases:
         # Collect unique UUIDs per table across all logs
         by_table: dict[str, set[str]] = {}
         for log in logs:
-            if not log.changes:
-                continue
-            for field, info in log.changes.items():
-                if field == "_snapshot" and isinstance(info, dict):
-                    # Also enrich snapshot fields
-                    for snap_field, snap_val in info.items():
-                        if snap_field in FK_FIELD_TABLE and isinstance(snap_val, str) and len(snap_val) == 36:
-                            table, _ = FK_FIELD_TABLE[snap_field]
-                            by_table.setdefault(table, set()).add(snap_val)
-                elif field in FK_FIELD_TABLE and isinstance(info, dict):
-                    table, _ = FK_FIELD_TABLE[field]
-                    for val in [info.get("old"), info.get("new")]:
-                        if val and isinstance(val, str) and len(val) == 36:
-                            by_table.setdefault(table, set()).add(val)
+            if log.changes:
+                for field, info in log.changes.items():
+                    if field == "_snapshot" and isinstance(info, dict):
+                        # INSERT/DELETE snapshot
+                        for snap_field, snap_val in info.items():
+                            if snap_field in FK_FIELD_TABLE and isinstance(snap_val, str) and len(snap_val) == 36:
+                                table, _ = FK_FIELD_TABLE[snap_field]
+                                by_table.setdefault(table, set()).add(snap_val)
+                    elif field in FK_FIELD_TABLE and isinstance(info, dict):
+                        table, _ = FK_FIELD_TABLE[field]
+                        for val in [info.get("old"), info.get("new")]:
+                            if val and isinstance(val, str) and len(val) == 36:
+                                by_table.setdefault(table, set()).add(val)
+
+            # Also resolve FK values in before_snapshot (UPDATE records)
+            if log.before_snapshot:
+                for snap_field, snap_val in log.before_snapshot.items():
+                    if snap_field in FK_FIELD_TABLE and isinstance(snap_val, str) and len(snap_val) == 36:
+                        table, _ = FK_FIELD_TABLE[snap_field]
+                        by_table.setdefault(table, set()).add(snap_val)
 
         resolved: dict[str, str] = {}
         if not by_table:
