@@ -159,8 +159,14 @@ export interface AuditLog {
   action: AuditAction;
   entity_type: string;
   entity_id: string;
+  entity_label?: string | null;
   changes?: Record<string, { old: unknown; new: unknown }>;
+  before_snapshot?: Record<string, unknown> | null;
   actor_id?: string;
+  actor_name?: string | null;
+  correlation_id?: string | null;
+  user_agent?: string | null;
+  request_path?: string | null;
   ip_address?: string;
   created_at: string;
 }
@@ -196,10 +202,20 @@ export interface DispositionCategory {
 export interface Disposition {
   id: string;
   category_id: string;
-  title: string;
-  content: string;
+  // Legacy fields
+  title?: string | null;
+  content?: string | null;
+  // Technical fields
+  date?: string | null;
+  case_number?: string | null;
+  item_name?: string | null;
+  storage_path?: string | null;
+  revision_number?: string | null;
+  observations?: string | null;
   is_active: boolean;
   usage_count: number;
+  created_at: string;
+  updated_at: string;
 }
 
 // ─── API wrapper ──────────────────────────────────────────────────────────────
