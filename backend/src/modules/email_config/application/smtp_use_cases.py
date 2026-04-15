@@ -64,8 +64,11 @@ class SmtpConfigUseCases:
             config.host = host
             config.port = port
             config.username = username
-            if password:
+            if password == "":
+                config.password = None   # explicit clear
+            elif password:
                 config.password = encrypted_password
+            # if password is None: keep existing (no-op)
             config.from_email = from_email
             config.from_name = from_name
             config.use_tls = use_tls

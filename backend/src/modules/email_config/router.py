@@ -77,7 +77,7 @@ async def upsert_smtp_config(body: UpsertSmtpDTO, db: DBSession, _: CurrentUser 
 async def test_smtp_connection(db: DBSession, _: CurrentUser = Manage):
     uc = SmtpConfigUseCases(db)
     result = await uc.test_connection()
-    return SuccessResponse.ok(result)
+    return SuccessResponse.ok({"success": result["success"], "message": result["message"]})
 
 
 # ── Template endpoints ────────────────────────────────────────────────────────
