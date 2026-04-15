@@ -26,6 +26,16 @@ def test_set_current_actor_stores_value():
     assert _current_actor.get() is None
 
 
+def _make_state(props: list) -> MagicMock:
+    """Construye un InstanceState mock con mapper.column_attrs y attrs[key]."""
+    state = MagicMock()
+    # mapper.column_attrs devuelve props con atributo .key
+    state.mapper.column_attrs = props
+    # state.attrs[key] devuelve el mismo prop (attr con history)
+    state.attrs.__getitem__ = lambda self, key: next(p for p in props if p.key == key)
+    return state
+
+
 def test_get_changes_detects_modifications():
     """_get_changes detecta campos modificados con old/new."""
     from backend.src.modules.audit.application.middleware import _get_changes
@@ -41,8 +51,7 @@ def test_get_changes_detects_modifications():
     attr2.key = "email"
     attr2.history.has_changes.return_value = False
 
-    state = MagicMock()
-    state.attrs = [attr1, attr2]
+    state = _make_state([attr1, attr2])
 
     from unittest.mock import patch
     with patch("backend.src.modules.audit.application.middleware.inspect", return_value=state):
@@ -65,8 +74,7 @@ def test_get_changes_skips_unchanged_field():
     attr.history.deleted = ["open"]
     attr.history.added = ["open"]  # mismo valor
 
-    state = MagicMock()
-    state.attrs = [attr]
+    state = _make_state([attr])
 
     from unittest.mock import patch
     with patch("backend.src.modules.audit.application.middleware.inspect", return_value=state):
