@@ -25,7 +25,7 @@ def upgrade() -> None:
         CREATE OR REPLACE FUNCTION prevent_audit_modification()
         RETURNS trigger AS $$
         BEGIN
-            RAISE EXCEPTION 'audit_logs records are immutable';
+            RAISE EXCEPTION 'audit_logs records are immutable — operation % not allowed', TG_OP;
         END;
         $$ LANGUAGE plpgsql;
     """)
@@ -40,7 +40,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP TRIGGER IF EXISTS audit_logs_immutable ON audit_logs;")
     op.execute("DROP FUNCTION IF EXISTS prevent_audit_modification();")
-    op.drop_index("ix_audit_logs_correlation_id", table_name="audit_logs")
+    op.drop_index("ix_audit_logs_correlation_id", table_name="audit_logs", if_exists=True)
     op.drop_column("audit_logs", "request_path")
     op.drop_column("audit_logs", "user_agent")
     op.drop_column("audit_logs", "before_snapshot")
