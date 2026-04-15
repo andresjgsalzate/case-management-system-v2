@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.src.core.config import get_settings
+from backend.src.core.middleware.audit_context import AuditContextMiddleware
 from backend.src.core.database import engine
 from backend.src.core.events.registry import register_all_handlers
 from backend.src.core.exceptions import AppError
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(AuditContextMiddleware)
 
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
