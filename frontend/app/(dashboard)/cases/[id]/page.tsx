@@ -37,6 +37,9 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const [tab, setTab] = useState<Tab>("details");
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [closingTarget, setClosingTarget] = useState<{ id: string; name: string } | null>(null);
+  const [solutionText, setSolutionText] = useState("");
+  const [solutionError, setSolutionError] = useState<string | null>(null);
 
   const transition = useTransitionCase(params.id);
   const archive = useArchiveCase(params.id);
@@ -116,16 +119,24 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
                   {transitionTargets.length === 0 ? (
                     <p className="px-3 py-2 text-xs text-muted-foreground">Sin transiciones disponibles</p>
                   ) : (
-                    transitionTargets.map((s: { id: string; name: string }) => (
+                    transitionTargets.map((s: { id: string; name: string; slug: string }) => (
                       <DropdownMenu.Item
                         key={s.id}
-                        onSelect={async () => {
-                          try {
-                            setActionError(null);
-                            await transition.mutateAsync(s.id);
-                          } catch (err: unknown) {
-                            const e = err as { response?: { data?: { message?: string; detail?: string } } };
-                            setActionError(e?.response?.data?.message ?? e?.response?.data?.detail ?? "Error al cambiar el estado");
+                        onSelect={() => {
+                          if (s.slug === "closed") {
+                            setSolutionText("");
+                            setSolutionError(null);
+                            setClosingTarget(s);
+                          } else {
+                            (async () => {
+                              try {
+                                setActionError(null);
+                                await transition.mutateAsync({ target_status_id: s.id });
+                              } catch (err: unknown) {
+                                const e = err as { response?: { data?: { message?: string; detail?: string } } };
+                                setActionError(e?.response?.data?.message ?? e?.response?.data?.detail ?? "Error al cambiar el estado");
+                              }
+                            })();
                           }
                         }}
                         className="cursor-pointer px-3 py-2 text-sm text-foreground hover:bg-muted outline-none select-none"
@@ -151,13 +162,19 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
               }
             />
 
-            {/* Archive */}
-            {!c.is_archived && (
+            {/* Archive — solo disponible en estado Cerrado */}
+            {!c.is_archived && c.status_slug === "closed" && (
               <button
                 onClick={async () => {
                   const ok = await confirm({ title: "¿Archivar caso?", description: "El caso pasará a estado archivado y no podrá modificarse." });
                   if (!ok) return;
-                  await archive.mutateAsync();
+                  try {
+                    setActionError(null);
+                    await archive.mutateAsync();
+                  } catch (err: unknown) {
+                    const e = err as { response?: { data?: { message?: string; detail?: string } } };
+                    setActionError(e?.response?.data?.message ?? e?.response?.data?.detail ?? "Error al archivar el caso");
+                  }
                 }}
                 disabled={archive.isPending}
                 title="Archivar caso"
@@ -260,6 +277,69 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
         {tab === "clasificacion" && <CaseClassification caseId={params.id} />}
         {tab === "actividad" && <CaseActivity caseId={params.id} />}
       </div>
+
+      {/* Modal: descripción de solución al cerrar caso */}
+      {closingTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-xl shadow-xl w-full max-w-md mx-4">
+            <div className="px-5 py-4 border-b border-border">
+              <p className="text-sm font-semibold text-foreground">Cerrar caso</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Para pasar a <strong>{closingTarget.name}</strong> es obligatorio registrar la solución aplicada.
+              </p>
+            </div>
+            <div className="px-5 py-4 flex flex-col gap-3">
+              <label className="text-xs font-medium text-foreground">
+                Descripción de la solución <span className="text-destructive">*</span>
+              </label>
+              <textarea
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                rows={5}
+                placeholder="Describe cómo se resolvió el caso, acciones tomadas y resultado final…"
+                value={solutionText}
+                onChange={e => { setSolutionText(e.target.value); setSolutionError(null); }}
+              />
+              {solutionError && (
+                <p className="text-xs text-destructive">{solutionError}</p>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-border flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setClosingTarget(null)}
+                className="rounded-md border border-border bg-background px-3 py-1.5 text-sm hover:bg-muted transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={transition.isPending}
+                onClick={async () => {
+                  if (!solutionText.trim()) {
+                    setSolutionError("La descripción de la solución es obligatoria");
+                    return;
+                  }
+                  try {
+                    setActionError(null);
+                    await transition.mutateAsync({
+                      target_status_id: closingTarget.id,
+                      solution_description: solutionText.trim(),
+                    });
+                    setClosingTarget(null);
+                    setSolutionText("");
+                  } catch (err: unknown) {
+                    const e = err as { response?: { data?: { message?: string; detail?: string } } };
+                    setSolutionError(e?.response?.data?.message ?? e?.response?.data?.detail ?? "Error al cerrar el caso");
+                  }
+                }}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                {transition.isPending ? "Cerrando…" : "Confirmar cierre"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

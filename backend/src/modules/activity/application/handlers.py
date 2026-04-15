@@ -16,7 +16,7 @@ EVENT_DESCRIPTIONS = {
     "case.archived": lambda p: "Caso archivado",
     "case.restored": lambda p: "Caso restaurado",
     "case.classified": lambda p: (
-        f"Caso clasificado como {p.get('complexity_level', '').upper()} "
+        f"Caso clasificado como complejidad {p.get('complexity_level', '').upper()} "
         f"({p.get('total_score', '')} pts)"
     ),
     "note.created": lambda p: "Nota interna agregada",
