@@ -134,8 +134,8 @@ export function useTeams() {
 export function useTransitionCase(caseId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (target_status_id: string) => {
-      const { data } = await apiClient.post(`/cases/${caseId}/transition`, { target_status_id });
+    mutationFn: async (payload: { target_status_id: string; solution_description?: string }) => {
+      const { data } = await apiClient.post(`/cases/${caseId}/transition`, payload);
       return data.data;
     },
     onSuccess: () => {

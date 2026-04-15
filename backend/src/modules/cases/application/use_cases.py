@@ -20,7 +20,7 @@ from backend.src.modules.cases.application.dtos import (
     TransitionCaseDTO,
     CaseResponseDTO,
 )
-from backend.src.core.exceptions import NotFoundError
+from backend.src.core.exceptions import NotFoundError, ValidationError
 from backend.src.core.events.bus import event_bus
 from backend.src.core.events.base import BaseEvent
 
@@ -168,6 +168,11 @@ class CaseUseCases:
 
         validate_transition(target_status.slug, case.status.allowed_transitions or [])
 
+        if target_status.slug == "closed":
+            if not dto.solution_description or not dto.solution_description.strip():
+                raise ValidationError("Se requiere una descripción de la solución para cerrar el caso")
+            case.solution_description = dto.solution_description.strip()
+
         old_status_name = case.status.name
         case.status_id = dto.target_status_id
         if target_status.is_final:
@@ -253,6 +258,7 @@ class CaseUseCases:
             created_by=model.created_by,
             assigned_to=model.assigned_to,
             team_id=model.team_id,
+            solution_description=model.solution_description,
             is_archived=model.is_archived,
             closed_at=model.closed_at.isoformat() if model.closed_at else None,
             created_at=model.created_at.isoformat(),

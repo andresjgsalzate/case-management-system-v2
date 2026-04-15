@@ -2,8 +2,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
 from backend.src.modules.cases.infrastructure.models import CaseModel
-from backend.src.core.exceptions import NotFoundError, ConflictError
+from backend.src.core.exceptions import NotFoundError, ConflictError, ValidationError
 from backend.src.core.events.bus import event_bus
 from backend.src.core.events.base import BaseEvent
 
@@ -13,11 +16,16 @@ class ArchiveUseCases:
         self.db = db
 
     async def archive_case(self, case_id: str, actor_id: str, tenant_id: str) -> None:
-        case = await self.db.get(CaseModel, case_id)
+        result = await self.db.execute(
+            select(CaseModel).options(selectinload(CaseModel.status)).where(CaseModel.id == case_id)
+        )
+        case = result.scalar_one_or_none()
         if not case:
             raise NotFoundError(f"Case {case_id} not found")
         if case.is_archived:
             raise ConflictError("Case is already archived")
+        if not case.status or case.status.slug != "closed":
+            raise ValidationError("Solo se pueden archivar casos en estado Cerrado")
 
         case.is_archived = True
         case.archived_at = datetime.now(timezone.utc)

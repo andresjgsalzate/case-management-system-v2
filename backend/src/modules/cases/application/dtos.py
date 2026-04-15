@@ -21,6 +21,7 @@ class UpdateCaseDTO(BaseModel):
 
 class TransitionCaseDTO(BaseModel):
     target_status_id: str
+    solution_description: str | None = None
 
 
 class AssignCaseDTO(BaseModel):
@@ -48,6 +49,7 @@ class CaseResponseDTO(BaseModel):
     created_by: str
     assigned_to: str | None
     team_id: str | None
+    solution_description: str | None
     is_archived: bool
     closed_at: str | None
     created_at: str
