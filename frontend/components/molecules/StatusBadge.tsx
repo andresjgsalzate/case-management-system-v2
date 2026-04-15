@@ -20,13 +20,13 @@ const STATUS_MAP: Record<string, { label: string; variant: "default" | "success"
   rejected:    { label: "Rechazado",    variant: "destructive" },
 };
 
-const BREATHE_COLORS: Record<BadgeVariant, string> = {
-  default:     "rgba(59, 130, 246, 0.45)",
-  success:     "rgba(16, 185, 129, 0.45)",
-  warning:     "rgba(245, 158, 11, 0.45)",
-  destructive: "rgba(239, 68, 68, 0.45)",
-  outline:     "rgba(148, 163, 184, 0.35)",
-  secondary:   "rgba(148, 163, 184, 0.35)",
+const BREATHE_CLASS: Record<BadgeVariant, string> = {
+  default:     "breathe-blue",
+  success:     "breathe-emerald",
+  warning:     "breathe-amber",
+  destructive: "breathe-red",
+  outline:     "breathe-slate",
+  secondary:   "breathe-slate",
 };
 
 interface StatusBadgeProps {
@@ -43,8 +43,7 @@ export function StatusBadge({ status, label, className, pulse }: StatusBadgeProp
   return (
     <Badge
       variant={config.variant}
-      className={cn(pulse && "animate-breathe", className)}
-      style={pulse ? { "--breathe-color": BREATHE_COLORS[config.variant] } as React.CSSProperties : undefined}
+      className={cn(pulse && BREATHE_CLASS[config.variant], className)}
     >
       {label ?? config.label}
     </Badge>

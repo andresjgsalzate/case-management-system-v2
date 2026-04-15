@@ -66,15 +66,29 @@
   }
 }
 
-@keyframes breathe {
-  0%, 100% {
-    box-shadow: 0 0 3px 1px var(--breathe-color, transparent);
-  }
-  50% {
-    box-shadow: 0 0 9px 5px var(--breathe-color, transparent);
-  }
+@keyframes breathe-blue {
+  0%, 100% { box-shadow: 0 0 3px 1px rgba(59, 130, 246, 0.4); }
+  50%       { box-shadow: 0 0 9px 5px rgba(59, 130, 246, 0.4); }
+}
+@keyframes breathe-amber {
+  0%, 100% { box-shadow: 0 0 3px 1px rgba(245, 158, 11, 0.45); }
+  50%       { box-shadow: 0 0 9px 5px rgba(245, 158, 11, 0.45); }
+}
+@keyframes breathe-emerald {
+  0%, 100% { box-shadow: 0 0 3px 1px rgba(16, 185, 129, 0.45); }
+  50%       { box-shadow: 0 0 9px 5px rgba(16, 185, 129, 0.45); }
+}
+@keyframes breathe-red {
+  0%, 100% { box-shadow: 0 0 3px 1px rgba(239, 68, 68, 0.45); }
+  50%       { box-shadow: 0 0 9px 5px rgba(239, 68, 68, 0.45); }
+}
+@keyframes breathe-slate {
+  0%, 100% { box-shadow: 0 0 3px 1px rgba(148, 163, 184, 0.35); }
+  50%       { box-shadow: 0 0 8px 4px rgba(148, 163, 184, 0.35); }
 }
 
-.animate-breathe {
-  animation: breathe 2.2s ease-in-out infinite;
-}
+.breathe-blue    { animation: breathe-blue    2.2s ease-in-out infinite; }
+.breathe-amber   { animation: breathe-amber   2.2s ease-in-out infinite; }
+.breathe-emerald { animation: breathe-emerald 2.2s ease-in-out infinite; }
+.breathe-red     { animation: breathe-red     2.2s ease-in-out infinite; }
+.breathe-slate   { animation: breathe-slate   2.2s ease-in-out infinite; }
