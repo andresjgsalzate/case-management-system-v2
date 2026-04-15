@@ -39,7 +39,7 @@ function useTimelineLogs(entityType: string, entityId: string) {
 
 function useOperationLogs(correlationId: string | null | undefined) {
   return useQuery({
-    queryKey: ["audit-operation", correlationId],
+    queryKey: ["audit-operation", correlationId ?? "none"],
     queryFn: async () => {
       const { data } = await apiClient.get<ApiResponse<AuditLog[]>>(
         `/audit/operation/${correlationId}`
@@ -148,7 +148,7 @@ function TimelineModal({
               {entityLabel ?? entityId} · {ENTITY_LABELS[entityType] ?? entityType}
             </p>
           </div>
-          <button type="button" onClick={onClose}
+          <button type="button" aria-label="Cerrar" onClick={onClose}
             className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted transition-colors">
             <X className="h-4 w-4" />
           </button>
@@ -241,7 +241,7 @@ function DetailModal({ log, onClose }: { log: AuditLog; onClose: () => void }) {
               {ENTITY_LABELS[log.entity_type] ?? log.entity_type}
             </span>
           </div>
-          <button type="button" onClick={onClose}
+          <button type="button" aria-label="Cerrar" onClick={onClose}
             className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted transition-colors">
             <X className="h-4 w-4" />
           </button>
@@ -471,8 +471,8 @@ export default function AuditPage() {
 
   const filtered = search.trim()
     ? logs.filter(l =>
-        l.entity_type.includes(search.toLowerCase()) ||
-        l.entity_id.includes(search.toLowerCase()) ||
+        l.entity_type.toLowerCase().includes(search.toLowerCase()) ||
+        l.entity_id.toLowerCase().includes(search.toLowerCase()) ||
         (l.entity_label ?? "").toLowerCase().includes(search.toLowerCase()) ||
         (l.actor_name ?? "").toLowerCase().includes(search.toLowerCase()) ||
         (l.actor_id ?? "").includes(search.toLowerCase())
@@ -582,7 +582,7 @@ export default function AuditPage() {
                     </button>
                   </td>
                   <td className="px-4 py-3">
-                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" aria-hidden="true" />
                   </td>
                 </tr>
               ))}

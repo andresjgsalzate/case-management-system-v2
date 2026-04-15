@@ -160,7 +160,7 @@ export interface AuditLog {
   entity_type: string;
   entity_id: string;
   entity_label?: string | null;
-  changes?: Record<string, { old: unknown; new: unknown }>;
+  changes?: Record<string, { old: unknown; new: unknown } | unknown>;
   before_snapshot?: Record<string, unknown> | null;
   actor_id?: string;
   actor_name?: string | null;
