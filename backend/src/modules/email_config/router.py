@@ -41,7 +41,7 @@ class UpdateTemplateDTO(BaseModel):
 
 # ── SMTP endpoints ────────────────────────────────────────────────────────────
 
-@router.get("/smtp", response_model=SuccessResponse[dict])
+@router.get("/smtp", response_model=SuccessResponse[dict | None])
 async def get_smtp_config(db: DBSession, _: CurrentUser = Read):
     uc = SmtpConfigUseCases(db)
     config = await uc.get()
