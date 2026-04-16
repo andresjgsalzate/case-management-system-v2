@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/apiClient";
-import type { KBArticle, KBTag, ApiResponse } from "@/lib/types";
+import type { KBArticle, KBArticleVersion, KBTag, ApiResponse } from "@/lib/types";
 
 const KB_KEY = "kb-articles";
 
@@ -65,5 +65,64 @@ export function useTransitionKBArticle(id: string) {
       return data.data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: [KB_KEY] }),
+  });
+}
+
+export function useUpdateKBArticle(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: {
+      title?: string;
+      content_json?: Record<string, unknown>;
+      content_text?: string;
+      tag_ids?: string[];
+    }) => {
+      const { data } = await apiClient.patch<ApiResponse<KBArticle>>(
+        `/kb/articles/${id}`,
+        payload
+      );
+      return data.data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: [KB_KEY] }),
+  });
+}
+
+export function useSubmitKBFeedback(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { is_helpful: boolean }) => {
+      const { data } = await apiClient.post<ApiResponse<{ id: string; is_helpful: boolean }>>(
+        `/kb/articles/${id}/feedback`,
+        payload
+      );
+      return data.data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: [KB_KEY, id] }),
+  });
+}
+
+export function useToggleKBFavorite(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<ApiResponse<{ favorited: boolean }>>(
+        `/kb/articles/${id}/favorite`
+      );
+      return data.data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: [KB_KEY, id] }),
+  });
+}
+
+export function useKBVersions(id: string) {
+  return useQuery({
+    queryKey: [KB_KEY, id, "versions"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ApiResponse<KBArticleVersion[]>>(
+        `/kb/articles/${id}/versions`
+      );
+      return data.data ?? [];
+    },
+    enabled: !!id,
   });
 }
