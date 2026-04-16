@@ -113,7 +113,8 @@ class AutomationUseCases:
         executed = 0
         for rule in rules:
             if evaluate_rule(rule.conditions, context, rule.condition_logic):
-                await self._execute_actions(rule.actions, context, actor_id=actor_id)
+                rule_context = {**context, "tenant_id": rule.tenant_id} if rule.tenant_id else context
+                await self._execute_actions(rule.actions, rule_context, actor_id=actor_id)
                 rule.execution_count += 1
                 executed += 1
         if executed > 0:
@@ -165,35 +166,39 @@ class AutomationUseCases:
             case "archive_closed_cases":
                 days = int(action.params.get("days_after_close", "30"))
                 cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+                tenant_id = context.get("tenant_id")
 
                 from backend.src.modules.cases.infrastructure.models import CaseModel
                 from backend.src.modules.case_statuses.infrastructure.models import CaseStatusModel
 
-                status_result = await self.db.execute(
-                    select(CaseStatusModel).where(CaseStatusModel.slug == "closed")
-                )
+                status_q = select(CaseStatusModel).where(CaseStatusModel.slug == "closed")
+                if tenant_id:
+                    status_q = status_q.where(CaseStatusModel.tenant_id == tenant_id)
+                status_result = await self.db.execute(status_q)
                 closed_status = status_result.scalar_one_or_none()
                 if not closed_status:
                     logger.warning("archive_closed_cases: estado 'closed' no encontrado")
                     return
 
+                case_filters = [
+                    CaseModel.status_id == closed_status.id,
+                    CaseModel.is_archived.is_(False),
+                    CaseModel.closed_at.isnot(None),
+                    CaseModel.closed_at <= cutoff,
+                ]
+                if tenant_id:
+                    case_filters.append(CaseModel.tenant_id == tenant_id)
                 cases_result = await self.db.execute(
-                    select(CaseModel).where(
-                        and_(
-                            CaseModel.status_id == closed_status.id,
-                            CaseModel.is_archived.is_(False),
-                            CaseModel.closed_at.isnot(None),
-                            CaseModel.closed_at <= cutoff,
-                        )
-                    )
+                    select(CaseModel).where(and_(*case_filters))
                 )
                 cases = cases_result.scalars().all()
 
                 now = datetime.now(timezone.utc)
+                archived_by = actor_id if actor_id and actor_id != "system" else None
                 for case in cases:
                     case.is_archived = True
                     case.archived_at = now
-                    case.archived_by = actor_id or None
+                    case.archived_by = archived_by
 
                 logger.info(
                     "archive_closed_cases: %d caso(s) archivados (cutoff: %s)",
