@@ -204,12 +204,14 @@ function ActionRow({
   onChange,
   onRemove,
   priorities,
+  statuses,
   users,
 }: {
   action: Action;
   onChange: (a: Action) => void;
   onRemove: () => void;
   priorities: { id: string; name: string }[];
+  statuses: { id: string; name: string }[];
   users: { id: string; full_name: string }[];
 }) {
   function setParam(key: string, value: string) {
@@ -569,6 +571,7 @@ function RuleEditor({
               onChange={(a) => updateAction(i, a)}
               onRemove={() => removeAction(i)}
               priorities={priorities}
+              statuses={statuses}
               users={users}
             />
           ))}
