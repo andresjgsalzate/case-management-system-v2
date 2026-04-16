@@ -49,6 +49,11 @@ const EVENT_LABELS: Record<string, string> = {
   "case.priority_changed": "Prioridad cambiada",
   "sla.breached":          "SLA incumplido",
   "schedule.daily":        "Programado (diario)",
+  "case.closed":           "Caso cerrado",
+  "resolution.responded":  "Solicitante respondió",
+  "todo.completed":        "Tarea completada",
+  "attachment.uploaded":   "Archivo adjunto",
+  "note.created":          "Nota agregada",
 };
 
 const CONDITION_FIELDS: Record<string, { label: string; valueType: "priority" | "status" | "text" }> = {
@@ -66,6 +71,9 @@ const ACTION_TYPES: Record<string, string> = {
   change_priority:      "Cambiar prioridad",
   assign_agent:         "Asignar a agente",
   archive_closed_cases: "Archivar casos cerrados",
+  change_status:        "Cambiar estado",
+  create_todo:          "Crear tarea",
+  escalate_priority:    "Escalar prioridad",
 };
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -218,7 +226,9 @@ function ActionRow({
           onChange={(e) => {
             const type = e.target.value;
             const defaultParams: Record<string, string> =
-              type === "archive_closed_cases" ? { days_after_close: "30" } : {};
+              type === "archive_closed_cases" ? { days_after_close: "30" }
+              : type === "create_todo"        ? { title: "" }
+              : {};
             onChange({ action_type: type, params: defaultParams });
           }}
         >
@@ -315,6 +325,54 @@ function ActionRow({
             onChange={(e) => setParam("days_after_close", e.target.value)}
           />
         </div>
+      )}
+
+      {/* Params for change_status */}
+      {action.action_type === "change_status" && (
+        <div className="pl-1">
+          <label className="text-xs text-muted-foreground">Estado destino</label>
+          <select
+            className="mt-1 w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+            value={action.params.target_status_id ?? ""}
+            onChange={(e) => setParam("target_status_id", e.target.value)}
+          >
+            <option value="">— seleccionar estado —</option>
+            {statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+      )}
+
+      {/* Params for create_todo */}
+      {action.action_type === "create_todo" && (
+        <div className="flex flex-col gap-2 pl-1">
+          <div>
+            <label className="text-xs text-muted-foreground">Título de la tarea</label>
+            <input
+              className="mt-1 w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              placeholder="Ej: Verificar documentación"
+              value={action.params.title ?? ""}
+              onChange={(e) => setParam("title", e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Asignar a (opcional)</label>
+            <select
+              className="mt-1 w-full px-2 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              value={action.params.assigned_to_id ?? ""}
+              onChange={(e) => setParam("assigned_to_id", e.target.value)}
+            >
+              <option value="">— sin asignar —</option>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* Params for escalate_priority */}
+      {action.action_type === "escalate_priority" && (
+        <p className="pl-1 text-xs text-muted-foreground">
+          Sube la prioridad del caso un nivel. Si ya está en el nivel más alto, no hace nada.
+        </p>
       )}
     </div>
   );
