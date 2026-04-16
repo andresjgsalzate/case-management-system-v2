@@ -48,6 +48,7 @@ const EVENT_LABELS: Record<string, string> = {
   "case.assigned":         "Caso asignado",
   "case.priority_changed": "Prioridad cambiada",
   "sla.breached":          "SLA incumplido",
+  "schedule.daily":        "Programado (diario)",
 };
 
 const CONDITION_FIELDS: Record<string, { label: string; valueType: "priority" | "status" | "text" }> = {
@@ -61,9 +62,10 @@ const OPERATORS: Record<string, string> = {
 };
 
 const ACTION_TYPES: Record<string, string> = {
-  send_notification: "Enviar notificación",
-  change_priority:   "Cambiar prioridad",
-  assign_agent:      "Asignar a agente",
+  send_notification:    "Enviar notificación",
+  change_priority:      "Cambiar prioridad",
+  assign_agent:         "Asignar a agente",
+  archive_closed_cases: "Archivar casos cerrados",
 };
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -294,6 +296,21 @@ function ActionRow({
           </select>
         </div>
       )}
+
+      {/* Params for archive_closed_cases */}
+      {action.action_type === "archive_closed_cases" && (
+        <div className="pl-1">
+          <label className="text-xs text-muted-foreground">Días desde el cierre</label>
+          <input
+            type="number"
+            min={1}
+            max={365}
+            className="mt-1 w-32 px-2 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+            value={action.params.days_after_close ?? "30"}
+            onChange={(e) => setParam("days_after_close", e.target.value)}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -425,48 +442,50 @@ function RuleEditor({
       </section>
 
       {/* ── Condiciones ── */}
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Condiciones</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Si no hay condiciones, la regla se activa en todos los casos del evento.
-            </p>
+      {form.trigger_event !== "schedule.daily" && (
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Condiciones</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Si no hay condiciones, la regla se activa en todos los casos del evento.
+              </p>
+            </div>
+            {form.conditions.length > 1 && (
+              <select
+                className="px-2 py-1 text-xs rounded-md border border-border bg-background focus:outline-none"
+                value={form.condition_logic}
+                onChange={(e) => setForm((f) => ({ ...f, condition_logic: e.target.value as "AND" | "OR" }))}
+              >
+                <option value="AND">Todas deben cumplirse (AND)</option>
+                <option value="OR">Alguna debe cumplirse (OR)</option>
+              </select>
+            )}
           </div>
-          {form.conditions.length > 1 && (
-            <select
-              className="px-2 py-1 text-xs rounded-md border border-border bg-background focus:outline-none"
-              value={form.condition_logic}
-              onChange={(e) => setForm((f) => ({ ...f, condition_logic: e.target.value as "AND" | "OR" }))}
-            >
-              <option value="AND">Todas deben cumplirse (AND)</option>
-              <option value="OR">Alguna debe cumplirse (OR)</option>
-            </select>
-          )}
-        </div>
 
-        <div className="flex flex-col gap-2">
-          {form.conditions.map((cond, i) => (
-            <ConditionRow
-              key={i}
-              cond={cond}
-              onChange={(c) => updateCondition(i, c)}
-              onRemove={() => removeCondition(i)}
-              priorities={priorities}
-              statuses={statuses}
-            />
-          ))}
-        </div>
+          <div className="flex flex-col gap-2">
+            {form.conditions.map((cond, i) => (
+              <ConditionRow
+                key={i}
+                cond={cond}
+                onChange={(c) => updateCondition(i, c)}
+                onRemove={() => removeCondition(i)}
+                priorities={priorities}
+                statuses={statuses}
+              />
+            ))}
+          </div>
 
-        <button
-          type="button"
-          onClick={addCondition}
-          className="self-start flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-dashed border-border hover:border-primary/50 text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Agregar condición
-        </button>
-      </section>
+          <button
+            type="button"
+            onClick={addCondition}
+            className="self-start flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-dashed border-border hover:border-primary/50 text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Agregar condición
+          </button>
+        </section>
+      )}
 
       {/* ── Acciones ── */}
       <section className="flex flex-col gap-3">
