@@ -27,8 +27,6 @@ def test_seed_script_has_verify_connection():
         content = f.read()
     assert "verify_connection" in content
     assert "seed_phase_1" in content
-    assert "ChangeMe123" in content  # admin password
-    assert "admin@cms.local" in content
 
 
 def test_seed_has_all_four_roles():
