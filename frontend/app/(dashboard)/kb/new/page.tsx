@@ -1,33 +1,39 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
 import { FormField } from "@/components/molecules/FormField";
+import { KBEditor } from "@/components/organisms/KBEditor";
 import { useCreateKBArticle } from "@/hooks/useKB";
+import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 
 export default function NewKBArticlePage() {
+  usePermissionGuard("knowledge_base", "create");
   const router = useRouter();
   const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
+  const [editorValue, setEditorValue] = useState<{
+    content_json: Record<string, unknown>;
+    content_text: string;
+  } | null>(null);
   const [error, setError] = useState("");
   const createArticle = useCreateKBArticle();
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) { setError("El título es obligatorio"); return; }
-    if (!content.trim()) { setError("El contenido no puede estar vacío"); return; }
+    if (!editorValue?.content_text?.trim()) { setError("El contenido no puede estar vacío"); return; }
 
     try {
       const article = await createArticle.mutateAsync({
         title: title.trim(),
-        content_json: { type: "doc", content: [{ type: "paragraph", text: content }] },
-        content_text: content.trim(),
+        content_json: editorValue.content_json,
+        content_text: editorValue.content_text,
       });
-      router.push(`/kb/${article.id}`);
+      router.push(`/kb/${article!.id}`);
     } catch {
       setError("Error al crear el artículo.");
     }
@@ -61,21 +67,18 @@ export default function NewKBArticlePage() {
           </FormField>
 
           <FormField label="Contenido" htmlFor="kb-content" required>
-            <textarea
-              id="kb-content"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="Escribe el contenido del artículo…"
-              rows={12}
-              className="flex w-full rounded-md border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
-            />
+            <KBEditor onChange={setEditorValue} />
           </FormField>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 
           <div className="flex gap-3">
-            <Button type="submit" loading={createArticle.isPending}>Crear borrador</Button>
-            <Button type="button" variant="outline" onClick={() => router.back()}>Cancelar</Button>
+            <Button type="submit" loading={createArticle.isPending}>
+              Crear borrador
+            </Button>
+            <Button type="button" variant="outline" onClick={() => router.back()}>
+              Cancelar
+            </Button>
           </div>
         </form>
       </div>
