@@ -1,14 +1,22 @@
 // ─── Core entities ────────────────────────────────────────────────────────────
 
+export interface UserPermission {
+  module: string;
+  action: string;
+  scope: string;
+}
+
 export interface User {
   id: string;
   email: string;
   full_name: string;
   role_id?: string;
+  role_name?: string;
   team_id?: string;
   is_active: boolean;
   avatar_url?: string;
   email_notifications: boolean;
+  permissions?: UserPermission[];
   created_at: string;
   updated_at: string;
 }
@@ -32,9 +40,12 @@ export interface Team {
 export interface CaseStatus {
   id: string;
   name: string;
+  slug: string;
   color?: string;
-  is_closed: boolean;
-  sort_order: number;
+  is_initial?: boolean;
+  is_final?: boolean;
+  sort_order?: number;
+  allowed_transitions: string[];
 }
 
 export interface CasePriority {
@@ -71,10 +82,14 @@ export interface Case {
   origin_id?: string;
   origin_name?: string;
   assigned_to?: string;
+  assigned_user_name?: string | null;
   team_id?: string;
   created_by: string;
+  solution_description?: string | null;
   is_archived: boolean;
-  closed_at?: string;
+  archived_at?: string | null;
+  archived_by?: string | null;
+  closed_at?: string | null;
   created_at: string;
   updated_at: string;
   // Enriched optional fields (populated by some endpoints)
@@ -125,6 +140,15 @@ export interface KBArticle {
   created_at: string;
   updated_at: string;
   tags?: KBTag[];
+}
+
+export interface KBArticleVersion {
+  id: string;
+  version_number: number;
+  title: string;
+  content_text: string;
+  saved_by_id: string;
+  created_at: string;
 }
 
 // ─── Notifications ────────────────────────────────────────────────────────────
