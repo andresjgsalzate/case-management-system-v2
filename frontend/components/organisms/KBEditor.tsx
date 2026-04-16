@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useCreateBlockNote, BlockNoteViewRaw } from "@blocknote/react";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/react/style.css";
@@ -16,24 +16,33 @@ interface KBEditorProps {
 }
 
 export function KBEditor({ initialContent, readOnly = false, onChange }: KBEditorProps) {
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  });
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const initialBlocks = useMemo(() => {
     const blocks = initialContent?.blocks;
     if (!blocks || !Array.isArray(blocks) || blocks.length === 0) return undefined;
-    return blocks as PartialBlock[];
+    const validBlocks = (blocks as unknown[]).filter(
+      (b): b is PartialBlock =>
+        typeof b === "object" && b !== null && typeof (b as Record<string, unknown>).type === "string"
+    );
+    return validBlocks.length > 0 ? validBlocks : undefined;
   }, []); // Solo en mount — el editor es uncontrolled
 
   const editor = useCreateBlockNote({ initialContent: initialBlocks });
 
   useEffect(() => {
-    if (readOnly || !onChange) return;
-    const unsubscribe = editor.onChange(async () => {
+    if (readOnly || !onChangeRef.current) return;
+    const unsubscribe = editor.onChange(async (editor) => {
       const blocks = editor.document;
       const text = await editor.blocksToMarkdownLossy(blocks);
-      onChange({ content_json: { blocks }, content_text: text });
+      onChangeRef.current?.({ content_json: { blocks }, content_text: text });
     });
     return () => unsubscribe();
-  }, [editor, onChange, readOnly]);
+  }, [editor, readOnly]);
 
   return (
     <div className="rounded-md border border-border bg-background min-h-[300px] overflow-hidden">
