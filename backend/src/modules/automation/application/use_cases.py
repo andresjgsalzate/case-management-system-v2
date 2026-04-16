@@ -182,6 +182,7 @@ class AutomationUseCases:
                         and_(
                             CaseModel.status_id == closed_status.id,
                             CaseModel.is_archived.is_(False),
+                            CaseModel.closed_at.isnot(None),
                             CaseModel.closed_at <= cutoff,
                         )
                     )
@@ -192,7 +193,7 @@ class AutomationUseCases:
                 for case in cases:
                     case.is_archived = True
                     case.archived_at = now
-                    case.archived_by = actor_id
+                    case.archived_by = actor_id or None
 
                 logger.info(
                     "archive_closed_cases: %d caso(s) archivados (cutoff: %s)",
