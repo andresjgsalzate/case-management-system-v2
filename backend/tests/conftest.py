@@ -1,6 +1,6 @@
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import os
 
 from httpx import AsyncClient, ASGITransport
@@ -15,6 +15,28 @@ def set_test_env():
     }
     with patch.dict(os.environ, env, clear=False):
         yield
+
+
+def _make_mock_db():
+    """Returns an async generator that yields a mock AsyncSession.
+
+    The mock session returns None for all scalar_one_or_none() calls,
+    simulating an empty database — sufficient for testing error paths
+    (e.g. login with unknown user → 401) without a live DB connection.
+    """
+    async def _override():
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_result.scalars.return_value.all.return_value = []
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+        mock_session.get.return_value = None
+        mock_session.commit = AsyncMock()
+        mock_session.rollback = AsyncMock()
+        yield mock_session
+
+    return _override
 
 
 @pytest_asyncio.fixture
@@ -32,6 +54,11 @@ async def client():
         config_module.get_settings.cache_clear()
 
         test_app = create_app()
+
+        # Override the get_db dependency so no real DB connection is made
+        from backend.src.core.database import get_db
+        test_app.dependency_overrides[get_db] = _make_mock_db()
+
         async with AsyncClient(
             transport=ASGITransport(app=test_app), base_url="http://test"
         ) as ac:
