@@ -238,7 +238,12 @@ class AutomationUseCases:
                     return
                 created_by = actor_id if (actor_id and actor_id != "system") else None
                 if not created_by:
-                    logger.warning("create_todo: actor_id '%s' no es válido para FK", actor_id)
+                    # Para reglas disparadas por el sistema, usar el creador del caso como fallback
+                    from backend.src.modules.cases.infrastructure.models import CaseModel as _CaseModel
+                    case_rec = await self.db.get(_CaseModel, case_id)
+                    created_by = case_rec.created_by if case_rec else None
+                if not created_by:
+                    logger.warning("create_todo: no se pudo determinar created_by_id para caso %s", case_id)
                     return
                 import uuid as _uuid
                 from backend.src.modules.todos.infrastructure.models import CaseTodoModel

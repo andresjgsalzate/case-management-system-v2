@@ -134,6 +134,7 @@ class CaseUseCases:
         assigned_to = case.assigned_to
         old_priority_id = case.priority_id
         updated_fields = dto.model_dump(exclude_none=True)
+        new_priority_id = updated_fields.get("priority_id")
         for field, value in updated_fields.items():
             setattr(case, field, value)
         await self.db.commit()
@@ -152,7 +153,7 @@ class CaseUseCases:
                 },
             )
         )
-        if "priority_id" in updated_fields and case.priority_id != old_priority_id:
+        if new_priority_id is not None and new_priority_id != old_priority_id:
             await event_bus.publish(
                 BaseEvent(
                     event_name="case.priority_changed",
@@ -161,7 +162,7 @@ class CaseUseCases:
                     payload={
                         "case_id": case_id,
                         "from_priority_id": old_priority_id,
-                        "to_priority_id": case.priority_id,
+                        "to_priority_id": new_priority_id,
                     },
                 )
             )
