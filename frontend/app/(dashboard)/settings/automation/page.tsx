@@ -215,7 +215,12 @@ function ActionRow({
         <select
           className="flex-1 px-2 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
           value={action.action_type}
-          onChange={(e) => onChange({ action_type: e.target.value, params: {} })}
+          onChange={(e) => {
+            const type = e.target.value;
+            const defaultParams: Record<string, string> =
+              type === "archive_closed_cases" ? { days_after_close: "30" } : {};
+            onChange({ action_type: type, params: defaultParams });
+          }}
         >
           <option value="">— tipo de acción —</option>
           {Object.entries(ACTION_TYPES).map(([val, label]) => (
