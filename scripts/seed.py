@@ -124,6 +124,7 @@ ROLES_SEED = [
             {"module": "teams",          "action": "manage",    "scope": "all"},
             {"module": "audit",          "action": "read",      "scope": "all"},
             {"module": "knowledge_base", "action": "read",      "scope": "all"},
+            {"module": "knowledge_base", "action": "create",    "scope": "all"},
             {"module": "knowledge_base", "action": "manage",    "scope": "all"},
             {"module": "dispositions",   "action": "read",      "scope": "all"},
             {"module": "dispositions",   "action": "manage",    "scope": "all"},
@@ -131,6 +132,16 @@ ROLES_SEED = [
             {"module": "notes",          "action": "read",      "scope": "all"},
             {"module": "search",         "action": "read",      "scope": "all"},
             {"module": "classification", "action": "read",      "scope": "all"},
+        ],
+    },
+    {
+        "name": "Reporter",
+        "description": "Usuario que reporta y hace seguimiento de sus propios casos",
+        "permissions": [
+            {"module": "cases",         "action": "create",     "scope": "own"},
+            {"module": "cases",         "action": "read",       "scope": "own"},
+            {"module": "cases",         "action": "transition", "scope": "own"},
+            {"module": "notifications", "action": "read",       "scope": "own"},
         ],
     },
     {
@@ -151,6 +162,7 @@ ROLES_SEED = [
             {"module": "time_entries",   "action": "create",    "scope": "own"},
             {"module": "time_entries",   "action": "read",      "scope": "own"},
             {"module": "knowledge_base", "action": "read",      "scope": "all"},
+            {"module": "knowledge_base", "action": "create",    "scope": "all"},
             {"module": "notifications",  "action": "read",      "scope": "own"},
             {"module": "attachments",    "action": "create",    "scope": "own"},
             {"module": "attachments",    "action": "read",      "scope": "team"},
@@ -160,6 +172,8 @@ ROLES_SEED = [
             {"module": "classification", "action": "create",    "scope": "own"},
             {"module": "dispositions",   "action": "read",      "scope": "all"},
             {"module": "dispositions",   "action": "create",    "scope": "own"},
+            {"module": "cases",          "action": "archive",   "scope": "own"},
+            {"module": "sla",            "action": "read",      "scope": "own"},
         ],
     },
 ]
@@ -188,6 +202,7 @@ ROLE_PERMISSION_ADDITIONS = {
         {"module": "cases",          "action": "update",     "scope": "all"},
         {"module": "cases",          "action": "transition", "scope": "all"},
         {"module": "users",          "action": "read",       "scope": "all"},
+        {"module": "knowledge_base", "action": "create",     "scope": "all"},
         {"module": "knowledge_base", "action": "manage",     "scope": "all"},
         {"module": "dispositions",   "action": "manage",     "scope": "all"},
         {"module": "search",         "action": "read",       "scope": "all"},
@@ -199,6 +214,7 @@ ROLE_PERMISSION_ADDITIONS = {
         {"module": "time_entries",   "action": "create",  "scope": "own"},
         {"module": "time_entries",   "action": "read",    "scope": "own"},
         {"module": "knowledge_base", "action": "read",    "scope": "all"},
+        {"module": "knowledge_base", "action": "create",  "scope": "all"},
         {"module": "notes",          "action": "delete",  "scope": "own"},
         {"module": "attachments",    "action": "delete",  "scope": "own"},
         {"module": "search",         "action": "read",    "scope": "all"},
@@ -206,6 +222,8 @@ ROLE_PERMISSION_ADDITIONS = {
         {"module": "classification", "action": "create",  "scope": "own"},
         {"module": "dispositions",   "action": "read",    "scope": "all"},
         {"module": "dispositions",   "action": "create",  "scope": "own"},
+        {"module": "cases",          "action": "archive", "scope": "own"},
+        {"module": "sla",            "action": "read",    "scope": "own"},
     ],
 }
 
@@ -340,9 +358,9 @@ async def seed_phase_1(session) -> None:
 
 
 STATUSES_SEED = [
-    {"name": "Abierto",     "slug": "open",        "color": "#3B82F6", "order": 1, "is_initial": True,  "is_final": False, "pauses_sla": False, "transitions": ["in_progress", "closed"]},
+    {"name": "Abierto",     "slug": "open",        "color": "#3B82F6", "order": 1, "is_initial": True,  "is_final": False, "pauses_sla": False, "transitions": ["in_progress"]},
     {"name": "En Progreso", "slug": "in_progress",  "color": "#F59E0B", "order": 2, "is_initial": False, "is_final": False, "pauses_sla": False, "transitions": ["pending", "resolved", "open"]},
-    {"name": "Pendiente",   "slug": "pending",      "color": "#8B5CF6", "order": 3, "is_initial": False, "is_final": False, "pauses_sla": True,  "transitions": ["in_progress", "closed"]},
+    {"name": "Pendiente",   "slug": "pending",      "color": "#8B5CF6", "order": 3, "is_initial": False, "is_final": False, "pauses_sla": True,  "transitions": ["in_progress", "open"]},
     {"name": "Resuelto",    "slug": "resolved",     "color": "#10B981", "order": 4, "is_initial": False, "is_final": False, "pauses_sla": True,  "transitions": ["closed", "open"]},
     {"name": "Cerrado",     "slug": "closed",       "color": "#6B7280", "order": 5, "is_initial": False, "is_final": True,  "pauses_sla": False, "transitions": []},
 ]
