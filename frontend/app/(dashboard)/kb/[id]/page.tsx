@@ -170,7 +170,7 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
           </div>
         </div>
 
-        {actionError && (
+        {actionError && !showRejectModal && (
           <p className="text-sm text-destructive">{actionError}</p>
         )}
 
@@ -282,7 +282,7 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
             <div className="flex gap-3 justify-end">
               <Button
                 variant="outline"
-                onClick={() => { setShowRejectModal(false); setRejectComment(""); }}
+                onClick={() => { setShowRejectModal(false); setRejectComment(""); setActionError(""); }}
               >
                 Cancelar
               </Button>
