@@ -20,6 +20,7 @@ from backend.src.modules.case_priorities.router import router as case_priorities
 from backend.src.modules.cases.router import router as cases_router
 from backend.src.modules.cases.number_sequence_router import router as number_sequence_router
 from backend.src.modules.activity.router import router as activity_router
+from backend.src.modules.resolution.router import router as resolution_router
 from backend.src.modules.applications.router import router as applications_router
 from backend.src.modules.origins.router import router as origins_router
 from backend.src.modules.classification.router import router as classification_router
@@ -48,10 +49,14 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     from backend.src.modules.sla.application.jobs import start_sla_scheduler
     start_sla_scheduler(interval_minutes=settings.SLA_CHECK_INTERVAL_MINUTES)
+    from backend.src.modules.automation.application.jobs import start_scheduled_automations
+    start_scheduled_automations(interval_hours=24)
     yield
     # Shutdown
     from backend.src.modules.sla.application.jobs import stop_sla_scheduler
     stop_sla_scheduler()
+    from backend.src.modules.automation.application.jobs import stop_scheduled_automations
+    stop_scheduled_automations()
     await close_redis()
     await engine.dispose()
 
@@ -110,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(cases_router)
     app.include_router(number_sequence_router)
     app.include_router(activity_router)
+    app.include_router(resolution_router)
     app.include_router(applications_router)
     app.include_router(origins_router)
     app.include_router(classification_router)
