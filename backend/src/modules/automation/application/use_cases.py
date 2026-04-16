@@ -205,5 +205,85 @@ class AutomationUseCases:
                     len(cases),
                     cutoff.date(),
                 )
+            case "change_status":
+                if not case_id:
+                    logger.warning("change_status: no hay case_id en el contexto")
+                    return
+                target_status_id = action.params.get("target_status_id")
+                if not target_status_id:
+                    logger.warning("change_status: target_status_id no configurado")
+                    return
+                from backend.src.modules.cases.infrastructure.models import CaseModel
+                from backend.src.modules.case_statuses.infrastructure.models import CaseStatusModel
+                target_status = await self.db.get(CaseStatusModel, target_status_id)
+                if not target_status:
+                    logger.warning("change_status: estado %s no encontrado", target_status_id)
+                    return
+                case_obj = await self.db.get(CaseModel, case_id)
+                if not case_obj:
+                    logger.warning("change_status: caso %s no encontrado", case_id)
+                    return
+                case_obj.status_id = target_status_id
+                if target_status.is_final and not case_obj.closed_at:
+                    case_obj.closed_at = datetime.now(timezone.utc)
+                logger.info("change_status: caso %s → estado %s", case_id, target_status.name)
+
+            case "create_todo":
+                if not case_id:
+                    logger.warning("create_todo: no hay case_id en el contexto")
+                    return
+                title = action.params.get("title", "").strip()
+                if not title:
+                    logger.warning("create_todo: título vacío")
+                    return
+                created_by = actor_id if (actor_id and actor_id != "system") else None
+                if not created_by:
+                    logger.warning("create_todo: actor_id '%s' no es válido para FK", actor_id)
+                    return
+                import uuid as _uuid
+                from backend.src.modules.todos.infrastructure.models import CaseTodoModel
+                assigned_to = action.params.get("assigned_to_id") or None
+                todo = CaseTodoModel(
+                    id=str(_uuid.uuid4()),
+                    case_id=case_id,
+                    created_by_id=created_by,
+                    assigned_to_id=assigned_to,
+                    tenant_id=context.get("tenant_id"),
+                    title=title,
+                )
+                self.db.add(todo)
+                logger.info("create_todo: tarea '%s' creada en caso %s", title, case_id)
+
+            case "escalate_priority":
+                if not case_id:
+                    logger.warning("escalate_priority: no hay case_id en el contexto")
+                    return
+                from sqlalchemy import asc
+                from backend.src.modules.cases.infrastructure.models import CaseModel
+                from backend.src.modules.case_priorities.infrastructure.models import CasePriorityModel
+                case_obj = await self.db.get(CaseModel, case_id)
+                if not case_obj or not case_obj.priority_id:
+                    logger.warning("escalate_priority: caso %s no encontrado o sin prioridad", case_id)
+                    return
+                current_priority = await self.db.get(CasePriorityModel, case_obj.priority_id)
+                if not current_priority:
+                    return
+                result = await self.db.execute(
+                    select(CasePriorityModel).where(
+                        CasePriorityModel.is_active.is_(True),
+                        CasePriorityModel.level > current_priority.level,
+                        CasePriorityModel.tenant_id == case_obj.tenant_id,
+                    ).order_by(asc(CasePriorityModel.level)).limit(1)
+                )
+                next_priority = result.scalar_one_or_none()
+                if not next_priority:
+                    logger.info("escalate_priority: caso %s ya tiene la prioridad más alta", case_id)
+                    return
+                case_obj.priority_id = next_priority.id
+                logger.info(
+                    "escalate_priority: caso %s nivel %d → %d",
+                    case_id, current_priority.level, next_priority.level,
+                )
+
             case _:
                 logger.warning("Tipo de acción no implementada: %s", action.action_type)
