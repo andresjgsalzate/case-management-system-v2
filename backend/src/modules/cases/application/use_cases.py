@@ -20,7 +20,7 @@ from backend.src.modules.cases.application.dtos import (
     TransitionCaseDTO,
     CaseResponseDTO,
 )
-from backend.src.core.exceptions import NotFoundError, ValidationError
+from backend.src.core.exceptions import NotFoundError, ValidationError, ForbiddenError
 from backend.src.core.events.bus import event_bus
 from backend.src.core.events.base import BaseEvent
 
@@ -72,6 +72,7 @@ class CaseUseCases:
                 selectinload(CaseModel.priority),
                 selectinload(CaseModel.application),
                 selectinload(CaseModel.origin),
+                selectinload(CaseModel.assigned_user),
             )
             .where(CaseModel.id == case_id)
         )
@@ -96,6 +97,7 @@ class CaseUseCases:
                 selectinload(CaseModel.priority),
                 selectinload(CaseModel.application),
                 selectinload(CaseModel.origin),
+                selectinload(CaseModel.assigned_user),
             )
             .where(CaseModel.tenant_id == tenant_id, CaseModel.is_archived == False)
         )
@@ -130,7 +132,9 @@ class CaseUseCases:
         if not case:
             raise NotFoundError(f"Case {case_id} not found")
         assigned_to = case.assigned_to
-        for field, value in dto.model_dump(exclude_none=True).items():
+        old_priority_id = case.priority_id
+        updated_fields = dto.model_dump(exclude_none=True)
+        for field, value in updated_fields.items():
             setattr(case, field, value)
         await self.db.commit()
         actor = await self.db.get(UserModel, actor_id)
@@ -148,11 +152,29 @@ class CaseUseCases:
                 },
             )
         )
+        if "priority_id" in updated_fields and case.priority_id != old_priority_id:
+            await event_bus.publish(
+                BaseEvent(
+                    event_name="case.priority_changed",
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    payload={
+                        "case_id": case_id,
+                        "from_priority_id": old_priority_id,
+                        "to_priority_id": case.priority_id,
+                    },
+                )
+            )
         return await self.get_case(case_id)
 
     async def transition_case(
         self, case_id: str, dto: TransitionCaseDTO, actor_id: str, tenant_id: str
     ) -> CaseResponseDTO:
+        from backend.src.modules.users.infrastructure.models import UserModel
+        from backend.src.modules.assignment.infrastructure.models import CaseAssignmentModel
+        from backend.src.modules.notes.infrastructure.models import CaseNoteModel
+        from backend.src.modules.chat.infrastructure.models import ChatMessageModel
+
         result = await self.db.execute(
             select(CaseModel)
             .options(selectinload(CaseModel.status))
@@ -174,11 +196,87 @@ class CaseUseCases:
             case.solution_description = dto.solution_description.strip()
 
         old_status_name = case.status.name
+        old_status_id = case.status_id  # guardar antes de sobrescribir
         case.status_id = dto.target_status_id
         if target_status.is_final:
             case.closed_at = datetime.now(timezone.utc)
 
         await self.db.commit()
+
+        # Al marcar como resuelto: auto-crear solicitud de confirmación al reportador
+        if target_status.slug == "resolved":
+            import json as _json
+            from backend.src.modules.resolution.infrastructure.models import CaseResolutionRequestModel
+
+            actor_user = await self.db.get(UserModel, actor_id)
+            actor_name = actor_user.full_name if actor_user else "Agente"
+
+            reporter_user = await self.db.get(UserModel, case.created_by)
+            reporter_name = reporter_user.full_name if reporter_user else "Solicitante"
+
+            request_id = str(uuid.uuid4())
+            chat_msg_id = str(uuid.uuid4())
+
+            # Nota de auditoría
+            self.db.add(CaseNoteModel(
+                id=str(uuid.uuid4()),
+                case_id=case_id,
+                user_id=actor_id,
+                tenant_id=tenant_id,
+                content=f"Caso marcado como Resuelto por {actor_name}. Se envió solicitud de confirmación a {reporter_name}.",
+            ))
+
+            # Mensaje de chat tipo resolution_request
+            self.db.add(ChatMessageModel(
+                id=chat_msg_id,
+                case_id=case_id,
+                user_id=actor_id,
+                tenant_id=tenant_id,
+                content_type="resolution_request",
+                content=_json.dumps({
+                    "request_id": request_id,
+                    "requested_by_name": actor_name,
+                    "status": "pending",
+                    "rating": None,
+                    "observation": None,
+                    "responded_by_name": None,
+                    "responded_at": None,
+                }, ensure_ascii=False),
+            ))
+
+            # Registro en la tabla de resoluciones
+            self.db.add(CaseResolutionRequestModel(
+                id=request_id,
+                case_id=case_id,
+                tenant_id=tenant_id,
+                chat_message_id=chat_msg_id,
+                requested_by=actor_id,
+                requested_at=datetime.now(timezone.utc),
+                status="pending",
+                previous_status_id=old_status_id,
+            ))
+
+            await self.db.commit()
+
+            from backend.src.core.websocket_manager import manager as _ws_manager
+            await _ws_manager.broadcast(
+                case_id=case_id,
+                message={"type": "new_message", "data": {"id": chat_msg_id}},
+            )
+
+            await event_bus.publish(
+                BaseEvent(
+                    event_name="resolution.requested",
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    payload={
+                        "case_id": case_id,
+                        "request_id": request_id,
+                        "requested_by_name": actor_name,
+                        "reporter_name": reporter_name,
+                    },
+                )
+            )
 
         await event_bus.publish(
             BaseEvent(
@@ -237,6 +335,49 @@ class CaseUseCases:
             )
         return output.getvalue()
 
+    async def list_archived(
+        self,
+        tenant_id: str | None,
+        actor_id: str,
+        scope: str,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[CaseResponseDTO], int]:
+        query = (
+            select(CaseModel)
+            .options(
+                selectinload(CaseModel.status),
+                selectinload(CaseModel.priority),
+                selectinload(CaseModel.application),
+                selectinload(CaseModel.origin),
+                selectinload(CaseModel.assigned_user),
+            )
+            .where(CaseModel.tenant_id == tenant_id, CaseModel.is_archived == True)
+        )
+
+        if scope == "own":
+            query = query.where(CaseModel.created_by == actor_id)
+        if search:
+            like = f"%{search}%"
+            from sqlalchemy import or_
+            query = query.where(
+                or_(
+                    CaseModel.title.ilike(like),
+                    CaseModel.case_number.ilike(like),
+                )
+            )
+        count_result = await self.db.execute(
+            select(func.count()).select_from(query.subquery())
+        )
+        total = count_result.scalar()
+        result = await self.db.execute(
+            query.offset((page - 1) * page_size)
+            .limit(page_size)
+            .order_by(CaseModel.archived_at.desc())
+        )
+        return [self._to_dto(c) for c in result.scalars().all()], total
+
     def _to_dto(self, model: CaseModel) -> CaseResponseDTO:
         return CaseResponseDTO(
             id=model.id,
@@ -257,9 +398,12 @@ class CaseUseCases:
             origin_name=model.origin.name if model.origin else None,
             created_by=model.created_by,
             assigned_to=model.assigned_to,
+            assigned_user_name=model.assigned_user.full_name if model.assigned_user else None,
             team_id=model.team_id,
             solution_description=model.solution_description,
             is_archived=model.is_archived,
+            archived_at=model.archived_at.isoformat() if model.archived_at else None,
+            archived_by=model.archived_by,
             closed_at=model.closed_at.isoformat() if model.closed_at else None,
             created_at=model.created_at.isoformat(),
             updated_at=model.updated_at.isoformat(),
