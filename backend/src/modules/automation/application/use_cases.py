@@ -1,6 +1,7 @@
 import logging
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.src.core.events.base import BaseEvent
@@ -161,5 +162,42 @@ class AutomationUseCases:
                         actor_id=actor_id,
                         payload={"case_id": case_id, "agent_id": action.params.get("agent_id")},
                     ))
+            case "archive_closed_cases":
+                days = int(action.params.get("days_after_close", "30"))
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+                from backend.src.modules.cases.infrastructure.models import CaseModel
+                from backend.src.modules.case_statuses.infrastructure.models import CaseStatusModel
+
+                status_result = await self.db.execute(
+                    select(CaseStatusModel).where(CaseStatusModel.slug == "closed")
+                )
+                closed_status = status_result.scalar_one_or_none()
+                if not closed_status:
+                    logger.warning("archive_closed_cases: estado 'closed' no encontrado")
+                    return
+
+                cases_result = await self.db.execute(
+                    select(CaseModel).where(
+                        and_(
+                            CaseModel.status_id == closed_status.id,
+                            CaseModel.is_archived.is_(False),
+                            CaseModel.closed_at <= cutoff,
+                        )
+                    )
+                )
+                cases = cases_result.scalars().all()
+
+                now = datetime.now(timezone.utc)
+                for case in cases:
+                    case.is_archived = True
+                    case.archived_at = now
+                    case.archived_by = actor_id
+
+                logger.info(
+                    "archive_closed_cases: %d caso(s) archivados (cutoff: %s)",
+                    len(cases),
+                    cutoff.date(),
+                )
             case _:
                 logger.warning("Tipo de acción no implementada: %s", action.action_type)
