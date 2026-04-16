@@ -16,6 +16,11 @@ WATCHED_EVENTS = {
     "case.assigned",
     "case.priority_changed",
     "sla.breached",
+    "case.closed",
+    "resolution.responded",
+    "todo.completed",
+    "attachment.uploaded",
+    "note.created",
 }
 
 
