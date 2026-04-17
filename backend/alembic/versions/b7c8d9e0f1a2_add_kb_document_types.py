@@ -63,8 +63,8 @@ def upgrade() -> None:
             conn.execute(
                 sa.text(
                     "INSERT INTO kb_document_types "
-                    "(id, code, name, icon, color, is_active, sort_order) "
-                    "VALUES (:id, :code, :name, :icon, :color, true, :sort_order)"
+                    "(id, code, name, icon, color, sort_order) "
+                    "VALUES (:id, :code, :name, :icon, :color, :sort_order)"
                 ),
                 {"id": str(uuid.uuid4()), **t},
             )
