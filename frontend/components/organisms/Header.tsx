@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/atoms/Avatar";
 import { NotificationBell } from "@/components/molecules/NotificationBell";
 import { ThemeToggle } from "@/components/molecules/ThemeToggle";
+import { Breadcrumb } from "@/components/molecules/Breadcrumb";
 import { useAuthStore } from "@/store/auth.store";
 
 export function Header() {
@@ -46,8 +47,10 @@ export function Header() {
 
   return (
     <header className="h-14 border-b border-border bg-card flex items-center px-4 gap-4 shrink-0">
-      {/* Spacer */}
-      <div className="flex-1" />
+      {/* Breadcrumb — izquierda, crece para empujar las acciones a la derecha */}
+      <div className="flex-1 min-w-0">
+        <Breadcrumb />
+      </div>
 
       {/* Actions */}
       <div className="flex items-center gap-1">

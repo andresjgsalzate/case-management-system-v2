@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/apiClient";
 import { Spinner } from "@/components/atoms/Spinner";
+import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { Clock, CheckCircle2, AlertTriangle } from "lucide-react";
 import type { DashboardSummary, StatusCount, TrendPoint, ApiResponse } from "@/lib/types";
 
@@ -127,6 +128,7 @@ function BarList({ items }: { items: { label: string; count: number; color: stri
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 export default function MetricsPage() {
+  usePermissionGuard("metrics", "read");
   const { dashboard, byStatus, byPriority, trend, byAgent, byApp, sla, resolution } = useMetrics();
 
   const d           = dashboard.data;

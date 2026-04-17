@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import {
   Tag, Plus, Pencil, Trash2, X, FolderOpen, Check,
   Calendar, Hash, FileText, LayoutGrid, TrendingUp,
@@ -557,6 +558,7 @@ function MonthColumn({
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function DispositionsPage() {
+  usePermissionGuard("dispositions", "read");
   const [search, setSearch] = useState("");
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [showDispositionModal, setShowDispositionModal] = useState(false);

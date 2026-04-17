@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Plus, BookOpen, Eye, ThumbsUp } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
+import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
 import { Spinner } from "@/components/atoms/Spinner";
@@ -20,6 +21,7 @@ const STATUS_TABS: { label: string; value: KBStatus | "" }[] = [
 ];
 
 export default function KBPage() {
+  usePermissionGuard("knowledge_base", "read");
   const [search, setSearch] = useState("");
   const [activeStatus, setActiveStatus] = useState<KBStatus | "">("");
 
