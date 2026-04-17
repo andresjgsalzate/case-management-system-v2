@@ -12,21 +12,39 @@ import {
   ChevronLeft,
   ChevronRight,
   Briefcase,
+  Archive,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/ui.store";
+import { useAuthStore } from "@/store/auth.store";
+import type { UserPermission } from "@/lib/types";
 
-const NAV_ITEMS = [
-  { href: "/metrics",      label: "Dashboard",            icon: LayoutDashboard, color: "text-blue-500" },
-  { href: "/cases",        label: "Casos",                icon: FolderOpen,      color: "text-amber-500" },
-  { href: "/kb",           label: "Base de conocimiento", icon: BookOpen,        color: "text-emerald-500" },
-  { href: "/audit",        label: "Auditoría",            icon: Shield,          color: "text-violet-500" },
-  { href: "/dispositions", label: "Disposiciones",        icon: Tag,             color: "text-cyan-500" },
+interface NavItemDef {
+  href: string;
+  label: string;
+  icon: React.ElementType;
+  color: string;
+  /** If set, only shown when the user has this permission */
+  permission?: { module: string; action: string };
+}
+
+const NAV_ITEMS: NavItemDef[] = [
+  { href: "/metrics",      label: "Dashboard",            icon: LayoutDashboard, color: "text-blue-500",    permission: { module: "metrics",        action: "read" } },
+  { href: "/cases",        label: "Casos",                icon: FolderOpen,      color: "text-amber-500",   permission: { module: "cases",          action: "read" } },
+  { href: "/dispositions", label: "Disposiciones",        icon: Tag,             color: "text-cyan-500",    permission: { module: "dispositions",    action: "read" } },
+  { href: "/kb",           label: "Base de conocimiento", icon: BookOpen,        color: "text-emerald-500", permission: { module: "knowledge_base",  action: "read" } },
+  { href: "/archive",      label: "Archivo",              icon: Archive,         color: "text-slate-500",   permission: { module: "cases",           action: "read" } },
+  { href: "/audit",        label: "Auditoría",            icon: Shield,          color: "text-violet-500",  permission: { module: "audit",           action: "read" } },
 ];
 
-const BOTTOM_ITEMS = [
-  { href: "/settings", label: "Configuración", icon: Settings, color: "text-orange-500" },
+const BOTTOM_ITEMS: NavItemDef[] = [
+  { href: "/settings", label: "Configuración", icon: Settings, color: "text-orange-500", permission: { module: "roles", action: "manage" } },
 ];
+
+function hasPermission(permissions: UserPermission[] | undefined, module: string, action: string): boolean {
+  if (!permissions) return true; // no permissions loaded yet → show all (graceful degradation)
+  return permissions.some((p) => p.module === module && p.action === action);
+}
 
 interface NavItemProps {
   href: string;
@@ -66,6 +84,15 @@ function NavItem({ href, label, icon: Icon, color, collapsed }: NavItemProps) {
 
 export function Sidebar() {
   const { sidebarCollapsed, toggleSidebar } = useUIStore();
+  const { user } = useAuthStore();
+  const permissions = user?.permissions;
+
+  const visibleNavItems = NAV_ITEMS.filter((item) =>
+    !item.permission || hasPermission(permissions, item.permission.module, item.permission.action)
+  );
+  const visibleBottomItems = BOTTOM_ITEMS.filter((item) =>
+    !item.permission || hasPermission(permissions, item.permission.module, item.permission.action)
+  );
 
   return (
     <aside
@@ -98,7 +125,7 @@ export function Sidebar() {
 
       {/* Nav principal */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 flex flex-col gap-0.5">
-        {NAV_ITEMS.map((item) => (
+        {visibleNavItems.map((item) => (
           <NavItem key={item.href} {...item} collapsed={sidebarCollapsed} />
         ))}
       </nav>
@@ -110,7 +137,7 @@ export function Sidebar() {
           "border-t border-[hsl(var(--sidebar-border))]"
         )}
       >
-        {BOTTOM_ITEMS.map((item) => (
+        {visibleBottomItems.map((item) => (
           <NavItem key={item.href} {...item} collapsed={sidebarCollapsed} />
         ))}
 

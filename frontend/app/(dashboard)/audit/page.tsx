@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Shield, X, User, Box, Clock, Wifi, ChevronRight, History } from "lucide-react";
+import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { apiClient } from "@/lib/apiClient";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { Badge } from "@/components/atoms/Badge";
@@ -462,6 +463,7 @@ function DetailModal({ log, onClose }: { log: AuditLog; onClose: () => void }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function AuditPage() {
+  usePermissionGuard("audit", "read");
   const [entityType, setEntityType] = useState("");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<AuditLog | null>(null);
