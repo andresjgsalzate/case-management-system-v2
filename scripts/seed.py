@@ -79,7 +79,7 @@ async def verify_connection() -> bool:
 MODULES = [
     "cases", "users", "teams", "roles", "sla", "knowledge_base", "audit",
     "metrics", "dispositions", "todos", "notes", "time_entries", "classification",
-    "attachments", "notifications", "automation", "search",
+    "attachments", "notifications", "automation", "search", "document_types",
 ]
 
 # Todas las acciones que existen en el sistema
@@ -132,16 +132,18 @@ ROLES_SEED = [
             {"module": "notes",          "action": "read",      "scope": "all"},
             {"module": "search",         "action": "read",      "scope": "all"},
             {"module": "classification", "action": "read",      "scope": "all"},
+            {"module": "document_types","action": "read",      "scope": "all"},
         ],
     },
     {
         "name": "Reporter",
         "description": "Usuario que reporta y hace seguimiento de sus propios casos",
         "permissions": [
-            {"module": "cases",         "action": "create",     "scope": "own"},
-            {"module": "cases",         "action": "read",       "scope": "own"},
-            {"module": "cases",         "action": "transition", "scope": "own"},
-            {"module": "notifications", "action": "read",       "scope": "own"},
+            {"module": "cases",          "action": "create",     "scope": "own"},
+            {"module": "cases",          "action": "read",       "scope": "own"},
+            {"module": "cases",          "action": "transition", "scope": "own"},
+            {"module": "notifications",  "action": "read",       "scope": "own"},
+            {"module": "document_types", "action": "read",       "scope": "all"},
         ],
     },
     {
@@ -174,6 +176,7 @@ ROLES_SEED = [
             {"module": "dispositions",   "action": "create",    "scope": "own"},
             {"module": "cases",          "action": "archive",   "scope": "own"},
             {"module": "sla",            "action": "read",      "scope": "own"},
+            {"module": "document_types", "action": "read",      "scope": "all"},
         ],
     },
 ]
