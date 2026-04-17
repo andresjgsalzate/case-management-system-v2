@@ -20,7 +20,7 @@ async def get_activity(
     result = await db.execute(
         select(ActivityEntryModel)
         .where(ActivityEntryModel.case_id == case_id)
-        .order_by(ActivityEntryModel.created_at.asc())
+        .order_by(ActivityEntryModel.created_at.desc())
     )
     entries = result.scalars().all()
 

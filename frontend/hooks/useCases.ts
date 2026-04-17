@@ -11,6 +11,7 @@ export interface CaseNote {
 }
 
 const CASES_KEY = "cases";
+const ARCHIVED_KEY = "cases-archived";
 
 export function useCases(params?: { status?: string; limit?: number; offset?: number }) {
   return useQuery({
@@ -166,6 +167,34 @@ export function useArchiveCase(caseId: string) {
       await apiClient.post(`/cases/${caseId}/archive`);
     },
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [CASES_KEY] });
+      qc.invalidateQueries({ queryKey: [ARCHIVED_KEY] });
+    },
+  });
+}
+
+export function useArchivedCases(params?: { search?: string; page?: number; page_size?: number }) {
+  return useQuery({
+    queryKey: [ARCHIVED_KEY, params],
+    queryFn: async () => {
+      const { data } = await apiClient.get<{ data: Case[]; total: number; page: number; page_size: number }>(
+        "/cases/archived",
+        { params }
+      );
+      return data;
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useRestoreCase(caseId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      await apiClient.post(`/cases/${caseId}/restore`);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [ARCHIVED_KEY] });
       qc.invalidateQueries({ queryKey: [CASES_KEY] });
     },
   });
@@ -493,6 +522,114 @@ export function useCaseActivity(caseId: string) {
     enabled: !!caseId,
     refetchInterval: 30_000,
   });
+}
+
+// ── Resolution Requests ───────────────────────────────────────────────────────
+
+export interface ResolutionFeedback {
+  id: string;
+  status: "pending" | "accepted" | "rejected";
+  requested_by_name: string;
+  requested_at: string;
+  responded_by_name: string | null;
+  responded_at: string | null;
+  rating: number | null;
+  observation: string | null;
+}
+
+export function useResolutionFeedback(caseId: string) {
+  return useQuery<ResolutionFeedback | null>({
+    queryKey: ["resolution-feedback", caseId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<{ data: ResolutionFeedback | null }>(
+        `/cases/${caseId}/resolution-request/result`
+      );
+      return data.data ?? null;
+    },
+    enabled: !!caseId,
+  });
+}
+
+export function useRespondResolutionRequest(caseId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: {
+      request_id: string;
+      accepted: boolean;
+      rating?: number | null;
+      observation?: string | null;
+    }) => {
+      const { data } = await apiClient.post(`/cases/${caseId}/resolution-request/respond`, payload);
+      return data.data as { status: string };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["resolution-feedback", caseId] });
+      qc.invalidateQueries({ queryKey: ["cases", caseId] });
+    },
+  });
+}
+
+// ── Attachments ───────────────────────────────────────────────────────────────
+
+export interface CaseAttachment {
+  id: string;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  created_at: string;
+}
+
+export function useAttachments(caseId: string) {
+  return useQuery<CaseAttachment[]>({
+    queryKey: ["attachments", caseId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<{ data: CaseAttachment[] }>(
+        `/cases/${caseId}/attachments`
+      );
+      return data.data ?? [];
+    },
+    enabled: !!caseId,
+  });
+}
+
+export function useUploadAttachment(caseId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append("file", file);
+      const { data } = await apiClient.post(
+        `/cases/${caseId}/attachments`,
+        form,
+        { headers: { "Content-Type": "multipart/form-data" } }
+      );
+      return data.data as { id: string; original_filename: string };
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["attachments", caseId] }),
+  });
+}
+
+export function useDeleteAttachment(caseId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (attachmentId: string) => {
+      await apiClient.delete(`/cases/${caseId}/attachments/${attachmentId}`);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["attachments", caseId] }),
+  });
+}
+
+export async function downloadAttachment(caseId: string, attachmentId: string, filename: string) {
+  const response = await apiClient.get(
+    `/cases/${caseId}/attachments/${attachmentId}/download`,
+    { responseType: "blob" }
+  );
+  const url = URL.createObjectURL(response.data as Blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Assignments History ───────────────────────────────────────────────────────

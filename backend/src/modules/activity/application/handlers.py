@@ -29,6 +29,16 @@ EVENT_DESCRIPTIONS = {
     "todo.completed": lambda p: f"Tarea completada: {p.get('title', '')}",
     "attachment.uploaded": lambda p: f"Archivo adjunto: {p.get('filename', '')}",
     "sla.breached": lambda p: "SLA vencido",
+    "resolution.requested": lambda p: (
+        f"{p.get('requested_by_name', 'Agente')} solicitó confirmación de solución del caso"
+        f" a {p.get('reporter_name', 'el solicitante')}"
+    ),
+    "resolution.responded": lambda p: (
+        f"{p.get('responder_name', 'Solicitante')} "
+        + ("confirmó la solución del caso propuesta por " if p.get("accepted") else "rechazó la solución del caso propuesta por ")
+        + p.get("requester_name", "el agente")
+        + (f" — {p.get('rating')}/5 ★" if p.get("accepted") and p.get("rating") else "")
+    ),
 }
 
 
@@ -84,6 +94,8 @@ def register_handlers(bus) -> None:
         "todo.completed",
         "attachment.uploaded",
         "sla.breached",
+        "resolution.requested",
+        "resolution.responded",
     ]
     for event_type in CASE_EVENTS:
         bus.subscribe(event_type, handle_case_event)

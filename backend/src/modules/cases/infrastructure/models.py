@@ -83,3 +83,6 @@ class CaseModel(Base):
     assignments: Mapped[list["CaseAssignmentModel"]] = relationship(  # type: ignore[name-defined]
         "CaseAssignmentModel", back_populates="case", cascade="all, delete-orphan"
     )
+    assigned_user: Mapped["UserModel | None"] = relationship(  # type: ignore[name-defined]
+        "UserModel", foreign_keys=[assigned_to]
+    )

@@ -16,6 +16,7 @@ import { formatRelative } from "@/lib/utils";
 
 interface CaseTimeTrackerProps {
   caseId: string;
+  readonly?: boolean;
 }
 
 function formatMinutes(total: number): string {
@@ -34,7 +35,7 @@ function formatElapsed(seconds: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-export function CaseTimeTracker({ caseId }: CaseTimeTrackerProps) {
+export function CaseTimeTracker({ caseId, readonly = false }: CaseTimeTrackerProps) {
   const { data: activeTimer } = useActiveTimer();
   const { data: timeData, isLoading } = useTimeEntries(caseId);
   const startTimer = useStartTimer(caseId);
@@ -136,41 +137,43 @@ export function CaseTimeTracker({ caseId }: CaseTimeTrackerProps) {
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
-          {isMyTimer && (
-            <span className="font-mono text-lg font-semibold text-primary tabular-nums">
-              {formatElapsed(elapsed)}
-            </span>
-          )}
+        {!readonly && (
+          <div className="flex items-center gap-2">
+            {isMyTimer && (
+              <span className="font-mono text-lg font-semibold text-primary tabular-nums">
+                {formatElapsed(elapsed)}
+              </span>
+            )}
 
-          {isOtherTimer && (
-            <div className="flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
-              <AlertCircle className="h-3.5 w-3.5" />
-              Timer activo en otro caso
-            </div>
-          )}
+            {isOtherTimer && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+                <AlertCircle className="h-3.5 w-3.5" />
+                Timer activo en otro caso
+              </div>
+            )}
 
-          {!isMyTimer && !isOtherTimer && (
-            <button
-              onClick={handleStart}
-              disabled={startTimer.isPending}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
-            >
-              <Play className="h-3.5 w-3.5" />
-              Iniciar timer
-            </button>
-          )}
+            {!isMyTimer && !isOtherTimer && (
+              <button
+                onClick={handleStart}
+                disabled={startTimer.isPending}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                <Play className="h-3.5 w-3.5" />
+                Iniciar timer
+              </button>
+            )}
 
-          {isMyTimer && !showStopForm && (
-            <button
-              onClick={() => setShowStopForm(true)}
-              className="inline-flex items-center gap-1.5 rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 transition-colors"
-            >
-              <Square className="h-3.5 w-3.5" />
-              Detener
-            </button>
-          )}
-        </div>
+            {isMyTimer && !showStopForm && (
+              <button
+                onClick={() => setShowStopForm(true)}
+                className="inline-flex items-center gap-1.5 rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 transition-colors"
+              >
+                <Square className="h-3.5 w-3.5" />
+                Detener
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Max hours warning */}
@@ -206,8 +209,8 @@ export function CaseTimeTracker({ caseId }: CaseTimeTrackerProps) {
         </div>
       )}
 
-      {/* Stop form */}
-      {showStopForm && (
+      {/* Stop form — hidden in readonly */}
+      {!readonly && showStopForm && (
         <div className="rounded-md border border-border bg-muted/30 p-4 flex flex-col gap-3">
           <p className="text-sm font-medium text-foreground">¿Qué hiciste en este tiempo?</p>
           <textarea
@@ -240,8 +243,8 @@ export function CaseTimeTracker({ caseId }: CaseTimeTrackerProps) {
         </div>
       )}
 
-      {/* Manual entry */}
-      <div>
+      {/* Manual entry — hidden in readonly */}
+      {!readonly && <div>
         {!showManualForm ? (
           <button
             onClick={() => setShowManualForm(true)}
@@ -311,7 +314,7 @@ export function CaseTimeTracker({ caseId }: CaseTimeTrackerProps) {
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Entries list */}
       {isLoading ? (
@@ -350,12 +353,14 @@ export function CaseTimeTracker({ caseId }: CaseTimeTrackerProps) {
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => deleteEntry.mutate(entry.id)}
-                className="hidden group-hover:flex text-muted-foreground hover:text-destructive p-0.5 ml-2 shrink-0"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              {!readonly && (
+                <button
+                  onClick={() => deleteEntry.mutate(entry.id)}
+                  className="hidden group-hover:flex text-muted-foreground hover:text-destructive p-0.5 ml-2 shrink-0"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
           ))}
         </div>

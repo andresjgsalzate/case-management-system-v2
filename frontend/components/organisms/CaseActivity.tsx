@@ -29,6 +29,8 @@ const EVENT_CONFIG: Record<string, { icon: React.ElementType; color: string; lab
   "time_entry.manual_added": { icon: Clock,         color: "text-teal-600 bg-teal-50 border-teal-200",           label: "Tiempo manual" },
   "attachment.uploaded":   { icon: Paperclip,       color: "text-orange-600 bg-orange-50 border-orange-200",     label: "Adjunto" },
   "sla.breached":          { icon: AlertTriangle,   color: "text-red-600 bg-red-50 border-red-200",              label: "SLA vencido" },
+  "resolution.requested":  { icon: Clock,           color: "text-blue-600 bg-blue-50 border-blue-200",           label: "Confirmación solicitada" },
+  "resolution.responded":  { icon: Clipboard,       color: "text-emerald-600 bg-emerald-50 border-emerald-200",  label: "Confirmación respondida" },
 };
 
 function getConfig(eventType: string) {

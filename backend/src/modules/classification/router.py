@@ -18,6 +18,7 @@ from backend.src.core.responses import SuccessResponse
 from backend.src.core.middleware.permission_checker import CurrentUser, PermissionChecker
 
 router = APIRouter(tags=["classification"])
+CasesRead = Depends(PermissionChecker("cases", "read"))   # leer clasificación de un caso propio
 ClassRead = Depends(PermissionChecker("classification", "read"))
 ClassCreate = Depends(PermissionChecker("classification", "create"))
 ClassManage = Depends(PermissionChecker("classification", "manage"))
@@ -212,7 +213,7 @@ class SaveClassificationDTO(BaseModel):
 async def get_classification(
     case_id: str,
     db: DBSession,
-    current_user: CurrentUser = ClassRead,
+    current_user: CurrentUser = CasesRead,  # reading a case's classification level only requires cases/read
 ):
     result = await db.execute(
         select(CaseClassificationModel).where(CaseClassificationModel.case_id == case_id)
