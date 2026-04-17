@@ -41,3 +41,31 @@ export function getInitials(name: string): string {
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join("");
 }
+
+// ── Solution structured data ───────────────────────────────────────────────────
+
+export interface SolutionData {
+  summary: string;       // Resumen de la solución
+  root_cause: string;    // Causa raíz del problema
+  steps: string;         // Pasos aplicados para resolver
+  prevention?: string;   // Cómo prevenir en el futuro (opcional)
+  kb_notes?: string;     // Notas para base de conocimiento / IA (opcional)
+}
+
+/** Serialize SolutionData to a JSON string for storage */
+export function serializeSolution(data: SolutionData): string {
+  return JSON.stringify(data);
+}
+
+/** Parse a solution string: returns structured data if JSON, or legacy plain text wrapped in summary */
+export function parseSolution(raw: string | null | undefined): SolutionData | null {
+  if (!raw?.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.summary === "string") return parsed as SolutionData;
+  } catch {
+    // Legacy plain text — wrap it in summary field for display
+    return { summary: raw, root_cause: "", steps: "" };
+  }
+  return null;
+}

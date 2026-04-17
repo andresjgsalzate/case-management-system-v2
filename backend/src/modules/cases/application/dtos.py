@@ -48,9 +48,12 @@ class CaseResponseDTO(BaseModel):
     origin_name: str | None
     created_by: str
     assigned_to: str | None
+    assigned_user_name: str | None
     team_id: str | None
     solution_description: str | None
     is_archived: bool
+    archived_at: str | None
+    archived_by: str | None
     closed_at: str | None
     created_at: str
     updated_at: str

@@ -49,11 +49,31 @@ async def get_me(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    from sqlalchemy import select as sa_select
+    from backend.src.modules.roles.infrastructure.models import RoleModel, PermissionModel
+
+    role_name = None
+    permissions: list[dict] = []
+    if user.role_id:
+        role_result = await db.execute(sa_select(RoleModel).where(RoleModel.id == user.role_id))
+        role = role_result.scalar_one_or_none()
+        if role:
+            role_name = role.name
+        perm_result = await db.execute(
+            sa_select(PermissionModel).where(PermissionModel.role_id == user.role_id)
+        )
+        permissions = [
+            {"module": p.module, "action": p.action, "scope": p.scope}
+            for p in perm_result.scalars().all()
+        ]
+
     return SuccessResponse.ok({
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
         "role_id": user.role_id,
+        "role_name": role_name,
+        "permissions": permissions,
         "is_active": user.is_active,
         "avatar_url": getattr(user, "avatar_url", None),
         "email_notifications": getattr(user, "email_notifications", False),

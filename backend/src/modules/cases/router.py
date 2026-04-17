@@ -23,6 +23,25 @@ CasesUpdate = Depends(PermissionChecker("cases", "update"))
 CasesExport = Depends(PermissionChecker("cases", "export"))
 
 
+@router.get("/archived", response_model=PaginatedResponse[CaseResponseDTO])
+async def list_archived_cases(
+    db: DBSession,
+    pagination: Pagination,
+    search: str | None = Query(default=None),
+    current_user: CurrentUser = CasesRead,
+):
+    uc = CaseUseCases(db)
+    cases, total = await uc.list_archived(
+        current_user.tenant_id,
+        actor_id=current_user.user_id,
+        scope=current_user.scope,
+        search=search,
+        page=pagination.page,
+        page_size=pagination.page_size,
+    )
+    return PaginatedResponse.ok(cases, pagination.page, pagination.page_size, total)
+
+
 @router.get("", response_model=PaginatedResponse[CaseResponseDTO])
 async def list_cases(
     db: DBSession,

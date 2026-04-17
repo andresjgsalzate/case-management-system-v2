@@ -74,11 +74,11 @@ export function CaseTable({ cases, isLoading, className }: CaseTableProps) {
                 <PriorityBadge priority={c.priority_name} />
               </td>
               <td className="px-4 py-3 whitespace-nowrap">
-                {c.assigned_user ? (
+                {c.assigned_user_name ? (
                   <div className="flex items-center gap-2">
-                    <Avatar name={c.assigned_user.full_name} size="xs" />
+                    <Avatar name={c.assigned_user_name} size="xs" />
                     <span className="text-sm text-muted-foreground truncate max-w-24">
-                      {c.assigned_user.full_name}
+                      {c.assigned_user_name}
                     </span>
                   </div>
                 ) : (
