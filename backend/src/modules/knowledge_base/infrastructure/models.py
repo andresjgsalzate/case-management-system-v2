@@ -37,6 +37,10 @@ class KBArticleModel(Base):
     helpful_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     not_helpful_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    document_type_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("kb_document_types.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -55,6 +59,7 @@ class KBArticleModel(Base):
     review_events: Mapped[list["KBReviewEventModel"]] = relationship(
         back_populates="article", lazy="select", cascade="all, delete-orphan"
     )
+    document_type: Mapped["KBDocumentTypeModel | None"] = relationship(lazy="joined")
 
 
 class KBArticleTagModel(Base):
@@ -141,4 +146,25 @@ class KBFeedbackModel(Base):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class KBDocumentTypeModel(Base):
+    """Tipos de documento configurables por el admin (Guía, Procedimiento, etc.)."""
+    __tablename__ = "kb_document_types"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    icon: Mapped[str] = mapped_column(String(50), nullable=False)
+    color: Mapped[str] = mapped_column(String(7), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
