@@ -71,6 +71,30 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     conn = op.get_bind()
-    conn.execute(
-        sa.text("DELETE FROM permissions WHERE module = 'document_types'")
-    )
+
+    admin_row = conn.execute(
+        sa.text("SELECT id FROM roles WHERE name = 'Admin' AND tenant_id IS NULL LIMIT 1")
+    ).fetchone()
+    if admin_row:
+        for module, action, _ in ADMIN_PERMS:
+            conn.execute(
+                sa.text(
+                    "DELETE FROM permissions "
+                    "WHERE role_id = :role_id AND module = :module AND action = :action"
+                ),
+                {"role_id": admin_row[0], "module": module, "action": action},
+            )
+
+    for role_name in READ_ONLY_ROLES:
+        row = conn.execute(
+            sa.text("SELECT id FROM roles WHERE name = :name AND tenant_id IS NULL LIMIT 1"),
+            {"name": role_name},
+        ).fetchone()
+        if row:
+            conn.execute(
+                sa.text(
+                    "DELETE FROM permissions "
+                    "WHERE role_id = :role_id AND module = 'document_types' AND action = 'read'"
+                ),
+                {"role_id": row[0]},
+            )
