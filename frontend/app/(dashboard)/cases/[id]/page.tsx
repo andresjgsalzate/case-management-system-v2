@@ -26,6 +26,7 @@ import { CaseTimeTracker } from "@/components/organisms/CaseTimeTracker";
 import { CaseClassification } from "@/components/organisms/CaseClassification";
 import { CaseActivity } from "@/components/organisms/CaseActivity";
 import { CaseAttachments } from "@/components/organisms/CaseAttachments";
+import { RelatedKBArticlesSection } from "@/components/organisms/RelatedKBArticlesSection";
 import { AssignCaseModal } from "@/components/organisms/AssignCaseModal";
 import { useHasPermission } from "@/hooks/useHasPermission";
 import { getCurrentUserId } from "@/lib/apiClient";
@@ -359,6 +360,9 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
 
                 {/* Archivos adjuntos */}
                 <CaseAttachments caseId={params.id} readonly={c.is_archived} />
+
+                {/* Documentos KB relacionados */}
+                <RelatedKBArticlesSection caseId={params.id} />
               </div>
             </div>
 

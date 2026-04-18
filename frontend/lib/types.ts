@@ -328,6 +328,6 @@ export interface CaseKBArticleRef {
   id: string;
   title: string;
   status: KBStatus;
-  document_type: KBDocumentType | null;
+  document_type: KBDocumentTypeRef | null;
   linked_at: string;
 }
