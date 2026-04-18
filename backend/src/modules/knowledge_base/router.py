@@ -405,3 +405,25 @@ async def list_article_cases(
         can_access_cases=can_access,
     )
     return SuccessResponse.ok(items)
+
+
+@router.post("/articles/{article_id}/cases", status_code=201)
+async def link_case_to_article(
+    article_id: str,
+    body: LinkCaseDTO,
+    db: DBSession,
+    current_user: CurrentUser = Depends(PermissionChecker("knowledge_base", "update")),
+):
+    uc = KBUseCases(db=db)
+    can_access = await has_permission(db, current_user.role_id, "cases", "read")
+    link = await uc.link_case_to_article(
+        article_id=article_id,
+        case_id=body.case_id,
+        user_id=current_user.user_id,
+    )
+    # Enriquecer con case_number/case_title para que el frontend lo pinte directo
+    enriched = await uc.list_article_cases(
+        article_id=article_id, can_access_cases=can_access
+    )
+    current = next((r for r in enriched if r["case_id"] == body.case_id), None)
+    return SuccessResponse.ok(current or link)
