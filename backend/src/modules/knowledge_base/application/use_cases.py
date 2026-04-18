@@ -449,7 +449,9 @@ class KBUseCases:
         # Validar existencia del artículo (reusa método con filtro is_deleted)
         await self._get_article(article_id)
 
-        # Validar existencia del caso
+        # Validar existencia del caso. No se filtra `is_archived` — la relación es
+        # metadata documental (spec §2), no una bifurcación de seguridad, y debe
+        # permitir vincular artículos KB a casos archivados para documentación histórica.
         case_row = await self.db.execute(
             select(CaseModel).where(CaseModel.id == case_id)
         )
