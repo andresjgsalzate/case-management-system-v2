@@ -215,6 +215,30 @@ async def submit_feedback(
     return SuccessResponse.ok({"id": fb.id, "is_helpful": fb.is_helpful})
 
 
+@router.get("/articles/{article_id}/feedback/check")
+async def check_feedback(
+    article_id: str,
+    db: DBSession,
+    current_user: CurrentUser = KBRead,
+):
+    uc = KBUseCases(db=db)
+    result = await uc.check_feedback(
+        article_id=article_id, user_id=current_user.user_id
+    )
+    return SuccessResponse.ok(result)
+
+
+@router.get("/articles/{article_id}/feedback/stats")
+async def get_feedback_stats(
+    article_id: str,
+    db: DBSession,
+    current_user: CurrentUser = KBRead,
+):
+    uc = KBUseCases(db=db)
+    stats = await uc.get_feedback_stats(article_id=article_id)
+    return SuccessResponse.ok(stats)
+
+
 @router.post("/articles/{article_id}/favorite")
 async def toggle_favorite(
     article_id: str,
