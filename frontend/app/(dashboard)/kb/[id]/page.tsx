@@ -8,7 +8,7 @@ import {
   Calendar, Star, Pencil, ChevronDown, ChevronUp, Clock, History,
 } from "lucide-react";
 import {
-  useKBArticle, useTransitionKBArticle, useSubmitKBFeedback,
+  useKBArticle, useTransitionKBArticle,
   useToggleKBFavorite, useKBVersions,
 } from "@/hooks/useKB";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
@@ -17,6 +17,7 @@ import { Spinner } from "@/components/atoms/Spinner";
 import { Button } from "@/components/atoms/Button";
 import { KBEditor } from "@/components/organisms/KBEditor";
 import { ReviewHistoryDrawer } from "@/components/organisms/ReviewHistoryDrawer";
+import { FeedbackWidget } from "@/components/molecules/FeedbackWidget";
 import { formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth.store";
 import type { KBStatus, UserPermission } from "@/lib/types";
@@ -40,7 +41,6 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
   const { data: article, isLoading, error } = useKBArticle(params.id);
   const { data: versions = [] } = useKBVersions(params.id);
   const transition = useTransitionKBArticle(params.id);
-  const submitFeedback = useSubmitKBFeedback(params.id);
   const toggleFavorite = useToggleKBFavorite(params.id);
 
   const [showRejectModal, setShowRejectModal] = useState(false);
@@ -216,28 +216,8 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
         {/* Content — BlockNote read-only */}
         <KBEditor initialContent={article.content_json} readOnly />
 
-        {/* Feedback bar */}
-        <div className="flex items-center gap-3 pt-2 border-t border-border">
-          <span className="text-sm text-muted-foreground">¿Te fue útil este artículo?</span>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => submitFeedback.mutate({ is_helpful: true })}
-            loading={submitFeedback.isPending}
-          >
-            <ThumbsUp className="h-3.5 w-3.5 mr-1 text-emerald-600" />
-            Sí
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => submitFeedback.mutate({ is_helpful: false })}
-            loading={submitFeedback.isPending}
-          >
-            <ThumbsDown className="h-3.5 w-3.5 mr-1 text-red-500" />
-            No
-          </Button>
-        </div>
+        {/* Feedback widget (persistent check + stats) */}
+        <FeedbackWidget articleId={params.id} />
       </div>
 
       {/* Version history */}

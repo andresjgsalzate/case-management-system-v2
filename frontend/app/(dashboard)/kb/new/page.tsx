@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, FileText } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
 import { FormField } from "@/components/molecules/FormField";
@@ -12,6 +12,7 @@ import { TagMultiSelect } from "@/components/molecules/TagMultiSelect";
 import { DocumentTypeSelect } from "@/components/molecules/DocumentTypeSelect";
 import { useCreateKBArticle } from "@/hooks/useKB";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
+import { DOCUMENTATION_TEMPLATE, templateToPlainText } from "@/lib/kb-templates";
 
 export default function NewKBArticlePage() {
   usePermissionGuard("knowledge_base", "create");
@@ -24,7 +25,19 @@ export default function NewKBArticlePage() {
   const [error, setError] = useState("");
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [documentTypeId, setDocumentTypeId] = useState<string | null>(null);
+  const [editorKey, setEditorKey] = useState(0);
+  const [editorInitial, setEditorInitial] = useState<
+    Record<string, unknown> | undefined
+  >(undefined);
   const createArticle = useCreateKBArticle();
+
+  function applyTemplate() {
+    const contentJson = { blocks: DOCUMENTATION_TEMPLATE };
+    const contentText = templateToPlainText();
+    setEditorInitial(contentJson);
+    setEditorValue({ content_json: contentJson, content_text: contentText });
+    setEditorKey((k) => k + 1);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -73,7 +86,24 @@ export default function NewKBArticlePage() {
           </FormField>
 
           <FormField label="Contenido" htmlFor="kb-content" required>
-            <KBEditor onChange={setEditorValue} />
+            <div className="flex flex-col gap-2">
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={applyTemplate}
+                >
+                  <FileText className="h-4 w-4 mr-1" />
+                  Usar plantilla
+                </Button>
+              </div>
+              <KBEditor
+                key={editorKey}
+                initialContent={editorInitial}
+                onChange={setEditorValue}
+              />
+            </div>
           </FormField>
 
           <div className="flex flex-col gap-1.5">
