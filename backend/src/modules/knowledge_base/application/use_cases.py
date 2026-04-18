@@ -162,6 +162,24 @@ class KBUseCases:
         result = await self.db.execute(stmt)
         return list(result.scalars().unique().all())
 
+    async def list_pending_review(
+        self, tenant_id: str | None = None, limit: int = 50
+    ) -> list[KBArticleModel]:
+        stmt = (
+            select(KBArticleModel)
+            .where(
+                KBArticleModel.is_deleted.is_(False),
+                KBArticleModel.status == "in_review",
+            )
+            .options(selectinload(KBArticleModel.tags))
+            .order_by(KBArticleModel.updated_at.desc())
+            .limit(limit)
+        )
+        if tenant_id:
+            stmt = stmt.where(KBArticleModel.tenant_id == tenant_id)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_article(self, article_id: str) -> KBArticleModel:
         article = await self._get_article(article_id)
         article.view_count += 1
