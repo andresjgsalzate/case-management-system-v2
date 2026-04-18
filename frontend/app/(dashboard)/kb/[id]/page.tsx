@@ -12,6 +12,7 @@ import {
   useToggleKBFavorite, useKBVersions,
 } from "@/hooks/useKB";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
+import { DocumentTypeBadge } from "@/components/molecules/DocumentTypeBadge";
 import { Spinner } from "@/components/atoms/Spinner";
 import { Button } from "@/components/atoms/Button";
 import { KBEditor } from "@/components/organisms/KBEditor";
@@ -96,8 +97,9 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
 
         {/* Header row: status + action buttons */}
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <StatusBadge status={article.status} />
+            <DocumentTypeBadge type={article.document_type} size="md" />
             <span className="text-xs text-muted-foreground">Versión {article.version}</span>
           </div>
 

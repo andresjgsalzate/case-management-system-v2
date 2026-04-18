@@ -7,6 +7,7 @@ import { Button } from "@/components/atoms/Button";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
+import { DocumentTypeBadge } from "@/components/molecules/DocumentTypeBadge";
 import { Spinner } from "@/components/atoms/Spinner";
 import { useKBArticles, useKBTags } from "@/hooks/useKB";
 import { formatDate, truncate } from "@/lib/utils";
@@ -133,8 +134,9 @@ export default function KBPage() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1.5">
+                  <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                     <StatusBadge status={article.status} />
+                    <DocumentTypeBadge type={article.document_type} />
                     <span className="text-xs text-muted-foreground">v{article.version}</span>
                   </div>
                   <h3 className="font-medium text-foreground hover:text-primary transition-colors">

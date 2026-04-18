@@ -9,6 +9,7 @@ import { Input } from "@/components/atoms/Input";
 import { FormField } from "@/components/molecules/FormField";
 import { KBEditor } from "@/components/organisms/KBEditor";
 import { TagMultiSelect } from "@/components/molecules/TagMultiSelect";
+import { DocumentTypeSelect } from "@/components/molecules/DocumentTypeSelect";
 import { useCreateKBArticle } from "@/hooks/useKB";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 
@@ -22,6 +23,7 @@ export default function NewKBArticlePage() {
   } | null>(null);
   const [error, setError] = useState("");
   const [tagIds, setTagIds] = useState<string[]>([]);
+  const [documentTypeId, setDocumentTypeId] = useState<string | null>(null);
   const createArticle = useCreateKBArticle();
 
   async function handleSubmit(e: React.FormEvent) {
@@ -35,6 +37,7 @@ export default function NewKBArticlePage() {
         content_json: editorValue.content_json,
         content_text: editorValue.content_text,
         tag_ids: tagIds,
+        document_type_id: documentTypeId,
       });
       router.push(`/kb/${article!.id}`);
     } catch {
@@ -72,6 +75,11 @@ export default function NewKBArticlePage() {
           <FormField label="Contenido" htmlFor="kb-content" required>
             <KBEditor onChange={setEditorValue} />
           </FormField>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Tipo de documento</label>
+            <DocumentTypeSelect value={documentTypeId} onChange={setDocumentTypeId} />
+          </div>
 
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium">Tags</label>
