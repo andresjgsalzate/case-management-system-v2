@@ -109,6 +109,16 @@ async def create_article(
     return SuccessResponse.ok(_serialize_article(article))
 
 
+@router.get("/articles/pending-review", response_model=SuccessResponse[list[dict]])
+async def list_pending_review(
+    db: DBSession,
+    current_user: CurrentUser = KBManage,
+):
+    uc = KBUseCases(db=db)
+    articles = await uc.list_pending_review(tenant_id=current_user.tenant_id)
+    return SuccessResponse.ok([_serialize_article(a) for a in articles])
+
+
 @router.get("/articles/{article_id}")
 async def get_article(
     article_id: str,
