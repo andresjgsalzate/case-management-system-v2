@@ -70,3 +70,18 @@ def test_list_case_articles_signature():
     sig = inspect.signature(KBUseCases.list_case_articles)
     params = set(sig.parameters.keys())
     assert params == {"self", "case_id"}
+
+
+def test_router_has_article_cases_endpoints():
+    from backend.src.modules.knowledge_base import router as kb_router
+    paths = [getattr(r, "path", "") for r in kb_router.router.routes]
+    methods_by_path: dict[str, set[str]] = {}
+    for r in kb_router.router.routes:
+        p = getattr(r, "path", "")
+        ms = getattr(r, "methods", set()) or set()
+        methods_by_path.setdefault(p, set()).update(ms)
+    assert "/api/v1/kb/articles/{article_id}/cases" in paths
+    assert "GET" in methods_by_path["/api/v1/kb/articles/{article_id}/cases"]
+    assert "POST" in methods_by_path["/api/v1/kb/articles/{article_id}/cases"]
+    assert "/api/v1/kb/articles/{article_id}/cases/{case_id}" in paths
+    assert "DELETE" in methods_by_path["/api/v1/kb/articles/{article_id}/cases/{case_id}"]

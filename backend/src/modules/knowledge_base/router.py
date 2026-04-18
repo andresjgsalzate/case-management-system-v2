@@ -4,7 +4,7 @@ from typing import Any
 
 from backend.src.core.dependencies import DBSession
 from backend.src.core.responses import SuccessResponse
-from backend.src.core.middleware.permission_checker import CurrentUser, PermissionChecker
+from backend.src.core.middleware.permission_checker import CurrentUser, PermissionChecker, has_permission
 from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
 
 router = APIRouter(prefix="/api/v1/kb", tags=["knowledge_base"])
@@ -46,6 +46,10 @@ class TransitionDTO(BaseModel):
 class FeedbackDTO(BaseModel):
     is_helpful: bool
     comment: str | None = None
+
+
+class LinkCaseDTO(BaseModel):
+    case_id: str
 
 
 class DocumentTypeCreateDTO(BaseModel):
@@ -384,3 +388,20 @@ def _serialize_article(a) -> dict:
         "document_type_id": a.document_type_id,
         "document_type": doc_type,
     }
+
+
+# ── Article ↔ Cases associations ─────────────────────────────────────────────
+
+@router.get("/articles/{article_id}/cases", response_model=SuccessResponse[list[dict]])
+async def list_article_cases(
+    article_id: str,
+    db: DBSession,
+    current_user: CurrentUser = KBRead,
+):
+    can_access = await has_permission(db, current_user.role_id, "cases", "read")
+    uc = KBUseCases(db=db)
+    items = await uc.list_article_cases(
+        article_id=article_id,
+        can_access_cases=can_access,
+    )
+    return SuccessResponse.ok(items)
