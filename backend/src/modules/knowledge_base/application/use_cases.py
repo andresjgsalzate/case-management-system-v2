@@ -290,6 +290,49 @@ class KBUseCases:
         await self.db.refresh(tag)
         return tag
 
+    async def get_review_history(self, article_id: str) -> dict:
+        """Retorna eventos cronológicos + resumen contable por tipo."""
+        await self._get_article(article_id)  # valida que exista
+        result = await self.db.execute(
+            select(KBReviewEventModel)
+            .where(KBReviewEventModel.article_id == article_id)
+            .order_by(KBReviewEventModel.created_at.asc())
+        )
+        events = list(result.scalars().all())
+        summary = {
+            "submitted": 0,
+            "approved": 0,
+            "rejected": 0,
+            "published": 0,
+            "returned_to_draft": 0,
+        }
+        for e in events:
+            if e.to_status == "in_review":
+                summary["submitted"] += 1
+            elif e.to_status == "approved":
+                summary["approved"] += 1
+            elif e.to_status == "rejected":
+                summary["rejected"] += 1
+            elif e.to_status == "published":
+                summary["published"] += 1
+            elif e.to_status == "draft":
+                summary["returned_to_draft"] += 1
+        return {
+            "events": [
+                {
+                    "id": e.id,
+                    "article_id": e.article_id,
+                    "actor_id": e.actor_id,
+                    "from_status": e.from_status,
+                    "to_status": e.to_status,
+                    "comment": e.comment,
+                    "created_at": e.created_at.isoformat(),
+                }
+                for e in events
+            ],
+            "summary": summary,
+        }
+
     async def _get_article(self, article_id: str) -> KBArticleModel:
         result = await self.db.execute(
             select(KBArticleModel)
