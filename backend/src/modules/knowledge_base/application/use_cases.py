@@ -530,6 +530,43 @@ class KBUseCases:
             for link, case in rows
         ]
 
+    async def list_case_articles(self, case_id: str) -> list[dict]:
+        """Devuelve los artículos KB vinculados a un caso. Solo published."""
+        from backend.src.modules.knowledge_base.infrastructure.models import KBArticleCaseModel
+
+        result = await self.db.execute(
+            select(KBArticleCaseModel, KBArticleModel)
+            .join(KBArticleModel, KBArticleModel.id == KBArticleCaseModel.article_id)
+            .where(
+                KBArticleCaseModel.case_id == case_id,
+                KBArticleModel.is_deleted.is_(False),
+                KBArticleModel.status == "published",
+            )
+            .options(selectinload(KBArticleModel.document_type))
+            .order_by(KBArticleCaseModel.linked_at.desc())
+        )
+        rows = result.all()
+        return [
+            {
+                "id": article.id,
+                "title": article.title,
+                "status": article.status,
+                "document_type": (
+                    {
+                        "id": article.document_type.id,
+                        "code": article.document_type.code,
+                        "name": article.document_type.name,
+                        "icon": article.document_type.icon,
+                        "color": article.document_type.color,
+                    }
+                    if article.document_type
+                    else None
+                ),
+                "linked_at": link.linked_at.isoformat(),
+            }
+            for link, article in rows
+        ]
+
     async def _get_article(self, article_id: str) -> KBArticleModel:
         result = await self.db.execute(
             select(KBArticleModel)

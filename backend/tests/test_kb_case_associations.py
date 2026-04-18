@@ -57,3 +57,16 @@ def test_list_article_cases_signature():
     sig = inspect.signature(KBUseCases.list_article_cases)
     params = set(sig.parameters.keys())
     assert params == {"self", "article_id", "can_access_cases"}
+
+
+def test_list_case_articles_method_exists():
+    from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
+    assert hasattr(KBUseCases, "list_case_articles")
+
+
+def test_list_case_articles_signature():
+    import inspect
+    from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
+    sig = inspect.signature(KBUseCases.list_case_articles)
+    params = set(sig.parameters.keys())
+    assert params == {"self", "case_id"}
