@@ -8,7 +8,7 @@ import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
 import { Spinner } from "@/components/atoms/Spinner";
-import { useKBArticles } from "@/hooks/useKB";
+import { useKBArticles, useKBTags } from "@/hooks/useKB";
 import { formatDate, truncate } from "@/lib/utils";
 import type { KBStatus } from "@/lib/types";
 
@@ -24,8 +24,13 @@ export default function KBPage() {
   usePermissionGuard("knowledge_base", "read");
   const [search, setSearch] = useState("");
   const [activeStatus, setActiveStatus] = useState<KBStatus | "">("");
+  const [activeTagSlug, setActiveTagSlug] = useState<string>("");
+  const { data: tags = [] } = useKBTags();
 
-  const { data: articles = [], isLoading } = useKBArticles(activeStatus || undefined);
+  const { data: articles = [], isLoading } = useKBArticles(
+    activeStatus || undefined,
+    activeTagSlug || undefined,
+  );
 
   const filtered = search.trim()
     ? articles.filter((a) =>
@@ -75,6 +80,36 @@ export default function KBPage() {
           ))}
         </div>
       </div>
+
+      {tags.length > 0 && (
+        <div className="flex items-center gap-1 overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => setActiveTagSlug("")}
+            className={`px-2.5 py-1 rounded-md text-xs whitespace-nowrap transition-colors ${
+              activeTagSlug === ""
+                ? "bg-primary/10 text-primary font-medium"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            }`}
+          >
+            Todos los tags
+          </button>
+          {tags.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setActiveTagSlug(t.slug)}
+              className={`px-2.5 py-1 rounded-md text-xs whitespace-nowrap transition-colors ${
+                activeTagSlug === t.slug
+                  ? "bg-primary/10 text-primary font-medium"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
+              }`}
+            >
+              {t.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {isLoading && (
         <div className="flex justify-center py-16">
