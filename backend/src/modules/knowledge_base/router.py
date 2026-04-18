@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Any
 
@@ -427,3 +428,15 @@ async def link_case_to_article(
     )
     current = next((r for r in enriched if r["case_id"] == body.case_id), None)
     return SuccessResponse.ok(current or link)
+
+
+@router.delete("/articles/{article_id}/cases/{case_id}", status_code=204)
+async def unlink_case_from_article(
+    article_id: str,
+    case_id: str,
+    db: DBSession,
+    current_user: CurrentUser = Depends(PermissionChecker("knowledge_base", "update")),
+):
+    uc = KBUseCases(db=db)
+    await uc.unlink_case_from_article(article_id=article_id, case_id=case_id)
+    return Response(status_code=204)
