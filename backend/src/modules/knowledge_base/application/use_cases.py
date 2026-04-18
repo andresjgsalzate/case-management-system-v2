@@ -13,6 +13,7 @@ from backend.src.modules.knowledge_base.infrastructure.models import (
     KBReviewEventModel,
     KBFavoriteModel,
     KBFeedbackModel,
+    KBDocumentTypeModel,
 )
 from backend.src.modules.knowledge_base.application.review_workflow import KBWorkflow
 from backend.src.core.exceptions import NotFoundError, ForbiddenError
@@ -32,6 +33,7 @@ class KBUseCases:
         created_by_id: str,
         tenant_id: str | None = None,
         tag_ids: list[str] | None = None,
+        document_type_id: str | None = None,
     ) -> KBArticleModel:
         article = KBArticleModel(
             id=str(uuid.uuid4()),
@@ -42,6 +44,7 @@ class KBUseCases:
             version=1,
             created_by_id=created_by_id,
             tenant_id=tenant_id,
+            document_type_id=document_type_id,
         )
         self.db.add(article)
         await self.db.flush()
@@ -67,6 +70,7 @@ class KBUseCases:
         content_json: dict | None = None,
         content_text: str | None = None,
         tag_ids: list[str] | None = None,
+        document_type_id: str | None = None,
     ) -> KBArticleModel:
         article = await self._get_article(article_id)
         if article.status not in ("draft", "rejected"):
@@ -91,6 +95,8 @@ class KBUseCases:
         article.version += 1
         if tag_ids is not None:
             await self._sync_tags(article, tag_ids)
+        if document_type_id is not None:
+            article.document_type_id = document_type_id if document_type_id else None
         await self.db.commit()
         await self.db.refresh(article)
         return article
@@ -316,6 +322,74 @@ class KBUseCases:
         await self.db.commit()
         await self.db.refresh(tag)
         return tag
+
+    async def list_document_types(
+        self, include_inactive: bool = False
+    ) -> list[KBDocumentTypeModel]:
+        stmt = select(KBDocumentTypeModel).order_by(
+            KBDocumentTypeModel.sort_order, KBDocumentTypeModel.name
+        )
+        if not include_inactive:
+            stmt = stmt.where(KBDocumentTypeModel.is_active.is_(True))
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def create_document_type(
+        self, code: str, name: str, icon: str, color: str, sort_order: int = 0
+    ) -> KBDocumentTypeModel:
+        dt = KBDocumentTypeModel(
+            id=str(uuid.uuid4()),
+            code=code,
+            name=name,
+            icon=icon,
+            color=color,
+            sort_order=sort_order,
+            is_active=True,
+        )
+        self.db.add(dt)
+        await self.db.commit()
+        await self.db.refresh(dt)
+        return dt
+
+    async def update_document_type(
+        self,
+        document_type_id: str,
+        name: str | None = None,
+        icon: str | None = None,
+        color: str | None = None,
+        sort_order: int | None = None,
+        is_active: bool | None = None,
+    ) -> KBDocumentTypeModel:
+        result = await self.db.execute(
+            select(KBDocumentTypeModel).where(KBDocumentTypeModel.id == document_type_id)
+        )
+        dt = result.scalar_one_or_none()
+        if not dt:
+            raise NotFoundError(f"DocumentType {document_type_id} no encontrado")
+        if name is not None:
+            dt.name = name
+        if icon is not None:
+            dt.icon = icon
+        if color is not None:
+            dt.color = color
+        if sort_order is not None:
+            dt.sort_order = sort_order
+        if is_active is not None:
+            dt.is_active = is_active
+        await self.db.commit()
+        await self.db.refresh(dt)
+        return dt
+
+    async def delete_document_type(self, document_type_id: str) -> None:
+        """Soft delete: marca is_active=False para preservar integridad."""
+        result = await self.db.execute(
+            select(KBDocumentTypeModel).where(KBDocumentTypeModel.id == document_type_id)
+        )
+        dt = result.scalar_one_or_none()
+        if not dt:
+            raise NotFoundError(f"DocumentType {document_type_id} no encontrado")
+        dt.is_active = False
+        await self.db.commit()
 
     async def get_review_history(self, article_id: str) -> dict:
         """Retorna eventos cronológicos + resumen contable por tipo."""
