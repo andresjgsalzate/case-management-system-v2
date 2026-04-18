@@ -193,6 +193,20 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
         {/* Title */}
         <h1 className="text-2xl font-bold text-foreground">{article.title}</h1>
 
+        {/* Tags */}
+        {article.tags && article.tags.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {article.tags.map((t) => (
+              <span
+                key={t.id}
+                className="inline-flex items-center rounded-md bg-primary/10 text-primary text-xs px-2 py-0.5"
+              >
+                {t.name}
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* Meta row */}
         <div className="flex items-center gap-5 text-xs text-muted-foreground pb-4 border-b border-border flex-wrap">
           <span className="flex items-center gap-1">

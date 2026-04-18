@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { useCreateBlockNote, BlockNoteViewRaw } from "@blocknote/react";
+import { useCreateBlockNote } from "@blocknote/react";
+import { BlockNoteView } from "@blocknote/ariakit";
 import "@blocknote/core/fonts/inter.css";
-import "@blocknote/react/style.css";
+import "@blocknote/ariakit/style.css";
 import type { PartialBlock } from "@blocknote/core";
 
 interface KBEditorProps {
@@ -46,7 +47,7 @@ export function KBEditor({ initialContent, readOnly = false, onChange }: KBEdito
 
   return (
     <div className="rounded-md border border-border bg-background min-h-[300px] overflow-hidden">
-      <BlockNoteViewRaw editor={editor} editable={!readOnly} theme="light" />
+      <BlockNoteView editor={editor} editable={!readOnly} theme="light" />
     </div>
   );
 }

@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@blocknote/ariakit": "^0.48.1",
     "@blocknote/core": "^0.48.1",
     "@blocknote/react": "^0.48.1",
     "@radix-ui/react-dialog": "^1.1.15",
