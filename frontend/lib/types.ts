@@ -140,6 +140,8 @@ export interface KBArticle {
   created_at: string;
   updated_at: string;
   tags?: KBTag[];
+  document_type_id?: string | null;
+  document_type?: KBDocumentTypeRef | null;
 }
 
 export interface KBArticleVersion {
@@ -149,6 +151,59 @@ export interface KBArticleVersion {
   content_text: string;
   saved_by_id: string;
   created_at: string;
+}
+
+export interface KBDocumentType {
+  id: string;
+  code: string;
+  name: string;
+  icon: string;
+  color: string;
+  is_active: boolean;
+  sort_order: number;
+}
+
+export interface KBDocumentTypeRef {
+  id: string;
+  code: string;
+  name: string;
+  icon: string;
+  color: string;
+}
+
+export interface KBReviewEvent {
+  id: string;
+  article_id: string;
+  actor_id: string;
+  from_status: string;
+  to_status: string;
+  comment: string | null;
+  created_at: string;
+}
+
+export interface KBReviewHistorySummary {
+  submitted: number;
+  approved: number;
+  rejected: number;
+  published: number;
+  returned_to_draft: number;
+}
+
+export interface KBReviewHistoryResponse {
+  events: KBReviewEvent[];
+  summary: KBReviewHistorySummary;
+}
+
+export interface KBFeedbackCheck {
+  has_feedback: boolean;
+  is_helpful: boolean | null;
+}
+
+export interface KBFeedbackStats {
+  helpful_count: number;
+  not_helpful_count: number;
+  total: number;
+  helpful_percentage: number;
 }
 
 // ─── Notifications ────────────────────────────────────────────────────────────
