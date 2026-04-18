@@ -4,7 +4,6 @@ import { useState } from "react";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { Spinner } from "@/components/atoms/Spinner";
-import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import {
   useDocumentTypes,
   useCreateDocumentType,
@@ -30,8 +29,7 @@ const EMPTY_FORM: FormState = {
   sort_order: 0,
 };
 
-export default function DocumentTypesAdminPage() {
-  usePermissionGuard("document_types", "update");
+export default function KBDocumentTypesSettingsPage() {
   const { data: types = [], isLoading } = useDocumentTypes(true);
   const createMut = useCreateDocumentType();
   const updateMut = useUpdateDocumentType();
@@ -77,9 +75,9 @@ export default function DocumentTypesAdminPage() {
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Tipos de documento</h1>
+          <h1 className="text-xl font-semibold">Tipos de documento KB</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Configura los tipos de artículos del KB
+            Configura los tipos de artículos de la base de conocimiento
           </p>
         </div>
         <Button size="sm" onClick={openCreate}>
