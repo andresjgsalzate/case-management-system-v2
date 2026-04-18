@@ -187,6 +187,17 @@ async def get_versions(
     ])
 
 
+@router.get("/articles/{article_id}/review-history")
+async def get_review_history(
+    article_id: str,
+    db: DBSession,
+    current_user: CurrentUser = KBRead,
+):
+    uc = KBUseCases(db=db)
+    history = await uc.get_review_history(article_id=article_id)
+    return SuccessResponse.ok(history)
+
+
 @router.post("/articles/{article_id}/feedback")
 async def submit_feedback(
     article_id: str,
