@@ -434,6 +434,55 @@ class KBUseCases:
             "summary": summary,
         }
 
+    async def link_case_to_article(
+        self, article_id: str, case_id: str, user_id: str
+    ) -> dict:
+        """Vincula un caso a un artículo KB. Idempotente.
+
+        Devuelve la fila (existente o nueva) como dict. Si ya existe, retorna
+        la fila con su linked_at/linked_by_id original sin actualizar.
+        """
+        from backend.src.modules.knowledge_base.infrastructure.models import KBArticleCaseModel
+        from backend.src.modules.cases.infrastructure.models import CaseModel
+        from sqlalchemy.exc import IntegrityError
+
+        # Validar existencia del artículo (reusa método con filtro is_deleted)
+        await self._get_article(article_id)
+
+        # Validar existencia del caso
+        case_row = await self.db.execute(
+            select(CaseModel).where(CaseModel.id == case_id)
+        )
+        if not case_row.scalar_one_or_none():
+            raise NotFoundError(f"Caso {case_id} no encontrado")
+
+        # Intentar insertar; si ya existe, recuperar la fila existente
+        link = KBArticleCaseModel(
+            article_id=article_id,
+            case_id=case_id,
+            linked_by_id=user_id,
+            linked_at=datetime.now(timezone.utc),
+        )
+        self.db.add(link)
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            await self.db.rollback()
+            existing = await self.db.execute(
+                select(KBArticleCaseModel).where(
+                    KBArticleCaseModel.article_id == article_id,
+                    KBArticleCaseModel.case_id == case_id,
+                )
+            )
+            link = existing.scalar_one()
+
+        return {
+            "article_id": link.article_id,
+            "case_id": link.case_id,
+            "linked_at": link.linked_at.isoformat(),
+            "linked_by_id": link.linked_by_id,
+        }
+
     async def _get_article(self, article_id: str) -> KBArticleModel:
         result = await self.db.execute(
             select(KBArticleModel)
