@@ -9,6 +9,8 @@ import type {
   KBFeedbackCheck,
   KBFeedbackStats,
   ApiResponse,
+  ArticleCaseRef,
+  CaseKBArticleRef,
 } from "@/lib/types";
 
 const KB_KEY = "kb-articles";
@@ -273,5 +275,67 @@ export function useFeedbackStats(id: string) {
       return data.data;
     },
     enabled: !!id,
+  });
+}
+
+// ─── KB ↔ Cases associations ──────────────────────────────────────────────────
+
+const KB_ARTICLE_CASES_KEY = "kb-article-cases";
+const CASE_KB_ARTICLES_KEY = "case-kb-articles";
+
+export function useArticleCases(articleId: string) {
+  return useQuery({
+    queryKey: [KB_ARTICLE_CASES_KEY, articleId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ApiResponse<ArticleCaseRef[]>>(
+        `/kb/articles/${articleId}/cases`
+      );
+      return data.data ?? [];
+    },
+    enabled: !!articleId,
+  });
+}
+
+export function useLinkCaseToArticle(articleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (caseId: string) => {
+      const { data } = await apiClient.post<ApiResponse<ArticleCaseRef[]>>(
+        `/kb/articles/${articleId}/cases`,
+        { case_id: caseId }
+      );
+      return data.data;
+    },
+    onSuccess: (_data, caseId) => {
+      qc.invalidateQueries({ queryKey: [KB_ARTICLE_CASES_KEY, articleId] });
+      qc.invalidateQueries({ queryKey: [CASE_KB_ARTICLES_KEY, caseId] });
+    },
+  });
+}
+
+export function useUnlinkCaseFromArticle(articleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (caseId: string) => {
+      await apiClient.delete(`/kb/articles/${articleId}/cases/${caseId}`);
+      return caseId;
+    },
+    onSuccess: (caseId) => {
+      qc.invalidateQueries({ queryKey: [KB_ARTICLE_CASES_KEY, articleId] });
+      qc.invalidateQueries({ queryKey: [CASE_KB_ARTICLES_KEY, caseId] });
+    },
+  });
+}
+
+export function useCaseKBArticles(caseId: string) {
+  return useQuery({
+    queryKey: [CASE_KB_ARTICLES_KEY, caseId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ApiResponse<CaseKBArticleRef[]>>(
+        `/cases/${caseId}/kb-articles`
+      );
+      return data.data ?? [];
+    },
+    enabled: !!caseId,
   });
 }

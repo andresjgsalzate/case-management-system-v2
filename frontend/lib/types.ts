@@ -313,3 +313,21 @@ export interface PaginatedResponse<T> {
   page?: number;
   page_size?: number;
 }
+
+// ─── KB ↔ Cases associations ──────────────────────────────────────────────────
+
+export interface ArticleCaseRef {
+  case_id: string;
+  case_number: string;
+  case_title: string;
+  linked_at: string;
+  can_access: boolean;
+}
+
+export interface CaseKBArticleRef {
+  id: string;
+  title: string;
+  status: KBStatus;
+  document_type: KBDocumentType | null;
+  linked_at: string;
+}
