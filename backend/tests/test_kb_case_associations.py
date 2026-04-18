@@ -18,3 +18,16 @@ def test_kb_article_case_model_has_case_id_index():
         for col in idx.columns:
             indexed_col_names.add(col.name)
     assert "case_id" in indexed_col_names
+
+
+def test_link_case_to_article_method_exists():
+    from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
+    assert hasattr(KBUseCases, "link_case_to_article")
+
+
+def test_link_case_to_article_signature():
+    import inspect
+    from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
+    sig = inspect.signature(KBUseCases.link_case_to_article)
+    params = set(sig.parameters.keys())
+    assert params == {"self", "article_id", "case_id", "user_id"}
