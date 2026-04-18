@@ -9,6 +9,7 @@ import { Input } from "@/components/atoms/Input";
 import { FormField } from "@/components/molecules/FormField";
 import { Spinner } from "@/components/atoms/Spinner";
 import { KBEditor } from "@/components/organisms/KBEditor";
+import { TagMultiSelect } from "@/components/molecules/TagMultiSelect";
 import { useKBArticle, useUpdateKBArticle } from "@/hooks/useKB";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 
@@ -24,9 +25,13 @@ export default function EditKBArticlePage({ params }: { params: { id: string } }
     content_text: string;
   } | null>(null);
   const [error, setError] = useState("");
+  const [tagIds, setTagIds] = useState<string[]>([]);
 
   useEffect(() => {
-    if (article) setTitle(article.title);
+    if (article) {
+      setTitle(article.title);
+      setTagIds(article.tags?.map((t) => t.id) ?? []);
+    }
   }, [article]);
 
   // Redirigir si el artículo no es editable
@@ -43,6 +48,7 @@ export default function EditKBArticlePage({ params }: { params: { id: string } }
     try {
       await updateArticle.mutateAsync({
         title: title.trim(),
+        tag_ids: tagIds,
         ...(editorValue && {
           content_json: editorValue.content_json,
           content_text: editorValue.content_text,
@@ -104,6 +110,11 @@ export default function EditKBArticlePage({ params }: { params: { id: string } }
               onChange={setEditorValue}
             />
           </FormField>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Tags</label>
+            <TagMultiSelect value={tagIds} onChange={setTagIds} />
+          </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 

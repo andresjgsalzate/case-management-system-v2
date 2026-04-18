@@ -8,6 +8,7 @@ import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
 import { FormField } from "@/components/molecules/FormField";
 import { KBEditor } from "@/components/organisms/KBEditor";
+import { TagMultiSelect } from "@/components/molecules/TagMultiSelect";
 import { useCreateKBArticle } from "@/hooks/useKB";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 
@@ -20,6 +21,7 @@ export default function NewKBArticlePage() {
     content_text: string;
   } | null>(null);
   const [error, setError] = useState("");
+  const [tagIds, setTagIds] = useState<string[]>([]);
   const createArticle = useCreateKBArticle();
 
   async function handleSubmit(e: React.FormEvent) {
@@ -32,6 +34,7 @@ export default function NewKBArticlePage() {
         title: title.trim(),
         content_json: editorValue.content_json,
         content_text: editorValue.content_text,
+        tag_ids: tagIds,
       });
       router.push(`/kb/${article!.id}`);
     } catch {
@@ -69,6 +72,11 @@ export default function NewKBArticlePage() {
           <FormField label="Contenido" htmlFor="kb-content" required>
             <KBEditor onChange={setEditorValue} />
           </FormField>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Tags</label>
+            <TagMultiSelect value={tagIds} onChange={setTagIds} />
+          </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 
