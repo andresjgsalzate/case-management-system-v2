@@ -85,3 +85,9 @@ def test_router_has_article_cases_endpoints():
     assert "POST" in methods_by_path["/api/v1/kb/articles/{article_id}/cases"]
     assert "/api/v1/kb/articles/{article_id}/cases/{case_id}" in paths
     assert "DELETE" in methods_by_path["/api/v1/kb/articles/{article_id}/cases/{case_id}"]
+
+
+def test_cases_router_has_kb_articles_endpoint():
+    from backend.src.modules.cases import router as cases_router
+    paths = [getattr(r, "path", "") for r in cases_router.router.routes]
+    assert "/api/v1/cases/{case_id}/kb-articles" in paths
