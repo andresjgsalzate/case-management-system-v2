@@ -264,6 +264,33 @@ class KBUseCases:
         await self.db.refresh(fb)
         return fb
 
+    async def check_feedback(self, article_id: str, user_id: str) -> dict:
+        """Retorna si el usuario ya dio feedback y cuál fue."""
+        result = await self.db.execute(
+            select(KBFeedbackModel).where(
+                KBFeedbackModel.article_id == article_id,
+                KBFeedbackModel.user_id == user_id,
+            )
+        )
+        fb = result.scalar_one_or_none()
+        if fb is None:
+            return {"has_feedback": False, "is_helpful": None}
+        return {"has_feedback": True, "is_helpful": fb.is_helpful}
+
+    async def get_feedback_stats(self, article_id: str) -> dict:
+        """Retorna contadores agregados para el artículo."""
+        article = await self._get_article(article_id)
+        helpful = article.helpful_count
+        not_helpful = article.not_helpful_count
+        total = helpful + not_helpful
+        percentage = 0.0 if total == 0 else round((helpful / total) * 100, 1)
+        return {
+            "helpful_count": helpful,
+            "not_helpful_count": not_helpful,
+            "total": total,
+            "helpful_percentage": percentage,
+        }
+
     async def get_versions(self, article_id: str) -> list[KBArticleVersionModel]:
         result = await self.db.execute(
             select(KBArticleVersionModel)
