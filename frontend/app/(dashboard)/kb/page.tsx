@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/molecules/StatusBadge";
 import { DocumentTypeBadge } from "@/components/molecules/DocumentTypeBadge";
 import { Spinner } from "@/components/atoms/Spinner";
 import { useKBArticles, useKBTags } from "@/hooks/useKB";
+import { PendingReviewBanner } from "@/components/organisms/PendingReviewBanner";
 import { formatDate, truncate } from "@/lib/utils";
 import type { KBStatus } from "@/lib/types";
 
@@ -42,6 +43,7 @@ export default function KBPage() {
 
   return (
     <div className="flex flex-col gap-5">
+      <PendingReviewBanner />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Base de Conocimiento</h1>

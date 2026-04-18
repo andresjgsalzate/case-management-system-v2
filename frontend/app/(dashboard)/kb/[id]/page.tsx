@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ChevronLeft, Eye, ThumbsUp, ThumbsDown,
-  Calendar, Star, Pencil, ChevronDown, ChevronUp, Clock,
+  Calendar, Star, Pencil, ChevronDown, ChevronUp, Clock, History,
 } from "lucide-react";
 import {
   useKBArticle, useTransitionKBArticle, useSubmitKBFeedback,
@@ -16,6 +16,7 @@ import { DocumentTypeBadge } from "@/components/molecules/DocumentTypeBadge";
 import { Spinner } from "@/components/atoms/Spinner";
 import { Button } from "@/components/atoms/Button";
 import { KBEditor } from "@/components/organisms/KBEditor";
+import { ReviewHistoryDrawer } from "@/components/organisms/ReviewHistoryDrawer";
 import { formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth.store";
 import type { KBStatus, UserPermission } from "@/lib/types";
@@ -45,6 +46,7 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
   const [showVersions, setShowVersions] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [actionError, setActionError] = useState("");
 
   async function handleTransition(to: KBStatus, comment?: string) {
@@ -113,6 +115,18 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
             >
               <Star className="h-4 w-4 text-amber-400" />
             </button>
+
+            {/* Review history drawer trigger (managers) */}
+            {canManage && (
+              <button
+                type="button"
+                onClick={() => setShowHistory(true)}
+                className="h-8 w-8 flex items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"
+                title="Historial de revisión"
+              >
+                <History className="h-4 w-4 text-muted-foreground" />
+              </button>
+            )}
 
             {/* Edit button (draft or rejected) */}
             {isEditable && (
@@ -264,6 +278,13 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
           )}
         </div>
       )}
+
+      {/* Review history drawer */}
+      <ReviewHistoryDrawer
+        articleId={params.id}
+        open={showHistory}
+        onClose={() => setShowHistory(false)}
+      />
 
       {/* Reject modal */}
       {showRejectModal && (
