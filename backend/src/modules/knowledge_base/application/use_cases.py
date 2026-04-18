@@ -497,6 +497,39 @@ class KBUseCases:
         )
         await self.db.commit()
 
+    async def list_article_cases(
+        self, article_id: str, can_access_cases: bool
+    ) -> list[dict]:
+        """Devuelve los casos vinculados a un artículo, enriquecidos.
+
+        `can_access_cases` viene del router tras verificar el permiso cases:read.
+        Se propaga igual a todas las filas — hoy el chequeo es global. Si en
+        el futuro se introduce scope por caso/equipo, este es el punto único
+        de cambio.
+        """
+        from backend.src.modules.knowledge_base.infrastructure.models import KBArticleCaseModel
+        from backend.src.modules.cases.infrastructure.models import CaseModel
+
+        await self._get_article(article_id)  # valida existencia
+
+        result = await self.db.execute(
+            select(KBArticleCaseModel, CaseModel)
+            .join(CaseModel, CaseModel.id == KBArticleCaseModel.case_id)
+            .where(KBArticleCaseModel.article_id == article_id)
+            .order_by(KBArticleCaseModel.linked_at.desc())
+        )
+        rows = result.all()
+        return [
+            {
+                "case_id": link.case_id,
+                "case_number": case.case_number,
+                "case_title": case.title,
+                "linked_at": link.linked_at.isoformat(),
+                "can_access": can_access_cases,
+            }
+            for link, case in rows
+        ]
+
     async def _get_article(self, article_id: str) -> KBArticleModel:
         result = await self.db.execute(
             select(KBArticleModel)

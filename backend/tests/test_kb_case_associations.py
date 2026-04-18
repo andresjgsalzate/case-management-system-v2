@@ -44,3 +44,16 @@ def test_unlink_case_from_article_signature():
     sig = inspect.signature(KBUseCases.unlink_case_from_article)
     params = set(sig.parameters.keys())
     assert params == {"self", "article_id", "case_id"}
+
+
+def test_list_article_cases_method_exists():
+    from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
+    assert hasattr(KBUseCases, "list_article_cases")
+
+
+def test_list_article_cases_signature():
+    import inspect
+    from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
+    sig = inspect.signature(KBUseCases.list_article_cases)
+    params = set(sig.parameters.keys())
+    assert params == {"self", "article_id", "can_access_cases"}
