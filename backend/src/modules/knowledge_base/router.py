@@ -75,6 +75,7 @@ async def create_tag(
 async def list_articles(
     db: DBSession,
     status: str | None = Query(default=None),
+    tag_slug: str | None = Query(default=None),
     limit: int = Query(default=20, le=100),
     offset: int = Query(default=0),
     current_user: CurrentUser = KBRead,
@@ -83,6 +84,7 @@ async def list_articles(
     articles = await uc.list_articles(
         status=status,
         tenant_id=current_user.tenant_id,
+        tag_slug=tag_slug,
         limit=limit,
         offset=offset,
     )

@@ -139,6 +139,7 @@ class KBUseCases:
         self,
         status: str | None = None,
         tenant_id: str | None = None,
+        tag_slug: str | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> list[KBArticleModel]:
@@ -151,9 +152,15 @@ class KBUseCases:
             stmt = stmt.where(KBArticleModel.status == status)
         if tenant_id:
             stmt = stmt.where(KBArticleModel.tenant_id == tenant_id)
+        if tag_slug:
+            stmt = (
+                stmt.join(KBArticleTagModel, KBArticleTagModel.article_id == KBArticleModel.id)
+                    .join(KBTagModel, KBTagModel.id == KBArticleTagModel.tag_id)
+                    .where(KBTagModel.slug == tag_slug)
+            )
         stmt = stmt.order_by(KBArticleModel.updated_at.desc()).limit(limit).offset(offset)
         result = await self.db.execute(stmt)
-        return list(result.scalars().all())
+        return list(result.scalars().unique().all())
 
     async def get_article(self, article_id: str) -> KBArticleModel:
         article = await self._get_article(article_id)
