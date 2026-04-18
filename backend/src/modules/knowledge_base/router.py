@@ -11,6 +11,10 @@ router = APIRouter(prefix="/api/v1/kb", tags=["knowledge_base"])
 KBRead = Depends(PermissionChecker("knowledge_base", "read"))
 KBCreate = Depends(PermissionChecker("knowledge_base", "create"))
 KBManage = Depends(PermissionChecker("knowledge_base", "manage"))
+DocTypeRead = Depends(PermissionChecker("document_types", "read"))
+DocTypeCreate = Depends(PermissionChecker("document_types", "create"))
+DocTypeUpdate = Depends(PermissionChecker("document_types", "update"))
+DocTypeDelete = Depends(PermissionChecker("document_types", "delete"))
 
 
 class TagCreateDTO(BaseModel):
@@ -23,6 +27,7 @@ class ArticleCreateDTO(BaseModel):
     content_json: dict[str, Any]
     content_text: str
     tag_ids: list[str] = []
+    document_type_id: str | None = None
 
 
 class ArticleUpdateDTO(BaseModel):
@@ -30,6 +35,7 @@ class ArticleUpdateDTO(BaseModel):
     content_json: dict[str, Any] | None = None
     content_text: str | None = None
     tag_ids: list[str] | None = None
+    document_type_id: str | None = None
 
 
 class TransitionDTO(BaseModel):
@@ -40,6 +46,22 @@ class TransitionDTO(BaseModel):
 class FeedbackDTO(BaseModel):
     is_helpful: bool
     comment: str | None = None
+
+
+class DocumentTypeCreateDTO(BaseModel):
+    code: str
+    name: str
+    icon: str
+    color: str
+    sort_order: int = 0
+
+
+class DocumentTypeUpdateDTO(BaseModel):
+    name: str | None = None
+    icon: str | None = None
+    color: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
 
 
 # ── Tags ──────────────────────────────────────────────────────────────────────
@@ -105,6 +127,7 @@ async def create_article(
         created_by_id=current_user.user_id,
         tenant_id=current_user.tenant_id,
         tag_ids=body.tag_ids or None,
+        document_type_id=body.document_type_id,
     )
     return SuccessResponse.ok(_serialize_article(article))
 
@@ -145,6 +168,7 @@ async def update_article(
         content_json=body.content_json,
         content_text=body.content_text,
         tag_ids=body.tag_ids,
+        document_type_id=body.document_type_id,
     )
     return SuccessResponse.ok(_serialize_article(article))
 
@@ -260,7 +284,88 @@ async def get_my_favorites(
     return SuccessResponse.ok([_serialize_article(a) for a in articles])
 
 
+# ── Document Types ────────────────────────────────────────────────────────────
+
+def _serialize_document_type(dt) -> dict:
+    return {
+        "id": dt.id,
+        "code": dt.code,
+        "name": dt.name,
+        "icon": dt.icon,
+        "color": dt.color,
+        "is_active": dt.is_active,
+        "sort_order": dt.sort_order,
+    }
+
+
+@router.get("/document-types", response_model=SuccessResponse[list[dict]])
+async def list_document_types(
+    db: DBSession,
+    include_inactive: bool = Query(default=False),
+    current_user: CurrentUser = DocTypeRead,
+):
+    uc = KBUseCases(db=db)
+    types = await uc.list_document_types(include_inactive=include_inactive)
+    return SuccessResponse.ok([_serialize_document_type(t) for t in types])
+
+
+@router.post("/document-types", status_code=201)
+async def create_document_type(
+    body: DocumentTypeCreateDTO,
+    db: DBSession,
+    current_user: CurrentUser = DocTypeCreate,
+):
+    uc = KBUseCases(db=db)
+    dt = await uc.create_document_type(
+        code=body.code,
+        name=body.name,
+        icon=body.icon,
+        color=body.color,
+        sort_order=body.sort_order,
+    )
+    return SuccessResponse.ok(_serialize_document_type(dt))
+
+
+@router.patch("/document-types/{document_type_id}")
+async def update_document_type(
+    document_type_id: str,
+    body: DocumentTypeUpdateDTO,
+    db: DBSession,
+    current_user: CurrentUser = DocTypeUpdate,
+):
+    uc = KBUseCases(db=db)
+    dt = await uc.update_document_type(
+        document_type_id=document_type_id,
+        name=body.name,
+        icon=body.icon,
+        color=body.color,
+        sort_order=body.sort_order,
+        is_active=body.is_active,
+    )
+    return SuccessResponse.ok(_serialize_document_type(dt))
+
+
+@router.delete("/document-types/{document_type_id}", status_code=204)
+async def delete_document_type(
+    document_type_id: str,
+    db: DBSession,
+    current_user: CurrentUser = DocTypeDelete,
+):
+    uc = KBUseCases(db=db)
+    await uc.delete_document_type(document_type_id=document_type_id)
+    return None
+
+
 def _serialize_article(a) -> dict:
+    doc_type = None
+    if a.document_type_id is not None and getattr(a, "document_type", None):
+        doc_type = {
+            "id": a.document_type.id,
+            "code": a.document_type.code,
+            "name": a.document_type.name,
+            "icon": a.document_type.icon,
+            "color": a.document_type.color,
+        }
     return {
         "id": a.id,
         "title": a.title,
@@ -276,4 +381,6 @@ def _serialize_article(a) -> dict:
         "not_helpful_count": a.not_helpful_count,
         "created_at": a.created_at.isoformat(),
         "updated_at": a.updated_at.isoformat(),
+        "document_type_id": a.document_type_id,
+        "document_type": doc_type,
     }
