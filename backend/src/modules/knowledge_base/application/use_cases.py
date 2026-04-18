@@ -485,6 +485,18 @@ class KBUseCases:
             "linked_by_id": link.linked_by_id,
         }
 
+    async def unlink_case_from_article(self, article_id: str, case_id: str) -> None:
+        """Elimina la relación artículo↔caso. Idempotente (si no existe, no es error)."""
+        from backend.src.modules.knowledge_base.infrastructure.models import KBArticleCaseModel
+
+        await self.db.execute(
+            delete(KBArticleCaseModel).where(
+                KBArticleCaseModel.article_id == article_id,
+                KBArticleCaseModel.case_id == case_id,
+            )
+        )
+        await self.db.commit()
+
     async def _get_article(self, article_id: str) -> KBArticleModel:
         result = await self.db.execute(
             select(KBArticleModel)
