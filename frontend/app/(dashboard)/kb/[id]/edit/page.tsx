@@ -10,6 +10,7 @@ import { FormField } from "@/components/molecules/FormField";
 import { Spinner } from "@/components/atoms/Spinner";
 import { KBEditor } from "@/components/organisms/KBEditor";
 import { TagMultiSelect } from "@/components/molecules/TagMultiSelect";
+import { DocumentTypeSelect } from "@/components/molecules/DocumentTypeSelect";
 import { useKBArticle, useUpdateKBArticle } from "@/hooks/useKB";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 
@@ -26,11 +27,13 @@ export default function EditKBArticlePage({ params }: { params: { id: string } }
   } | null>(null);
   const [error, setError] = useState("");
   const [tagIds, setTagIds] = useState<string[]>([]);
+  const [documentTypeId, setDocumentTypeId] = useState<string | null>(null);
 
   useEffect(() => {
     if (article) {
       setTitle(article.title);
       setTagIds(article.tags?.map((t) => t.id) ?? []);
+      setDocumentTypeId(article.document_type_id ?? null);
     }
   }, [article]);
 
@@ -49,6 +52,7 @@ export default function EditKBArticlePage({ params }: { params: { id: string } }
       await updateArticle.mutateAsync({
         title: title.trim(),
         tag_ids: tagIds,
+        document_type_id: documentTypeId,
         ...(editorValue && {
           content_json: editorValue.content_json,
           content_text: editorValue.content_text,
@@ -110,6 +114,11 @@ export default function EditKBArticlePage({ params }: { params: { id: string } }
               onChange={setEditorValue}
             />
           </FormField>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Tipo de documento</label>
+            <DocumentTypeSelect value={documentTypeId} onChange={setDocumentTypeId} />
+          </div>
 
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium">Tags</label>
