@@ -24,6 +24,7 @@ class RoleUseCases:
             tenant_id=tenant_id,
             name=dto.name,
             description=dto.description,
+            level=dto.level,
         )
         self.db.add(role)
         await self.db.flush()
@@ -66,6 +67,8 @@ class RoleUseCases:
             role.name = dto.name
         if dto.description is not None:
             role.description = dto.description
+        if dto.level is not None:
+            role.level = dto.level
         await self.db.commit()
         return await self.get_role(role_id)
 
@@ -104,6 +107,7 @@ class RoleUseCases:
             name=model.name,
             description=model.description,
             created_at=model.created_at.isoformat(),
+            level=model.level,
             permissions=[
                 PermissionDTO(module=p.module, action=p.action, scope=p.scope)
                 for p in (model.permissions or [])

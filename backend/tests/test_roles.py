@@ -67,3 +67,19 @@ def test_role_response_dto_carries_level():
         created_at="2026-04-18T00:00:00Z", permissions=[], level=2,
     )
     assert r.level == 2
+
+
+def test_role_use_cases_to_dto_includes_level():
+    from backend.src.modules.roles.infrastructure.models import RoleModel
+    from backend.src.modules.roles.application.use_cases import RoleUseCases
+    from backend.src.modules.users.infrastructure.models import UserModel  # noqa: F401 — registers UserModel mapper
+    from backend.src.modules.auth.infrastructure.models import UserSessionModel  # noqa: F401 — registers UserSessionModel mapper
+    from datetime import datetime, timezone
+    uc = RoleUseCases(db=None)  # type: ignore[arg-type]
+    model = RoleModel(
+        id="r1", name="Agent", description=None, tenant_id=None,
+        created_at=datetime.now(timezone.utc), level=2,
+    )
+    model.permissions = []
+    dto = uc._to_dto(model)
+    assert dto.level == 2
