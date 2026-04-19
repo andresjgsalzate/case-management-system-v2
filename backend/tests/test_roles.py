@@ -1,5 +1,5 @@
 import pytest
-from backend.src.modules.roles.application.dtos import CreateRoleDTO, PermissionDTO
+from backend.src.modules.roles.application.dtos import CreateRoleDTO, PermissionDTO, UpdateRoleDTO
 from backend.src.modules.roles.domain.entities import Role, Permission
 
 
@@ -36,3 +36,32 @@ def test_create_role_dto_with_permissions():
 def test_permission_dto_default_scope():
     perm = PermissionDTO(module="users", action="read")
     assert perm.scope == "own"
+
+
+def test_create_role_dto_defaults_level_to_1():
+    dto = CreateRoleDTO(name="Agent")
+    assert dto.level == 1
+
+
+def test_create_role_dto_accepts_custom_level():
+    dto = CreateRoleDTO(name="N2 Agent", level=2)
+    assert dto.level == 2
+
+
+def test_create_role_dto_rejects_negative_level():
+    with pytest.raises(Exception):
+        CreateRoleDTO(name="Bad", level=-1)
+
+
+def test_update_role_dto_has_optional_level():
+    dto = UpdateRoleDTO(level=3)
+    assert dto.level == 3
+
+
+def test_role_response_dto_carries_level():
+    from backend.src.modules.roles.application.dtos import RoleResponseDTO
+    r = RoleResponseDTO(
+        id="r1", name="Agent", description=None,
+        created_at="2026-04-18T00:00:00Z", permissions=[], level=2,
+    )
+    assert r.level == 2
