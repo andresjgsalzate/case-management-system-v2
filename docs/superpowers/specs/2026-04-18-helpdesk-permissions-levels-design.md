@@ -66,6 +66,7 @@ Semántica: representa el nivel *actualmente responsable* del caso. Solo un `tra
 ```sql
 CREATE TABLE case_transfers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NULL REFERENCES tenants(id),
     case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
     from_user_id UUID NULL REFERENCES users(id),
     from_level INTEGER NOT NULL,
@@ -79,9 +80,12 @@ CREATE TABLE case_transfers (
     CONSTRAINT transfers_reason_nonempty CHECK (length(trim(reason)) > 0)
 );
 CREATE INDEX idx_case_transfers_case_id ON case_transfers(case_id, created_at DESC);
+CREATE INDEX idx_case_transfers_tenant_id ON case_transfers(tenant_id);
 ```
 
 El `transfer_type` lo calcula el backend — la UI nunca lo pide. Se retiene para auditoría y reporting.
+
+`tenant_id` se denormaliza (como en `case_attachments`, `case_notes`, `case_todos`, `resolution_requests`) para permitir filtros RLS/RBAC directos sin join a `cases`. El backend lo popula desde `case.tenant_id` en el insert.
 
 ### 3.4 Permission scopes vigentes
 
@@ -191,6 +195,7 @@ def upgrade() -> None:
     op.create_table(
         "case_transfers",
         sa.Column("id", UUID(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column("tenant_id", UUID(), sa.ForeignKey("tenants.id"), nullable=True),
         sa.Column("case_id", UUID(), sa.ForeignKey("cases.id", ondelete="CASCADE"), nullable=False),
         sa.Column("from_user_id", UUID(), sa.ForeignKey("users.id"), nullable=True),
         sa.Column("from_level", sa.Integer(), nullable=False),
@@ -204,6 +209,7 @@ def upgrade() -> None:
         sa.CheckConstraint("length(trim(reason)) > 0", name="transfers_reason_nonempty"),
     )
     op.create_index("idx_case_transfers_case_id", "case_transfers", ["case_id", "created_at"])
+    op.create_index("idx_case_transfers_tenant_id", "case_transfers", ["tenant_id"])
 ```
 
 **Backfill:** roles existentes quedan con `level=1` — correcto para roles resolutores. El admin debe ajustar manualmente el rol *reporter* a `level=0` tras la migración (nota para release notes).

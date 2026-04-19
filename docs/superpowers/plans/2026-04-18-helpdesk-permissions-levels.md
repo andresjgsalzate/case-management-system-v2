@@ -131,6 +131,7 @@ def upgrade() -> None:
     op.create_table(
         "case_transfers",
         sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("tenant_id", sa.String(36), sa.ForeignKey("tenants.id"), nullable=True),
         sa.Column("case_id", sa.String(36), sa.ForeignKey("cases.id", ondelete="CASCADE"), nullable=False),
         sa.Column("from_user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=True),
         sa.Column("from_level", sa.Integer(), nullable=False),
@@ -159,9 +160,15 @@ def upgrade() -> None:
         "case_transfers",
         ["case_id", "created_at"],
     )
+    op.create_index(
+        "idx_case_transfers_tenant_id",
+        "case_transfers",
+        ["tenant_id"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("idx_case_transfers_tenant_id", table_name="case_transfers")
     op.drop_index("idx_case_transfers_case_id", table_name="case_transfers")
     op.drop_table("case_transfers")
 
@@ -1451,7 +1458,7 @@ def test_case_transfer_model_columns():
     from backend.src.modules.cases.infrastructure.transfer_models import CaseTransferModel
     cols = {c.name for c in CaseTransferModel.__table__.columns}
     expected = {
-        "id", "case_id", "from_user_id", "from_level",
+        "id", "tenant_id", "case_id", "from_user_id", "from_level",
         "to_user_id", "to_team_id", "to_level",
         "transfer_type", "reason", "created_at",
     }
@@ -1485,6 +1492,7 @@ class CaseTransferModel(Base):
     __tablename__ = "case_transfers"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=True)
     case_id: Mapped[str] = mapped_column(String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False)
     from_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     from_level: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1681,6 +1689,7 @@ class CaseTransferUseCases:
 
         transfer = CaseTransferModel(
             id=str(uuid.uuid4()),
+            tenant_id=case.tenant_id,
             case_id=case.id,
             from_user_id=case.assigned_to,
             from_level=from_level,
