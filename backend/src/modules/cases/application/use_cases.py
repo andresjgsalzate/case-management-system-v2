@@ -24,6 +24,7 @@ from backend.src.core.exceptions import NotFoundError, ValidationError, Forbidde
 from backend.src.core.events.bus import event_bus
 from backend.src.core.events.base import BaseEvent
 from backend.src.core.permissions.case_queries import filter_cases_by_permission
+from backend.src.core.permissions.case_permissions import check_case_action
 
 
 class CaseUseCases:
@@ -130,12 +131,14 @@ class CaseUseCases:
         return [self._to_dto(c) for c in result.scalars().all()], total
 
     async def update_case(
-        self, case_id: str, dto: UpdateCaseDTO, actor_id: str, tenant_id: str
+        self, case_id: str, dto: UpdateCaseDTO, actor_id: str, tenant_id: str, user=None
     ) -> CaseResponseDTO:
         from backend.src.modules.users.infrastructure.models import UserModel
         case = await self.db.get(CaseModel, case_id)
         if not case:
             raise NotFoundError(f"Case {case_id} not found")
+        if user is not None and not check_case_action(user, case, "update"):
+            raise ForbiddenError("Cannot update this case")
         assigned_to = case.assigned_to
         old_priority_id = case.priority_id
         updated_fields = dto.model_dump(exclude_none=True)
@@ -174,7 +177,7 @@ class CaseUseCases:
         return await self.get_case(case_id)
 
     async def transition_case(
-        self, case_id: str, dto: TransitionCaseDTO, actor_id: str, tenant_id: str
+        self, case_id: str, dto: TransitionCaseDTO, actor_id: str, tenant_id: str, user=None
     ) -> CaseResponseDTO:
         from backend.src.modules.users.infrastructure.models import UserModel
         from backend.src.modules.assignment.infrastructure.models import CaseAssignmentModel
@@ -189,6 +192,8 @@ class CaseUseCases:
         case = result.scalar_one_or_none()
         if not case:
             raise NotFoundError(f"Case {case_id} not found")
+        if user is not None and not check_case_action(user, case, "transition"):
+            raise ForbiddenError("Cannot transition this case")
 
         target_status = await self.db.get(CaseStatusModel, dto.target_status_id)
         if not target_status:
