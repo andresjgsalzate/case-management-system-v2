@@ -21,6 +21,7 @@ class CurrentUser:
     scope: str = "own"
     is_global: bool = False
     role_level: int = 1
+    team_id: str | None = None
 
 
 class PermissionChecker:
@@ -82,6 +83,12 @@ class PermissionChecker:
         is_global = bool(role_row.is_global) if role_row else False
         role_level = int(role_row.level) if role_row else 1
 
+        from backend.src.modules.users.infrastructure.models import UserModel
+        user_row = await db.execute(
+            select(UserModel.team_id).where(UserModel.id == user_id)
+        )
+        team_id = user_row.scalar_one_or_none()
+
         from backend.src.modules.audit.application.middleware import set_current_actor
         set_current_actor(user_id)
 
@@ -93,6 +100,7 @@ class PermissionChecker:
             scope=permission.scope,
             is_global=is_global,
             role_level=int(token_role_level) if token_role_level is not None else role_level,
+            team_id=team_id,
         )
 
 

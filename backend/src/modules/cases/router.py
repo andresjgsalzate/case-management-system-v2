@@ -50,13 +50,10 @@ async def list_cases(
     status_id: str | None = Query(default=None),
     priority_id: str | None = Query(default=None),
     assigned_to: str | None = Query(default=None),
+    queue: str = Query(default="all", pattern="^(mine|team|all)$"),
 ):
     uc = CaseUseCases(db)
-    filters = {
-        "status_id": status_id,
-        "priority_id": priority_id,
-        "assigned_to": assigned_to,
-    }
+    filters = {"status_id": status_id, "priority_id": priority_id, "assigned_to": assigned_to}
     cases, total = await uc.list_cases(
         current_user.tenant_id,
         current_user.user_id,
@@ -64,6 +61,8 @@ async def list_cases(
         pagination.page,
         pagination.page_size,
         filters,
+        user=current_user,
+        queue=queue,
     )
     return PaginatedResponse.ok(cases, pagination.page, pagination.page_size, total)
 
