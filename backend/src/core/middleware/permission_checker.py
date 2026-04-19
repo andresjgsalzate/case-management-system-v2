@@ -53,6 +53,7 @@ class PermissionChecker:
         role_id = payload.get("role_id")
         tenant_id = payload.get("tenant_id", "default")
         email = payload.get("email", "")
+        token_role_level = payload.get("role_level")
 
         if not user_id:
             raise UnauthorizedError("Invalid token payload")
@@ -91,7 +92,7 @@ class PermissionChecker:
             tenant_id=tenant_id,
             scope=permission.scope,
             is_global=is_global,
-            role_level=role_level,
+            role_level=int(token_role_level) if token_role_level is not None else role_level,
         )
 
 
