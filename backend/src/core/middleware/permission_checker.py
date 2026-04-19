@@ -20,6 +20,7 @@ class CurrentUser:
     tenant_id: str
     scope: str = "own"
     is_global: bool = False
+    role_level: int = 1
 
 
 class PermissionChecker:
@@ -74,9 +75,11 @@ class PermissionChecker:
             )
 
         role_result = await db.execute(
-            select(RoleModel.is_global).where(RoleModel.id == role_id)
+            select(RoleModel.is_global, RoleModel.level).where(RoleModel.id == role_id)
         )
-        is_global = role_result.scalar_one_or_none() or False
+        role_row = role_result.one_or_none()
+        is_global = bool(role_row.is_global) if role_row else False
+        role_level = int(role_row.level) if role_row else 1
 
         from backend.src.modules.audit.application.middleware import set_current_actor
         set_current_actor(user_id)
@@ -88,6 +91,7 @@ class PermissionChecker:
             tenant_id=tenant_id,
             scope=permission.scope,
             is_global=is_global,
+            role_level=role_level,
         )
 
 
