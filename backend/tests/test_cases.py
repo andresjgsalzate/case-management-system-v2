@@ -41,3 +41,17 @@ def test_list_cases_uses_filter_cases_by_permission(monkeypatch):
     import inspect
     source = inspect.getsource(uc_mod)
     assert "filter_cases_by_permission" in source
+
+
+def test_update_case_calls_check_case_action(monkeypatch):
+    import backend.src.modules.cases.application.use_cases as uc_mod
+    import inspect
+    source = inspect.getsource(uc_mod.CaseUseCases.update_case)
+    assert "check_case_action" in source
+
+
+def test_transition_case_calls_check_case_action(monkeypatch):
+    import backend.src.modules.cases.application.use_cases as uc_mod
+    import inspect
+    source = inspect.getsource(uc_mod.CaseUseCases.transition_case)
+    assert "check_case_action" in source

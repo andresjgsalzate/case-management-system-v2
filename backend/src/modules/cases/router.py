@@ -97,7 +97,7 @@ async def update_case(
 ):
     uc = CaseUseCases(db)
     return SuccessResponse.ok(
-        await uc.update_case(case_id, dto, current_user.user_id, current_user.tenant_id)
+        await uc.update_case(case_id, dto, current_user.user_id, current_user.tenant_id, user=current_user)
     )
 
 
@@ -110,7 +110,7 @@ async def transition_case(
 ):
     uc = CaseUseCases(db)
     return SuccessResponse.ok(
-        await uc.transition_case(case_id, dto, current_user.user_id, current_user.tenant_id)
+        await uc.transition_case(case_id, dto, current_user.user_id, current_user.tenant_id, user=current_user)
     )
 
 
