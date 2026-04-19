@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import String, DateTime, ForeignKey, UniqueConstraint, Integer, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.src.core.database import Base
 
@@ -12,6 +12,9 @@ class RoleModel(Base):
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    level: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     is_global: Mapped[bool] = mapped_column(default=False, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
