@@ -38,3 +38,12 @@ def test_all_models_have_correct_tablenames():
     assert TeamModel.__tablename__ == "teams"
     assert TeamMemberModel.__tablename__ == "team_members"
     assert UserSessionModel.__tablename__ == "user_sessions"
+
+
+def test_role_model_has_level_column():
+    from backend.src.modules.roles.infrastructure.models import RoleModel
+    col = RoleModel.__table__.c.level
+    assert col is not None
+    assert str(col.type).upper().startswith("INTEGER")
+    assert col.nullable is False
+    assert col.server_default.arg.text == "1"
