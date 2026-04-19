@@ -49,11 +49,13 @@ def test_create_role_dto_accepts_custom_level():
 
 
 def test_create_role_dto_rejects_negative_level():
-    with pytest.raises(Exception):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
         CreateRoleDTO(name="Bad", level=-1)
 
 
 def test_update_role_dto_has_optional_level():
+    assert UpdateRoleDTO().level is None
     dto = UpdateRoleDTO(level=3)
     assert dto.level == 3
 

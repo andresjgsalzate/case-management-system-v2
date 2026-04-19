@@ -26,7 +26,7 @@ class RoleResponseDTO(BaseModel):
     name: str
     description: str | None
     created_at: str
-    level: int = 1
+    level: int = Field(default=1, ge=0)
     permissions: list[PermissionDTO] = []
 
     model_config = {"from_attributes": True}
