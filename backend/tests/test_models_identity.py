@@ -47,3 +47,11 @@ def test_role_model_has_level_column():
     assert str(col.type).upper().startswith("INTEGER")
     assert col.nullable is False
     assert col.server_default.arg.text == "1"
+
+
+def test_case_model_has_current_level_column():
+    from backend.src.modules.cases.infrastructure.models import CaseModel
+    col = CaseModel.__table__.c.current_level
+    assert col is not None
+    assert str(col.type).upper().startswith("INTEGER")
+    assert col.nullable is False

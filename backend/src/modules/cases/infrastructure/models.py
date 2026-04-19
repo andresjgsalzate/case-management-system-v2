@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Boolean, Integer, Text, ForeignKey
+from sqlalchemy import String, DateTime, Boolean, Integer, Text, ForeignKey, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.src.core.database import Base
@@ -49,6 +49,9 @@ class CaseModel(Base):
     status_id: Mapped[str] = mapped_column(String(36), ForeignKey("case_statuses.id"), nullable=False)
     priority_id: Mapped[str] = mapped_column(String(36), ForeignKey("case_priorities.id"), nullable=False)
     complexity: Mapped[str] = mapped_column(String(20), nullable=False, default="simple")
+    current_level: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     application_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("applications.id"), nullable=True)
     origin_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("origins.id"), nullable=True)
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
