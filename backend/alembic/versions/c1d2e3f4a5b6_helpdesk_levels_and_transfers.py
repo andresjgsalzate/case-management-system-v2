@@ -31,6 +31,7 @@ def upgrade() -> None:
     op.create_table(
         "case_transfers",
         sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("tenant_id", sa.String(36), sa.ForeignKey("tenants.id"), nullable=True),
         sa.Column("case_id", sa.String(36), sa.ForeignKey("cases.id", ondelete="CASCADE"), nullable=False),
         sa.Column("from_user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=True),
         sa.Column("from_level", sa.Integer(), nullable=False),
@@ -59,9 +60,15 @@ def upgrade() -> None:
         "case_transfers",
         ["case_id", "created_at"],
     )
+    op.create_index(
+        "idx_case_transfers_tenant_id",
+        "case_transfers",
+        ["tenant_id"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("idx_case_transfers_tenant_id", table_name="case_transfers")
     op.drop_index("idx_case_transfers_case_id", table_name="case_transfers")
     op.drop_table("case_transfers")
 
