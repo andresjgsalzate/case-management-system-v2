@@ -29,6 +29,8 @@ class AuthUseCases:
         if not user or not verify_password(dto.password, user.hashed_password):
             raise UnauthorizedError("Invalid credentials")
 
+        role_level = user.role.level if user.role else 1
+
         settings = get_settings()
         access_token = create_access_token(
             subject=user.id,
@@ -36,6 +38,7 @@ class AuthUseCases:
                 "email": user.email,
                 "role_id": user.role_id or "",
                 "tenant_id": user.tenant_id or "default",
+                "role_level": role_level,
             },
         )
 
@@ -78,6 +81,13 @@ class AuthUseCases:
         if not user or not user.is_active:
             raise UnauthorizedError("User not active")
 
+        from sqlalchemy.orm import selectinload as _sl
+        role_result = await self.db.execute(
+            select(UserModel).options(_sl(UserModel.role)).where(UserModel.id == user.id)
+        )
+        user = role_result.scalar_one()
+        role_level = user.role.level if user.role else 1
+
         settings = get_settings()
         access_token = create_access_token(
             subject=user.id,
@@ -85,6 +95,7 @@ class AuthUseCases:
                 "email": user.email,
                 "role_id": user.role_id or "",
                 "tenant_id": user.tenant_id or "default",
+                "role_level": role_level,
             },
         )
         new_refresh_token = str(uuid.uuid4())
