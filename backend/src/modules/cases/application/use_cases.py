@@ -23,6 +23,7 @@ from backend.src.modules.cases.application.dtos import (
 from backend.src.core.exceptions import NotFoundError, ValidationError, ForbiddenError
 from backend.src.core.events.bus import event_bus
 from backend.src.core.events.base import BaseEvent
+from backend.src.core.permissions.case_queries import filter_cases_by_permission
 
 
 class CaseUseCases:
@@ -89,6 +90,8 @@ class CaseUseCases:
         page: int,
         page_size: int,
         filters: dict | None = None,
+        user=None,
+        queue: str = "all",
     ) -> tuple[list[CaseResponseDTO], int]:
         query = (
             select(CaseModel)
@@ -102,7 +105,9 @@ class CaseUseCases:
             .where(CaseModel.tenant_id == tenant_id, CaseModel.is_archived == False)
         )
 
-        if scope == "own":
+        if user is not None:
+            query = filter_cases_by_permission(query, user, queue=queue)  # type: ignore[arg-type]
+        elif scope == "own":
             query = query.where(CaseModel.created_by == actor_id)
 
         if filters:
