@@ -40,3 +40,10 @@ def test_transfer_dto_accepts_valid():
     from backend.src.modules.cases.application.transfer_dtos import TransferCaseDTO
     dto = TransferCaseDTO(to_user_id="u2", reason="needs N2 expertise")
     assert dto.reason == "needs N2 expertise"
+
+
+def test_router_registers_transfer_endpoints():
+    from backend.src.modules.cases.router import router
+    paths = {route.path for route in router.routes}
+    assert "/api/v1/cases/{case_id}/transfer" in paths
+    assert "/api/v1/cases/{case_id}/transfers" in paths

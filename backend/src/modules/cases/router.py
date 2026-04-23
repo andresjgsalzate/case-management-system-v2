@@ -11,6 +11,11 @@ from backend.src.modules.cases.application.dtos import (
     CaseResponseDTO,
 )
 from backend.src.modules.cases.application.use_cases import CaseUseCases
+from backend.src.modules.cases.application.transfer_dtos import (
+    TransferCaseDTO,
+    TransferResponseDTO,
+)
+from backend.src.modules.cases.application.transfer_use_cases import CaseTransferUseCases
 from backend.src.modules.assignment.application.use_cases import AssignmentUseCases
 from backend.src.modules.archive.application.use_cases import ArchiveUseCases
 from backend.src.core.responses import SuccessResponse, PaginatedResponse
@@ -140,6 +145,29 @@ async def assign_case(
     await uc.assign_case(
         case_id, dto.assigned_to, dto.team_id, current_user.user_id, current_user.tenant_id
     )
+
+
+@router.post("/{case_id}/transfer", response_model=SuccessResponse[TransferResponseDTO])
+async def transfer_case(
+    case_id: str,
+    dto: TransferCaseDTO,
+    db: DBSession,
+    current_user: CurrentUser = CasesUpdate,
+):
+    uc = CaseTransferUseCases(db)
+    result = await uc.transfer(case_id, dto, current_user)
+    return SuccessResponse.ok(result)
+
+
+@router.get("/{case_id}/transfers", response_model=SuccessResponse[list[TransferResponseDTO]])
+async def list_case_transfers(
+    case_id: str,
+    db: DBSession,
+    current_user: CurrentUser = CasesRead,
+):
+    uc = CaseTransferUseCases(db)
+    items = await uc.list_transfers(case_id)
+    return SuccessResponse.ok(items)
 
 
 @router.get("/{case_id}/assignments")
