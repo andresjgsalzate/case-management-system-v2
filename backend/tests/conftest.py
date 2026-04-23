@@ -17,6 +17,15 @@ def set_test_env():
         yield
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _register_all_models(set_test_env):
+    # Importing main triggers the full router chain, which transitively imports
+    # every SQLAlchemy model. Without this, tests that only touch a subset of
+    # models (e.g. CaseModel alone) trigger configure_mappers() on a partial
+    # registry and fail to resolve string-based relationships.
+    import backend.src.main  # noqa: F401
+
+
 def _make_mock_db():
     """Returns an async generator that yields a mock AsyncSession.
 
