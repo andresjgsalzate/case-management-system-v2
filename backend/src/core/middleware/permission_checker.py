@@ -108,3 +108,17 @@ def require(module: str, action: str) -> Callable:
     """Shorthand: Depends(require('cases', 'read'))"""
     checker = PermissionChecker(module=module, action=action)
     return Depends(checker)
+
+
+async def has_permission(
+    db: AsyncSession, role_id: str, module: str, action: str
+) -> bool:
+    """Non-raising permission check. True si el rol tiene (module, action)."""
+    result = await db.execute(
+        select(PermissionModel).where(
+            PermissionModel.role_id == role_id,
+            PermissionModel.module == module,
+            PermissionModel.action == action,
+        )
+    )
+    return result.scalar_one_or_none() is not None

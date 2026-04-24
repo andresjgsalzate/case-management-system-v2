@@ -434,6 +434,139 @@ class KBUseCases:
             "summary": summary,
         }
 
+    async def link_case_to_article(
+        self, article_id: str, case_id: str, user_id: str
+    ) -> dict:
+        """Vincula un caso a un artículo KB. Idempotente.
+
+        Devuelve la fila (existente o nueva) como dict. Si ya existe, retorna
+        la fila con su linked_at/linked_by_id original sin actualizar.
+        """
+        from backend.src.modules.knowledge_base.infrastructure.models import KBArticleCaseModel
+        from backend.src.modules.cases.infrastructure.models import CaseModel
+        from sqlalchemy.exc import IntegrityError
+
+        # Validar existencia del artículo (reusa método con filtro is_deleted)
+        await self._get_article(article_id)
+
+        # Validar existencia del caso. No se filtra `is_archived` — la relación es
+        # metadata documental (spec §2), no una bifurcación de seguridad, y debe
+        # permitir vincular artículos KB a casos archivados para documentación histórica.
+        case_row = await self.db.execute(
+            select(CaseModel).where(CaseModel.id == case_id)
+        )
+        if not case_row.scalar_one_or_none():
+            raise NotFoundError(f"Caso {case_id} no encontrado")
+
+        # Intentar insertar; si ya existe, recuperar la fila existente
+        link = KBArticleCaseModel(
+            article_id=article_id,
+            case_id=case_id,
+            linked_by_id=user_id,
+            linked_at=datetime.now(timezone.utc),
+        )
+        self.db.add(link)
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            await self.db.rollback()
+            existing = await self.db.execute(
+                select(KBArticleCaseModel).where(
+                    KBArticleCaseModel.article_id == article_id,
+                    KBArticleCaseModel.case_id == case_id,
+                )
+            )
+            link = existing.scalar_one()
+
+        return {
+            "article_id": link.article_id,
+            "case_id": link.case_id,
+            "linked_at": link.linked_at.isoformat(),
+            "linked_by_id": link.linked_by_id,
+        }
+
+    async def unlink_case_from_article(self, article_id: str, case_id: str) -> None:
+        """Elimina la relación artículo↔caso. Idempotente (si no existe, no es error)."""
+        from backend.src.modules.knowledge_base.infrastructure.models import KBArticleCaseModel
+
+        await self.db.execute(
+            delete(KBArticleCaseModel).where(
+                KBArticleCaseModel.article_id == article_id,
+                KBArticleCaseModel.case_id == case_id,
+            )
+        )
+        await self.db.commit()
+
+    async def list_article_cases(
+        self, article_id: str, can_access_cases: bool
+    ) -> list[dict]:
+        """Devuelve los casos vinculados a un artículo, enriquecidos.
+
+        `can_access_cases` viene del router tras verificar el permiso cases:read.
+        Se propaga igual a todas las filas — hoy el chequeo es global. Si en
+        el futuro se introduce scope por caso/equipo, este es el punto único
+        de cambio.
+        """
+        from backend.src.modules.knowledge_base.infrastructure.models import KBArticleCaseModel
+        from backend.src.modules.cases.infrastructure.models import CaseModel
+
+        await self._get_article(article_id)  # valida existencia
+
+        result = await self.db.execute(
+            select(KBArticleCaseModel, CaseModel)
+            .join(CaseModel, CaseModel.id == KBArticleCaseModel.case_id)
+            .where(KBArticleCaseModel.article_id == article_id)
+            .order_by(KBArticleCaseModel.linked_at.desc())
+        )
+        rows = result.all()
+        return [
+            {
+                "case_id": link.case_id,
+                "case_number": case.case_number,
+                "case_title": case.title,
+                "linked_at": link.linked_at.isoformat(),
+                "can_access": can_access_cases,
+            }
+            for link, case in rows
+        ]
+
+    async def list_case_articles(self, case_id: str) -> list[dict]:
+        """Devuelve los artículos KB vinculados a un caso. Solo published."""
+        from backend.src.modules.knowledge_base.infrastructure.models import KBArticleCaseModel
+
+        result = await self.db.execute(
+            select(KBArticleCaseModel, KBArticleModel)
+            .join(KBArticleModel, KBArticleModel.id == KBArticleCaseModel.article_id)
+            .where(
+                KBArticleCaseModel.case_id == case_id,
+                KBArticleModel.is_deleted.is_(False),
+                KBArticleModel.status == "published",
+            )
+            .options(selectinload(KBArticleModel.document_type))
+            .order_by(KBArticleCaseModel.linked_at.desc())
+        )
+        rows = result.all()
+        return [
+            {
+                "id": article.id,
+                "title": article.title,
+                "status": article.status,
+                "document_type": (
+                    {
+                        "id": article.document_type.id,
+                        "code": article.document_type.code,
+                        "name": article.document_type.name,
+                        "icon": article.document_type.icon,
+                        "color": article.document_type.color,
+                    }
+                    if article.document_type
+                    else None
+                ),
+                "linked_at": link.linked_at.isoformat(),
+            }
+            for link, article in rows
+        ]
+
     async def _get_article(self, article_id: str) -> KBArticleModel:
         result = await self.db.execute(
             select(KBArticleModel)

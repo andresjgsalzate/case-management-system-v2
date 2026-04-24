@@ -342,3 +342,21 @@ export interface CasePermissions {
   canComment: boolean;
   canAttach: boolean;
 }
+
+// ─── KB ↔ Cases associations ──────────────────────────────────────────────────
+
+export interface ArticleCaseRef {
+  case_id: string;
+  case_number: string;
+  case_title: string;
+  linked_at: string;
+  can_access: boolean;
+}
+
+export interface CaseKBArticleRef {
+  id: string;
+  title: string;
+  status: KBStatus;
+  document_type: KBDocumentTypeRef | null;
+  linked_at: string;
+}

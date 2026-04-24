@@ -18,6 +18,7 @@ import { Button } from "@/components/atoms/Button";
 import { KBEditor } from "@/components/organisms/KBEditor";
 import { ReviewHistoryDrawer } from "@/components/organisms/ReviewHistoryDrawer";
 import { FeedbackWidget } from "@/components/molecules/FeedbackWidget";
+import { RelatedCasesSection } from "@/components/organisms/RelatedCasesSection";
 import { formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth.store";
 import type { KBStatus, UserPermission } from "@/lib/types";
@@ -229,6 +230,14 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
 
         {/* Content — BlockNote read-only */}
         <KBEditor initialContent={article.content_json} readOnly />
+
+        {/* Casos relacionados */}
+        <div className="pt-2 border-t border-border">
+          <RelatedCasesSection
+            articleId={params.id}
+            canEdit={hasPerm(permissions, "knowledge_base", "update")}
+          />
+        </div>
 
         {/* Feedback widget (persistent check + stats) */}
         <FeedbackWidget articleId={params.id} />
