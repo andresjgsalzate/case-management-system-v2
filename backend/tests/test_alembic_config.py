@@ -39,6 +39,6 @@ def test_helpdesk_levels_migration_present():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.revision == "c1d2e3f4a5b6"
-    assert module.down_revision == "1f35f05d8d94"
+    assert module.down_revision == "a3b4c5d6e7f8"
     assert callable(module.upgrade)
     assert callable(module.downgrade)
