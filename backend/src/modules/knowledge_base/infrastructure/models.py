@@ -168,3 +168,24 @@ class KBDocumentTypeModel(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class KBArticleCaseModel(Base):
+    """Asociación N:M entre artículo KB y caso.
+
+    Edición desde lado KB (knowledge_base:update). Sin histórico — DELETE es destructivo.
+    """
+    __tablename__ = "kb_article_cases"
+
+    article_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("kb_articles.id", ondelete="CASCADE"), primary_key=True
+    )
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    linked_by_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False
+    )

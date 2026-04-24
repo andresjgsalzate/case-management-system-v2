@@ -1,14 +1,14 @@
 """helpdesk levels and transfers
 
 Revision ID: c1d2e3f4a5b6
-Revises: 1f35f05d8d94
+Revises: a3b4c5d6e7f8
 Create Date: 2026-04-18
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = "c1d2e3f4a5b6"
-down_revision = "1f35f05d8d94"
+down_revision = "a3b4c5d6e7f8"
 branch_labels = None
 depends_on = None
 

@@ -235,3 +235,15 @@ async def restore_case(
     uc = ArchiveUseCases(db)
     await uc.restore_case(case_id, current_user.user_id, current_user.tenant_id)
 
+
+@router.get("/{case_id}/kb-articles", response_model=SuccessResponse[list[dict]])
+async def list_case_kb_articles(
+    case_id: str,
+    db: DBSession,
+    current_user: CurrentUser = CasesRead,
+):
+    from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
+    uc = KBUseCases(db=db)
+    items = await uc.list_case_articles(case_id=case_id)
+    return SuccessResponse.ok(items)
+
