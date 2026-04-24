@@ -28,3 +28,17 @@ def test_alembic_env_imports_base():
         content = f.read()
     assert "Base.metadata" in content
     assert "run_async_migrations" in content
+
+
+def test_helpdesk_levels_migration_present():
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "c1d2e3f4a5b6_helpdesk_levels_and_transfers.py"
+    assert path.exists(), f"migration file missing: {path}"
+    spec = importlib.util.spec_from_file_location("migration_c1d2", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.revision == "c1d2e3f4a5b6"
+    assert module.down_revision == "1f35f05d8d94"
+    assert callable(module.upgrade)
+    assert callable(module.downgrade)

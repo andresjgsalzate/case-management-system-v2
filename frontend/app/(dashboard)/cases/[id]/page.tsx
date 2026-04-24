@@ -7,7 +7,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Clock, User, Tag, Calendar,
   ChevronDown, UserCheck, Archive, BarChart2, Layers,
-  RotateCcw,
+  RotateCcw, ArrowLeftRight, History,
 } from "lucide-react";
 import {
   useCase, useCaseStatuses, useTransitionCase,
@@ -27,6 +27,9 @@ import { CaseClassification } from "@/components/organisms/CaseClassification";
 import { CaseActivity } from "@/components/organisms/CaseActivity";
 import { CaseAttachments } from "@/components/organisms/CaseAttachments";
 import { AssignCaseModal } from "@/components/organisms/AssignCaseModal";
+import { TransferCaseModal } from "@/components/organisms/TransferCaseModal";
+import { TransferHistoryDrawer } from "@/components/organisms/TransferHistoryDrawer";
+import { useCasePermissions } from "@/hooks/useCasePermissions";
 import { useHasPermission } from "@/hooks/useHasPermission";
 import { getCurrentUserId } from "@/lib/apiClient";
 import { formatDate, formatRelative, parseSolution, serializeSolution, type SolutionData } from "@/lib/utils";
@@ -46,6 +49,8 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const [closingTarget, setClosingTarget] = useState<{ id: string; name: string } | null>(null);
   const [solutionData, setSolutionData] = useState<SolutionData>({ summary: "", root_cause: "", steps: "", prevention: "", kb_notes: "" });
   const [solutionErrors, setSolutionErrors] = useState<Partial<Record<keyof SolutionData, string>>>({});
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [showTransferHistory, setShowTransferHistory] = useState(false);
 
   const transition = useTransitionCase(params.id);
   const archive = useArchiveCase(params.id);
@@ -60,8 +65,6 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const canAssign       = useHasPermission("cases", "assign");
   const canArchive      = useHasPermission("cases", "archive");
   const canViewSLA      = useHasPermission("sla",   "read");
-  // "assign/all" → can reassign any case regardless of who currently holds it
-  const canAssignAny    = useHasPermission("cases", "assign", "all");
 
   // Tabs available based on permissions
   const visibleTabs: { key: Tab; label: string }[] = [
@@ -106,11 +109,9 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
     currentStatus?.allowed_transitions?.includes(s.slug)
   );
 
-  // ── Assignment-based action control ──────────────────────────────────────────
-  // If the case is assigned to someone, only that person (or a user with
-  // cases/assign/all) can change its state or reassign it.
-  const caseAssignedToOther = !!c.assigned_to && c.assigned_to !== currentUserId;
-  const canTakeActions = canAssignAny || !caseAssignedToOther;
+  const caseActions = useCasePermissions(c);
+  const canTransition = caseActions.canTransition;
+  const canTransferCase = caseActions.canTransfer;
 
   const assignedUserName = c.assigned_user_name ?? null;
 
@@ -167,13 +168,13 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild>
                 <button
-                  disabled={transition.isPending || c.is_archived || !canTakeActions}
+                  disabled={transition.isPending || c.is_archived || !canTransition}
                   className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-sm hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   title={
                     c.is_archived
                       ? "No se puede cambiar el estado de un caso archivado"
-                      : !canTakeActions
-                      ? "Solo el agente asignado puede cambiar el estado"
+                      : !canTransition
+                      ? "No tienes permisos para cambiar el estado de este caso"
                       : undefined
                   }
                 >
@@ -221,7 +222,7 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
             </DropdownMenu.Root>
 
             {/* Assign — only for users with cases/assign permission, and only when they can act */}
-            {canAssign && !c.is_archived && canTakeActions && (
+            {canAssign && !c.is_archived && canTransferCase && (
               <AssignCaseModal
                 caseId={params.id}
                 currentAssignedTo={c.assigned_to ?? null}
@@ -234,6 +235,26 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
                 }
               />
             )}
+
+            {canTransferCase && !c.is_archived && (
+              <button
+                type="button"
+                onClick={() => setShowTransfer(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted"
+              >
+                <ArrowLeftRight className="h-4 w-4" />
+                Transferir
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowTransferHistory(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted"
+              title="Historial de transferencias"
+            >
+              <History className="h-4 w-4" />
+            </button>
 
             {/* Archive — solo disponible en estado Cerrado y para usuarios con cases/archive */}
             {canArchive && !c.is_archived && c.status_slug === "closed" && (
@@ -500,6 +521,17 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
           </div>
         </div>
       )}
+
+      <TransferCaseModal
+        caseId={params.id}
+        open={showTransfer}
+        onClose={() => setShowTransfer(false)}
+      />
+      <TransferHistoryDrawer
+        caseId={params.id}
+        open={showTransferHistory}
+        onClose={() => setShowTransferHistory(false)}
+      />
     </div>
   );
 }

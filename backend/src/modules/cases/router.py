@@ -11,6 +11,11 @@ from backend.src.modules.cases.application.dtos import (
     CaseResponseDTO,
 )
 from backend.src.modules.cases.application.use_cases import CaseUseCases
+from backend.src.modules.cases.application.transfer_dtos import (
+    TransferCaseDTO,
+    TransferResponseDTO,
+)
+from backend.src.modules.cases.application.transfer_use_cases import CaseTransferUseCases
 from backend.src.modules.assignment.application.use_cases import AssignmentUseCases
 from backend.src.modules.archive.application.use_cases import ArchiveUseCases
 from backend.src.core.responses import SuccessResponse, PaginatedResponse
@@ -50,13 +55,10 @@ async def list_cases(
     status_id: str | None = Query(default=None),
     priority_id: str | None = Query(default=None),
     assigned_to: str | None = Query(default=None),
+    queue: str = Query(default="all", pattern="^(mine|team|all)$"),
 ):
     uc = CaseUseCases(db)
-    filters = {
-        "status_id": status_id,
-        "priority_id": priority_id,
-        "assigned_to": assigned_to,
-    }
+    filters = {"status_id": status_id, "priority_id": priority_id, "assigned_to": assigned_to}
     cases, total = await uc.list_cases(
         current_user.tenant_id,
         current_user.user_id,
@@ -64,6 +66,8 @@ async def list_cases(
         pagination.page,
         pagination.page_size,
         filters,
+        user=current_user,
+        queue=queue,
     )
     return PaginatedResponse.ok(cases, pagination.page, pagination.page_size, total)
 
@@ -98,7 +102,7 @@ async def update_case(
 ):
     uc = CaseUseCases(db)
     return SuccessResponse.ok(
-        await uc.update_case(case_id, dto, current_user.user_id, current_user.tenant_id)
+        await uc.update_case(case_id, dto, current_user.user_id, current_user.tenant_id, user=current_user)
     )
 
 
@@ -111,7 +115,7 @@ async def transition_case(
 ):
     uc = CaseUseCases(db)
     return SuccessResponse.ok(
-        await uc.transition_case(case_id, dto, current_user.user_id, current_user.tenant_id)
+        await uc.transition_case(case_id, dto, current_user.user_id, current_user.tenant_id, user=current_user)
     )
 
 
@@ -141,6 +145,29 @@ async def assign_case(
     await uc.assign_case(
         case_id, dto.assigned_to, dto.team_id, current_user.user_id, current_user.tenant_id
     )
+
+
+@router.post("/{case_id}/transfer", response_model=SuccessResponse[TransferResponseDTO])
+async def transfer_case(
+    case_id: str,
+    dto: TransferCaseDTO,
+    db: DBSession,
+    current_user: CurrentUser = CasesUpdate,
+):
+    uc = CaseTransferUseCases(db)
+    result = await uc.transfer(case_id, dto, current_user)
+    return SuccessResponse.ok(result)
+
+
+@router.get("/{case_id}/transfers", response_model=SuccessResponse[list[TransferResponseDTO]])
+async def list_case_transfers(
+    case_id: str,
+    db: DBSession,
+    current_user: CurrentUser = CasesRead,
+):
+    uc = CaseTransferUseCases(db)
+    items = await uc.list_transfers(case_id)
+    return SuccessResponse.ok(items)
 
 
 @router.get("/{case_id}/assignments")

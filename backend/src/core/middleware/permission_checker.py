@@ -20,6 +20,8 @@ class CurrentUser:
     tenant_id: str
     scope: str = "own"
     is_global: bool = False
+    role_level: int = 1
+    team_id: str | None = None
 
 
 class PermissionChecker:
@@ -52,6 +54,7 @@ class PermissionChecker:
         role_id = payload.get("role_id")
         tenant_id = payload.get("tenant_id", "default")
         email = payload.get("email", "")
+        token_role_level = payload.get("role_level")
 
         if not user_id:
             raise UnauthorizedError("Invalid token payload")
@@ -74,9 +77,17 @@ class PermissionChecker:
             )
 
         role_result = await db.execute(
-            select(RoleModel.is_global).where(RoleModel.id == role_id)
+            select(RoleModel.is_global, RoleModel.level).where(RoleModel.id == role_id)
         )
-        is_global = role_result.scalar_one_or_none() or False
+        role_row = role_result.one_or_none()
+        is_global = bool(role_row.is_global) if role_row else False
+        role_level = int(role_row.level) if role_row else 1
+
+        from backend.src.modules.users.infrastructure.models import UserModel
+        user_row = await db.execute(
+            select(UserModel.team_id).where(UserModel.id == user_id)
+        )
+        team_id = user_row.scalar_one_or_none()
 
         from backend.src.modules.audit.application.middleware import set_current_actor
         set_current_actor(user_id)
@@ -88,6 +99,8 @@ class PermissionChecker:
             tenant_id=tenant_id,
             scope=permission.scope,
             is_global=is_global,
+            role_level=int(token_role_level) if token_role_level is not None else role_level,
+            team_id=team_id,
         )
 
 

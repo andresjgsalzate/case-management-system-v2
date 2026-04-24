@@ -20,6 +20,7 @@ interface Role {
   id: string;
   name: string;
   description?: string;
+  level?: number;
   permissions?: Permission[];
   created_at: string;
 }
@@ -137,11 +138,14 @@ function PermissionsMatrix({
 }) {
   const qc = useQueryClient();
 
-  // Estado local: set de "module:action" que están activos
-  const [checked, setChecked] = useState<Set<string>>(() => {
-    const s = new Set<string>();
-    current.forEach((p) => s.add(`${p.module}:${p.action}`));
-    return s;
+  type ScopeChoice = "none" | "own" | "team" | "all";
+
+  const [scopes, setScopes] = useState<Record<string, ScopeChoice>>(() => {
+    const init: Record<string, ScopeChoice> = {};
+    current.forEach((p) => {
+      init[`${p.module}:${p.action}`] = (p.scope as ScopeChoice) ?? "own";
+    });
+    return init;
   });
 
   const saveMutation = useMutation({
@@ -153,21 +157,16 @@ function PermissionsMatrix({
     },
   });
 
-  function toggle(module: string, action: string) {
-    const key = `${module}:${action}`;
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+  function setScope(module: string, action: string, choice: ScopeChoice) {
+    setScopes((prev) => ({ ...prev, [`${module}:${action}`]: choice }));
   }
 
   function handleSave() {
     const perms: Permission[] = [];
-    checked.forEach((key) => {
+    Object.entries(scopes).forEach(([key, scope]) => {
+      if (scope === "none") return;
       const [module, action] = key.split(":");
-      perms.push({ module, action, scope: "all" });
+      perms.push({ module, action, scope });
     });
     saveMutation.mutate(perms);
   }
@@ -205,16 +204,19 @@ function PermissionsMatrix({
                       {ALL_ACTIONS.map((action) => {
                         const available = actions.includes(action);
                         const key = `${module}:${action}`;
-                        const isChecked = checked.has(key);
                         return (
                           <td key={action} className="px-2 py-2 text-center">
                             {available ? (
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={() => toggle(module, action)}
-                                className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
-                              />
+                              <select
+                                value={scopes[key] ?? "none"}
+                                onChange={(e) => setScope(module, action, e.target.value as ScopeChoice)}
+                                className="text-xs rounded border border-border bg-background px-1 py-0.5"
+                              >
+                                <option value="none">—</option>
+                                <option value="own">Propios</option>
+                                <option value="team">Equipo</option>
+                                <option value="all">Todos</option>
+                              </select>
                             ) : (
                               <span className="text-muted-foreground/20">·</span>
                             )}
@@ -248,7 +250,9 @@ function PermissionsMatrix({
           Cancelar
         </button>
         <span className="text-xs text-muted-foreground ml-auto">
-          {checked.size} permiso{checked.size !== 1 ? "s" : ""} seleccionado{checked.size !== 1 ? "s" : ""}
+          {Object.values(scopes).filter((s) => s !== "none").length} permiso
+          {Object.values(scopes).filter((s) => s !== "none").length !== 1 ? "s" : ""} activo
+          {Object.values(scopes).filter((s) => s !== "none").length !== 1 ? "s" : ""}
         </span>
       </div>
     </div>
@@ -264,7 +268,7 @@ const ROLE_COLORS: Record<string, "default" | "warning" | "success" | "destructi
   "Agent":       "secondary",
 };
 
-const BLANK_FORM = { name: "", description: "" };
+const BLANK_FORM = { name: "", description: "", level: 1 };
 
 export default function RolesSettingsPage() {
   const confirm = useConfirm();
@@ -277,7 +281,7 @@ export default function RolesSettingsPage() {
 
   // Inline edit de nombre/descripción
   const [editId, setEditId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", description: "" });
+  const [editForm, setEditForm] = useState({ name: "", description: "", level: 1 });
 
   // Panel de permisos expandido por rol
   const [expandedPerms, setExpandedPerms] = useState<string | null>(null);
@@ -297,7 +301,7 @@ export default function RolesSettingsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: { name: string; description: string } }) =>
+    mutationFn: ({ id, body }: { id: string; body: { name: string; description: string; level: number } }) =>
       apiClient.patch(`/roles/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["roles"] });
@@ -339,7 +343,7 @@ export default function RolesSettingsPage() {
         <div className="rounded-lg border border-primary/30 bg-card p-4 flex flex-col gap-3">
           <p className="text-sm font-medium">Nuevo rol</p>
           {formError && <p className="text-xs text-destructive">{formError}</p>}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-xs text-muted-foreground">Nombre</label>
               <input
@@ -356,6 +360,21 @@ export default function RolesSettingsPage() {
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                 placeholder="Breve descripción del rol"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">
+                Nivel
+                <span className="ml-1 text-[10px] opacity-70">
+                  (0=reporter, 1=N1, 2=N2…)
+                </span>
+              </label>
+              <input
+                type="number"
+                min={0}
+                className="px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                value={form.level}
+                onChange={(e) => setForm((f) => ({ ...f, level: Number(e.target.value) || 0 }))}
               />
             </div>
           </div>
@@ -379,7 +398,7 @@ export default function RolesSettingsPage() {
       <div className="flex flex-col gap-3">
         {roles.map((role) => {
           const permCount = role.permissions?.length ?? 0;
-          const modules = [...new Set(role.permissions?.map((p) => p.module) ?? [])];
+          const modules = Array.from(new Set(role.permissions?.map((p) => p.module) ?? []));
           const isEditingName = editId === role.id;
           const isExpandedPerms = expandedPerms === role.id;
 
@@ -391,7 +410,7 @@ export default function RolesSettingsPage() {
               {/* Header row */}
               {isEditingName ? (
                 <div className="flex flex-col gap-3">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-muted-foreground">Nombre</label>
                       <input
@@ -408,6 +427,16 @@ export default function RolesSettingsPage() {
                         value={editForm.description}
                         onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
                         placeholder="Descripción del rol"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">Nivel</label>
+                      <input
+                        type="number"
+                        min={0}
+                        className="px-2 py-1.5 text-sm rounded border border-border bg-background focus:outline-none w-full"
+                        value={editForm.level}
+                        onChange={(e) => setEditForm((f) => ({ ...f, level: Number(e.target.value) || 0 }))}
                       />
                     </div>
                   </div>
@@ -438,6 +467,7 @@ export default function RolesSettingsPage() {
                         <Badge variant={ROLE_COLORS[role.name] ?? "outline"} className="text-xs">
                           {role.name}
                         </Badge>
+                        <span className="text-[10px] text-muted-foreground">N{role.level ?? 1}</span>
                       </div>
                       {role.description && (
                         <p className="text-xs text-muted-foreground mt-0.5">{role.description}</p>
@@ -447,7 +477,7 @@ export default function RolesSettingsPage() {
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
-                      onClick={() => { setEditId(role.id); setEditForm({ name: role.name, description: role.description ?? "" }); }}
+                      onClick={() => { setEditId(role.id); setEditForm({ name: role.name, description: role.description ?? "", level: role.level ?? 1 }); }}
                       className="text-muted-foreground hover:text-foreground transition-colors"
                       title="Editar nombre"
                     >

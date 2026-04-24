@@ -26,3 +26,15 @@ def test_require_returns_depends():
     from backend.src.core.middleware.permission_checker import require
     dep = require("cases", "read")
     assert isinstance(dep, params.Depends)
+
+
+def test_current_user_has_role_level_default():
+    from backend.src.core.middleware.permission_checker import CurrentUser
+    u = CurrentUser(user_id="u1", email="a@b.com", role_id="r1", tenant_id="t1")
+    assert u.role_level == 1
+
+
+def test_current_user_custom_role_level():
+    from backend.src.core.middleware.permission_checker import CurrentUser
+    u = CurrentUser(user_id="u1", email="a@b.com", role_id="r1", tenant_id="t1", role_level=2)
+    assert u.role_level == 2

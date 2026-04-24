@@ -1,5 +1,5 @@
 import pytest
-from backend.src.modules.roles.application.dtos import CreateRoleDTO, PermissionDTO
+from backend.src.modules.roles.application.dtos import CreateRoleDTO, PermissionDTO, UpdateRoleDTO
 from backend.src.modules.roles.domain.entities import Role, Permission
 
 
@@ -36,3 +36,50 @@ def test_create_role_dto_with_permissions():
 def test_permission_dto_default_scope():
     perm = PermissionDTO(module="users", action="read")
     assert perm.scope == "own"
+
+
+def test_create_role_dto_defaults_level_to_1():
+    dto = CreateRoleDTO(name="Agent")
+    assert dto.level == 1
+
+
+def test_create_role_dto_accepts_custom_level():
+    dto = CreateRoleDTO(name="N2 Agent", level=2)
+    assert dto.level == 2
+
+
+def test_create_role_dto_rejects_negative_level():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        CreateRoleDTO(name="Bad", level=-1)
+
+
+def test_update_role_dto_has_optional_level():
+    assert UpdateRoleDTO().level is None
+    dto = UpdateRoleDTO(level=3)
+    assert dto.level == 3
+
+
+def test_role_response_dto_carries_level():
+    from backend.src.modules.roles.application.dtos import RoleResponseDTO
+    r = RoleResponseDTO(
+        id="r1", name="Agent", description=None,
+        created_at="2026-04-18T00:00:00Z", permissions=[], level=2,
+    )
+    assert r.level == 2
+
+
+def test_role_use_cases_to_dto_includes_level():
+    from backend.src.modules.roles.infrastructure.models import RoleModel
+    from backend.src.modules.roles.application.use_cases import RoleUseCases
+    from backend.src.modules.users.infrastructure.models import UserModel  # noqa: F401 — registers UserModel mapper
+    from backend.src.modules.auth.infrastructure.models import UserSessionModel  # noqa: F401 — registers UserSessionModel mapper
+    from datetime import datetime, timezone
+    uc = RoleUseCases(db=None)  # type: ignore[arg-type]
+    model = RoleModel(
+        id="r1", name="Agent", description=None, tenant_id=None,
+        created_at=datetime.now(timezone.utc), level=2,
+    )
+    model.permissions = []
+    dto = uc._to_dto(model)
+    assert dto.level == 2

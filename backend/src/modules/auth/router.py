@@ -53,12 +53,14 @@ async def get_me(
     from backend.src.modules.roles.infrastructure.models import RoleModel, PermissionModel
 
     role_name = None
+    role_level = 1
     permissions: list[dict] = []
     if user.role_id:
         role_result = await db.execute(sa_select(RoleModel).where(RoleModel.id == user.role_id))
         role = role_result.scalar_one_or_none()
         if role:
             role_name = role.name
+            role_level = getattr(role, "level", 1)
         perm_result = await db.execute(
             sa_select(PermissionModel).where(PermissionModel.role_id == user.role_id)
         )
@@ -73,6 +75,7 @@ async def get_me(
         "full_name": user.full_name,
         "role_id": user.role_id,
         "role_name": role_name,
+        "role_level": role_level,
         "permissions": permissions,
         "is_active": user.is_active,
         "avatar_url": getattr(user, "avatar_url", None),

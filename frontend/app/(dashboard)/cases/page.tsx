@@ -7,7 +7,6 @@ import { Button } from "@/components/atoms/Button";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { CaseTable } from "@/components/organisms/CaseTable";
 import { useCases, useCasePriorities } from "@/hooks/useCases";
-import { getCurrentUserId } from "@/lib/apiClient";
 import type { Case } from "@/lib/types";
 
 const STATUS_TABS = [
@@ -18,18 +17,23 @@ const STATUS_TABS = [
   { label: "Cerrados", value: "closed" },
 ];
 
+const QUEUE_TABS: { label: string; value: "mine" | "team" | "all" }[] = [
+  { label: "Mi cola", value: "mine" },
+  { label: "Equipo", value: "team" },
+  { label: "Todos", value: "all" },
+];
+
 export default function CasesPage() {
   const [search, setSearch] = useState("");
   const [activeStatus, setActiveStatus] = useState("");
   const [activePriority, setActivePriority] = useState("");
-  const [myOnly, setMyOnly] = useState(false);
+  const [queue, setQueue] = useState<"mine" | "team" | "all">("mine");
 
-  const { data: cases = [], isLoading } = useCases(
-    activeStatus ? { status: activeStatus } : undefined
-  );
+  const { data: cases = [], isLoading } = useCases({
+    ...(activeStatus ? { status: activeStatus } : {}),
+    queue,
+  });
   const { data: priorities = [] } = useCasePriorities();
-
-  const currentUserId = typeof window !== "undefined" ? getCurrentUserId() : null;
 
   const filtered: Case[] = cases.filter((c) => {
     if (search.trim()) {
@@ -37,7 +41,6 @@ export default function CasesPage() {
       if (!c.title.toLowerCase().includes(q) && !c.case_number.toLowerCase().includes(q)) return false;
     }
     if (activePriority && c.priority_id !== activePriority) return false;
-    if (myOnly && currentUserId && c.assigned_to !== currentUserId) return false;
     return true;
   });
 
@@ -57,6 +60,24 @@ export default function CasesPage() {
             Nuevo caso
           </Button>
         </Link>
+      </div>
+
+      {/* Queue tabs */}
+      <div className="flex items-center gap-1 border-b border-border">
+        {QUEUE_TABS.map((tab) => (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => setQueue(tab.value)}
+            className={`px-4 py-2 text-sm font-medium -mb-px border-b-2 transition-colors ${
+              queue === tab.value
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* Filters row */}
@@ -98,18 +119,6 @@ export default function CasesPage() {
           ))}
         </select>
 
-        {/* My cases toggle */}
-        <button
-          type="button"
-          onClick={() => setMyOnly((v) => !v)}
-          className={`px-3 py-1.5 rounded-md text-sm whitespace-nowrap border transition-colors ${
-            myOnly
-              ? "border-primary bg-primary/10 text-primary font-medium"
-              : "border-border text-muted-foreground hover:text-foreground hover:bg-muted"
-          }`}
-        >
-          Mis casos
-        </button>
       </div>
 
       {/* Table */}
