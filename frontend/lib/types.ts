@@ -12,6 +12,7 @@ export interface User {
   full_name: string;
   role_id?: string;
   role_name?: string;
+  role_level?: number;
   team_id?: string;
   is_active: boolean;
   avatar_url?: string;
@@ -25,6 +26,7 @@ export interface Role {
   id: string;
   name: string;
   description?: string;
+  level?: number;
 }
 
 export interface Team {
@@ -67,6 +69,7 @@ export interface Case {
   title: string;
   description?: string;
   complexity: string;
+  current_level: number;
   // Status (flat fields from backend DTO)
   status_id: string;
   status_name: string;
@@ -312,4 +315,30 @@ export interface PaginatedResponse<T> {
   total?: number;
   page?: number;
   page_size?: number;
+}
+
+// ─── Case transfers ───────────────────────────────────────────────────────────
+
+export type CaseTransferType = 'escalate' | 'reassign' | 'de-escalate';
+
+export interface CaseTransfer {
+  id: string;
+  case_id: string;
+  from_user_id: string | null;
+  from_level: number;
+  to_user_id: string;
+  to_team_id: string;
+  to_level: number;
+  transfer_type: CaseTransferType;
+  reason: string;
+  created_at: string;
+}
+
+export interface CasePermissions {
+  canRead: boolean;
+  canUpdate: boolean;
+  canTransition: boolean;
+  canTransfer: boolean;
+  canComment: boolean;
+  canAttach: boolean;
 }

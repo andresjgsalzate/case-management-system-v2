@@ -13,7 +13,12 @@ export interface CaseNote {
 const CASES_KEY = "cases";
 const ARCHIVED_KEY = "cases-archived";
 
-export function useCases(params?: { status?: string; limit?: number; offset?: number }) {
+export function useCases(params?: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+  queue?: "mine" | "team" | "all";
+}) {
   return useQuery({
     queryKey: [CASES_KEY, params],
     queryFn: async () => {
