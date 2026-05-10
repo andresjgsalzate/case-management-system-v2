@@ -58,3 +58,17 @@ coverage.xml
 
 #docs
 *.md
+!README.md
+
+# Agent / IDE local config — never commit personal machine state
+.claude/
+.cursorrules
+.gemini/
+.kiro/
+.mcp.json
+.opencode.json
+.qoder/
+.windsurfrules
+
+# Added by code-review-graph
+.code-review-graph/
