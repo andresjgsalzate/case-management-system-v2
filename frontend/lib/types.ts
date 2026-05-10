@@ -133,6 +133,11 @@ export interface KBTag {
 
 export type KBVisibility = "private" | "team" | "public";
 
+export interface KBArticleCaseRef {
+  case_number: string;
+  case_title: string;
+}
+
 export interface KBArticle {
   id: string;
   title: string;
@@ -150,6 +155,7 @@ export interface KBArticle {
   created_at: string;
   updated_at: string;
   tags?: KBTag[];
+  case_refs?: KBArticleCaseRef[];
   document_type_id?: string | null;
   document_type?: KBDocumentTypeRef | null;
   visibility: KBVisibility;
