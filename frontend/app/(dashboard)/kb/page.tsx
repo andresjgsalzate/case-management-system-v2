@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Plus, BookOpen, Eye, ThumbsUp, User } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
-import { SearchBar } from "@/components/molecules/SearchBar";
+import { KBSearchPanel } from "@/components/organisms/KBSearchPanel";
+import { searchArticles, scoreBand, type Filter } from "@/lib/kb-search";
+import { cn } from "@/lib/utils";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
 import { DocumentTypeBadge } from "@/components/molecules/DocumentTypeBadge";
 import { VisibilityBadge } from "@/components/molecules/VisibilityBadge";
@@ -36,7 +38,7 @@ export default function KBPage() {
   const initialTagSlug = searchParams.get("tag") ?? "";
   const initialStatus = parseStatusParam(searchParams.get("status"));
 
-  const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState<Filter[]>([]);
   const [activeStatus, setActiveStatus] = useState<KBStatus | "">(initialStatus);
   const [activeTagSlug, setActiveTagSlug] = useState<string>(initialTagSlug);
   const { data: tags = [] } = useKBTags();
@@ -54,12 +56,10 @@ export default function KBPage() {
     activeTagSlug || undefined,
   );
 
-  const filtered = search.trim()
-    ? articles.filter((a) =>
-        a.title.toLowerCase().includes(search.toLowerCase()) ||
-        a.content_text.toLowerCase().includes(search.toLowerCase())
-      )
-    : articles;
+  const scoredArticles = useMemo(
+    () => searchArticles(articles, filters),
+    [articles, filters],
+  );
 
   return (
     <div className="flex flex-col gap-5">
@@ -68,7 +68,7 @@ export default function KBPage() {
         <div>
           <h1 className="text-xl font-semibold text-foreground">Base de Conocimiento</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {isLoading ? "Cargando…" : `${filtered.length} artículo${filtered.length !== 1 ? "s" : ""}`}
+            {isLoading ? "Cargando…" : `${scoredArticles.length} artículo${scoredArticles.length !== 1 ? "s" : ""}`}
           </p>
         </div>
         <Link href="/kb/new">
@@ -80,11 +80,10 @@ export default function KBPage() {
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Buscar artículos…"
-          className="sm:w-72"
+        <KBSearchPanel
+          filters={filters}
+          onFiltersChange={setFilters}
+          className="sm:w-96"
         />
         <div className="flex items-center gap-1 overflow-x-auto">
           {STATUS_TABS.map((tab) => (
@@ -142,18 +141,57 @@ export default function KBPage() {
 
       {!isLoading && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {filtered.length === 0 && (
+          {scoredArticles.length === 0 && (
             <div className="col-span-full rounded-lg border border-border bg-card p-8 text-center text-muted-foreground">
               <BookOpen className="h-8 w-8 mx-auto mb-2 opacity-30" />
-              <p className="text-sm">No hay artículos que mostrar</p>
+              <p className="text-sm">
+                {filters.length === 0
+                  ? "No hay artículos que mostrar"
+                  : "0 resultados — refina con menos filtros o desactiva el modo exacto"}
+              </p>
             </div>
           )}
-          {filtered.map((article) => (
+          {scoredArticles.map(({ article, score, matched }) => (
             <Link
               key={article.id}
               href={`/kb/${article.id}`}
               className="rounded-lg border border-border bg-card p-3.5 hover:border-primary/30 hover:shadow-sm transition-all duration-150 flex flex-col gap-2"
             >
+              {score != null && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span
+                    className={cn(
+                      "inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium",
+                      scoreBand(score) === "excelente" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                      scoreBand(score) === "muy-bueno" && "bg-sky-500/10 text-sky-700 dark:text-sky-300",
+                      scoreBand(score) === "bueno" && "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+                      scoreBand(score) === "parcial" && "bg-slate-500/10 text-slate-600 dark:text-slate-400",
+                    )}
+                  >
+                    {Math.round(score)}%
+                  </span>
+                  {matched.map((m) => (
+                    <span
+                      key={m}
+                      className={cn(
+                        "inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold",
+                        m === "T" && "bg-blue-500/10 text-blue-700 dark:text-blue-300",
+                        m === "C" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                        m === "E" && "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+                        m === "CA" && "bg-purple-500/10 text-purple-700 dark:text-purple-300",
+                      )}
+                      title={
+                        m === "T" ? "Coincide en Título" :
+                        m === "C" ? "Coincide en Contenido" :
+                        m === "E" ? "Coincide en Etiquetas" :
+                        "Coincide en Casos asociados"
+                      }
+                    >
+                      {m}
+                    </span>
+                  ))}
+                </div>
+              )}
               {/* Status + versión: línea pequeña arriba (info de estado del documento) */}
               <div className="flex items-center gap-2 flex-wrap">
                 <StatusBadge status={article.status} />
