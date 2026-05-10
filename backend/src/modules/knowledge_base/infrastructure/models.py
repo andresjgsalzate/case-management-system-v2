@@ -1,14 +1,11 @@
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.src.core.database import Base
-
-if TYPE_CHECKING:
-    from backend.src.modules.cases.infrastructure.models import CaseModel
 
 
 class KBTagModel(Base):
@@ -215,7 +212,7 @@ class KBArticleCaseModel(Base):
     )
     # Caso vinculado — viewonly para preservar la integridad de quién manipula
     # la tabla puente (siempre KBUseCases). Cargado bajo demanda vía selectinload.
-    case_ref: Mapped["CaseModel"] = relationship(
+    case_ref: Mapped["CaseModel"] = relationship(  # type: ignore[name-defined]
         "CaseModel",
         primaryjoin="KBArticleCaseModel.case_id == CaseModel.id",
         lazy="select",
