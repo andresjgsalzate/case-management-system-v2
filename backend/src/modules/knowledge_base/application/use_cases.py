@@ -10,6 +10,7 @@ from backend.src.modules.knowledge_base.infrastructure.models import (
     KBArticleVersionModel,
     KBTagModel,
     KBArticleTagModel,
+    KBArticleCaseModel,
     KBReviewEventModel,
     KBFavoriteModel,
     KBFeedbackModel,
@@ -212,6 +213,7 @@ class KBUseCases:
             .options(
                 selectinload(KBArticleModel.tags).selectinload(KBArticleTagModel.tag),
                 selectinload(KBArticleModel.created_by),
+                selectinload(KBArticleModel.kb_article_cases).selectinload(KBArticleCaseModel.case_ref),
             )
         )
         if status:
@@ -276,6 +278,7 @@ class KBUseCases:
             .options(
                 selectinload(KBArticleModel.tags).selectinload(KBArticleTagModel.tag),
                 selectinload(KBArticleModel.created_by),
+                selectinload(KBArticleModel.kb_article_cases).selectinload(KBArticleCaseModel.case_ref),
             )
             .order_by(KBArticleModel.updated_at.desc())
             .limit(limit)
@@ -764,6 +767,7 @@ class KBUseCases:
                 selectinload(KBArticleModel.tags).selectinload(KBArticleTagModel.tag),
                 selectinload(KBArticleModel.versions),
                 selectinload(KBArticleModel.created_by),
+                selectinload(KBArticleModel.kb_article_cases).selectinload(KBArticleCaseModel.case_ref),
             )
         )
         article = result.scalar_one_or_none()
