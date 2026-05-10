@@ -1,4 +1,9 @@
 fastapi==0.111.0
+# Pin starlette transitively — fastapi 0.111 declares only a loose lower bound,
+# so pip can resolve to starlette 1.0+ which removes on_startup/on_shutdown
+# kwargs that FastAPI 0.111's internals still use. Without this pin, clean
+# installs (CI, new clones) break with `unexpected keyword argument 'on_startup'`.
+starlette==0.37.2
 uvicorn[standard]==0.29.0
 sqlalchemy[asyncio]==2.0.30
 asyncpg==0.29.0
