@@ -92,3 +92,21 @@
 .breathe-emerald { animation: breathe-emerald 2.2s ease-in-out infinite; }
 .breathe-red     { animation: breathe-red     2.2s ease-in-out infinite; }
 .breathe-slate   { animation: breathe-slate   2.2s ease-in-out infinite; }
+
+/* BlockNote codeBlock — override en modo claro:
+   El CSS de @blocknote/core pinta el bloque con background #161616 (negro)
+   y color #fff sin importar el theme. En modo claro queda fuera de tono.
+   Aplicamos transparent + borde sutil y dejamos que Shiki maneje el color
+   del texto vía el theme github-light. En modo oscuro mantenemos el default
+   de BlockNote (que ya combina con github-dark). */
+:root:not(.dark) .bn-block-content[data-content-type="codeBlock"] {
+  color: hsl(var(--foreground));
+  background-color: transparent;
+  border: 1px solid hsl(var(--border));
+}
+
+/* Selector de lenguaje del code block — en modo claro debe contrastar con
+   el nuevo fondo (BlockNote lo pinta blanco por default, invisible aquí). */
+:root:not(.dark) .bn-block-content[data-content-type="codeBlock"] > div > select {
+  color: hsl(var(--muted-foreground));
+}
