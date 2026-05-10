@@ -51,7 +51,7 @@ trap cleanup SIGINT SIGTERM EXIT
 # ─────────────────────────────────────────────────────────────
 # 1. Verificar herramientas
 # ─────────────────────────────────────────────────────────────
-head_ "1/5  Verificando herramientas"
+head_ "1/6  Verificando herramientas"
 
 command -v docker  >/dev/null 2>&1 || err "docker no encontrado"
 command -v python  >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || err "python no encontrado"
@@ -65,7 +65,7 @@ log "Node:   $(node --version)"
 # ─────────────────────────────────────────────────────────────
 # 2. Docker (Postgres + Redis)
 # ─────────────────────────────────────────────────────────────
-head_ "2/5  Servicios Docker (Postgres + Redis)"
+head_ "2/6  Servicios Docker (Postgres + Redis)"
 
 cd "$ROOT"
 
@@ -97,7 +97,7 @@ log "Redis listo ✓"
 # ─────────────────────────────────────────────────────────────
 # 3. Dependencias Python
 # ─────────────────────────────────────────────────────────────
-head_ "3/5  Dependencias Python"
+head_ "3/6  Dependencias Python"
 
 cd "$BACKEND"
 
@@ -149,7 +149,7 @@ PYTHON=$(command -v python)
 # ─────────────────────────────────────────────────────────────
 # 4. Migraciones + Seed  (no bloquean el arranque si fallan)
 # ─────────────────────────────────────────────────────────────
-head_ "4/5  Migraciones Alembic + Seed"
+head_ "4/6  Migraciones Alembic + Seed"
 
 cd "$BACKEND"
 
@@ -171,15 +171,43 @@ fi
 # ─────────────────────────────────────────────────────────────
 # 5. Dependencias Node
 # ─────────────────────────────────────────────────────────────
-head_ "5/5  Dependencias Node"
+head_ "5/6  Dependencias Node"
 
 cd "$FRONTEND"
+
+# Detectar node_modules desactualizado: si package-lock.json es más reciente
+# que el install marker, las deps locales están viejas (típicamente porque el
+# dev pulleó un commit con nuevas deps pero olvidó npm install). El marker
+# `.package-lock.json` lo crea npm dentro de node_modules al final del install.
+NODE_INSTALL_MARKER="$FRONTEND/node_modules/.package-lock.json"
 
 if [[ ! -d "node_modules" ]]; then
   log "Instalando dependencias Node…"
   npm install
+elif [[ -f "$FRONTEND/package-lock.json" && ( ! -f "$NODE_INSTALL_MARKER" || "$FRONTEND/package-lock.json" -nt "$NODE_INSTALL_MARKER" ) ]]; then
+  warn "package-lock.json más reciente que node_modules — sincronizando…"
+  npm install
 else
-  log "node_modules OK ✓"
+  log "node_modules sincronizado ✓"
+fi
+
+# ─────────────────────────────────────────────────────────────
+# 6. Actualizar code-review-graph (no bloqueante)
+# ─────────────────────────────────────────────────────────────
+head_ "6/6  Indexando código con code-review-graph"
+
+cd "$ROOT"
+
+if command -v code-review-graph >/dev/null 2>&1; then
+  log "Actualizando grafo (solo archivos cambiados)…"
+  if code-review-graph update 2>&1 | tail -5; then
+    log "Grafo actualizado ✓"
+  else
+    warn "code-review-graph update devolvió error — continuando sin grafo"
+  fi
+else
+  warn "code-review-graph no instalado — saltando indexación"
+  warn "  Instálalo con:  pip install --user code-review-graph"
 fi
 
 # ─────────────────────────────────────────────────────────────
