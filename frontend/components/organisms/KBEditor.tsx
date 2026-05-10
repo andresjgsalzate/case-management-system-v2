@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/ariakit";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/ariakit/style.css";
 import { BlockNoteSchema, createCodeBlockSpec, type PartialBlock } from "@blocknote/core";
 import type { HighlighterGeneric } from "@shikijs/types";
+import { useTheme } from "@/components/providers/ThemeProvider";
 
 // Lenguajes habilitados en el slash-command `/code` y en el dropdown del bloque.
 // Restringido al stack del proyecto — añadir más implica cargar más grammars de
@@ -35,7 +36,12 @@ const schema = BlockNoteSchema.create().extend({
           import("@shikijs/engine-javascript"),
         ]);
         const highlighter = await createHighlighterCore({
-          themes: [import("@shikijs/themes/github-light")],
+          // Ambos themes precargados — BlockNote elige cuál aplicar según el
+          // prop `theme` de BlockNoteView. Ahorra un re-fetch al cambiar modo.
+          themes: [
+            import("@shikijs/themes/github-light"),
+            import("@shikijs/themes/github-dark"),
+          ],
           langs: [
             import("@shikijs/langs-precompiled/typescript"),
             import("@shikijs/langs-precompiled/tsx"),
@@ -70,6 +76,21 @@ export function KBEditor({ initialContent, readOnly = false, onChange }: KBEdito
     onChangeRef.current = onChange;
   });
 
+  // Tema efectivo para BlockNote. ThemeProvider expone 'light' | 'dark' | 'system';
+  // BlockNote solo entiende light/dark, así que resolvemos 'system' vía matchMedia
+  // y nos suscribimos a cambios de preferencia del SO en vivo.
+  const { theme } = useTheme();
+  const [systemDark, setSystemDark] = useState(false);
+  useEffect(() => {
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    setSystemDark(mql.matches);
+    const handler = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
+  const effectiveTheme: "light" | "dark" =
+    theme === "system" ? (systemDark ? "dark" : "light") : theme;
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const initialBlocks = useMemo(() => {
     const blocks = initialContent?.blocks;
@@ -95,7 +116,7 @@ export function KBEditor({ initialContent, readOnly = false, onChange }: KBEdito
 
   return (
     <div className="rounded-md border border-border bg-background min-h-[300px] overflow-hidden">
-      <BlockNoteView editor={editor} editable={!readOnly} theme="light" />
+      <BlockNoteView editor={editor} editable={!readOnly} theme={effectiveTheme} />
     </div>
   );
 }
