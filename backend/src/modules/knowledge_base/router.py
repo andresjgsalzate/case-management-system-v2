@@ -400,6 +400,19 @@ def _serialize_article(a) -> dict:
     # Nombre del creador (si la relación está cargada vía selectinload)
     creator = getattr(a, "created_by", None)
     created_by_name = creator.full_name if creator else None
+    # case_refs: lista de casos vinculados, expuesta para que el frontend pueda
+    # buscar/filtrar por número o título del caso sin un fetch extra por artículo.
+    # Defensivo: si la relación no se cargó vía selectinload, getattr devuelve []
+    # y no rompe el serializer.
+    case_refs = []
+    article_cases = getattr(a, "kb_article_cases", None) or []
+    for acm in article_cases:
+        case = getattr(acm, "case_ref", None)
+        if case is not None:
+            case_refs.append({
+                "case_number": case.case_number,
+                "case_title": case.title,
+            })
     return {
         "id": a.id,
         "title": a.title,
@@ -421,6 +434,7 @@ def _serialize_article(a) -> dict:
         "pending_visibility": a.pending_visibility,
         "document_type": doc_type,
         "tags": tags,
+        "case_refs": case_refs,
     }
 
 
