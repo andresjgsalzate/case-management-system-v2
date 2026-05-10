@@ -59,6 +59,11 @@ command -v node    >/dev/null 2>&1 || err "node no encontrado"
 command -v npm     >/dev/null 2>&1 || err "npm no encontrado"
 
 PYTHON=$(command -v python3 2>/dev/null || command -v python)
+# Guardamos el Python del sistema ANTES de cualquier venv activate. La sección
+# 3 modificará $PYTHON para apuntar al venv del backend, pero las herramientas
+# globales (code-review-graph instalado con pip --user) viven en el system
+# Python y necesitan invocarse desde ahí.
+SYSTEM_PYTHON="$PYTHON"
 log "Python: $($PYTHON --version)"
 log "Node:   $(node --version)"
 
@@ -202,15 +207,15 @@ cd "$ROOT"
 # en Windows, el script `code-review-graph.exe` vive en el Scripts/ de pip
 # user-packages, que NO siempre está en PATH cuando dev.bat lanza Git Bash.
 # Llamar como módulo Python siempre funciona si el paquete está instalado.
-if $PYTHON -m code_review_graph --version >/dev/null 2>&1; then
+if $SYSTEM_PYTHON -m code_review_graph --version >/dev/null 2>&1; then
   log "Actualizando grafo (solo archivos cambiados)…"
-  if $PYTHON -m code_review_graph update 2>&1 | tail -5; then
+  if $SYSTEM_PYTHON -m code_review_graph update 2>&1 | tail -5; then
     log "Grafo actualizado ✓"
   else
     warn "code-review-graph update devolvió error — continuando sin grafo"
   fi
 else
-  warn "code-review-graph no instalado — saltando indexación"
+  warn "code-review-graph no instalado en el Python del sistema"
   warn "  Instálalo con:  pip install --user code-review-graph"
 fi
 
