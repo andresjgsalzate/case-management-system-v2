@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CreateCasePriorityDTO(BaseModel):
@@ -16,5 +16,4 @@ class CasePriorityResponseDTO(BaseModel):
     is_default: bool
     is_active: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
