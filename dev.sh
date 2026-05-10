@@ -198,9 +198,13 @@ head_ "6/6  Indexando código con code-review-graph"
 
 cd "$ROOT"
 
-if command -v code-review-graph >/dev/null 2>&1; then
+# Detectamos vía `python -m code_review_graph` en lugar del binario directo:
+# en Windows, el script `code-review-graph.exe` vive en el Scripts/ de pip
+# user-packages, que NO siempre está en PATH cuando dev.bat lanza Git Bash.
+# Llamar como módulo Python siempre funciona si el paquete está instalado.
+if $PYTHON -m code_review_graph --version >/dev/null 2>&1; then
   log "Actualizando grafo (solo archivos cambiados)…"
-  if code-review-graph update 2>&1 | tail -5; then
+  if $PYTHON -m code_review_graph update 2>&1 | tail -5; then
     log "Grafo actualizado ✓"
   else
     warn "code-review-graph update devolvió error — continuando sin grafo"
