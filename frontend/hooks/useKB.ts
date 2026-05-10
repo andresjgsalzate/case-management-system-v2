@@ -53,6 +53,28 @@ export function useKBTags() {
   });
 }
 
+export interface PopularKBTag {
+  id: string;
+  name: string;
+  slug: string;
+  usage_count: number;
+}
+
+/** Top N tags más usados — cacheado 5 min porque cambia lento. */
+export function usePopularKBTags(limit = 10) {
+  return useQuery({
+    queryKey: ["kb-tags-popular", limit],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ApiResponse<PopularKBTag[]>>(
+        "/kb/tags/popular",
+        { params: { limit } },
+      );
+      return data.data ?? [];
+    },
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function useCreateKBTag() {
   const qc = useQueryClient();
   return useMutation({
@@ -73,6 +95,7 @@ export function useCreateKBArticle() {
       content_text: string;
       tag_ids?: string[];
       document_type_id?: string | null;
+      visibility?: "private" | "team" | "public";
     }) => {
       const { data } = await apiClient.post<ApiResponse<KBArticle>>("/kb/articles", payload);
       return data.data;
@@ -104,6 +127,7 @@ export function useUpdateKBArticle(id: string) {
       content_text?: string;
       tag_ids?: string[];
       document_type_id?: string | null;
+      visibility?: "private" | "team" | "public";
     }) => {
       const { data } = await apiClient.patch<ApiResponse<KBArticle>>(
         `/kb/articles/${id}`,

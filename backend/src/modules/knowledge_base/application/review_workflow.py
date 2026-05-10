@@ -15,7 +15,10 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
     "draft":     ["in_review"],
     "in_review": ["approved", "rejected"],
     "approved":  ["published", "in_review"],  # in_review = volver a revisar
-    "rejected":  ["draft"],                    # el autor corrige y re-envía
+    # Desde rejected el autor puede:
+    #   - volver a draft (limpiar y reescribir desde cero)
+    #   - reenviar a revisión directo (corrigió en base al comentario del revisor)
+    "rejected":  ["draft", "in_review"],
     "published": [],                           # estado final
 }
 

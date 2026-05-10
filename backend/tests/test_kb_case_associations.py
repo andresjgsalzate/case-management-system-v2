@@ -69,7 +69,8 @@ def test_list_case_articles_signature():
     from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
     sig = inspect.signature(KBUseCases.list_case_articles)
     params = set(sig.parameters.keys())
-    assert params == {"self", "case_id"}
+    # `user` opcional para filtro de visibility (None = sin filtro)
+    assert params == {"self", "case_id", "user"}
 
 
 def test_router_has_article_cases_endpoints():

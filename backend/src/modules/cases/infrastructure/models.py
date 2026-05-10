@@ -54,6 +54,9 @@ class CaseModel(Base):
     )
     application_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("applications.id"), nullable=True)
     origin_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("origins.id"), nullable=True)
+    service_item_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("service_catalog_items.id", ondelete="SET NULL"), nullable=True
+    )
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     assigned_to: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     team_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("teams.id"), nullable=True)
@@ -88,4 +91,7 @@ class CaseModel(Base):
     )
     assigned_user: Mapped["UserModel | None"] = relationship(  # type: ignore[name-defined]
         "UserModel", foreign_keys=[assigned_to]
+    )
+    service_item: Mapped["ServiceCatalogItemModel | None"] = relationship(  # type: ignore[name-defined]
+        "ServiceCatalogItemModel", foreign_keys=[service_item_id]
     )

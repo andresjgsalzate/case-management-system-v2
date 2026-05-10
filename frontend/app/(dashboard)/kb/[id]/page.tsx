@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ChevronLeft, Eye, ThumbsUp, ThumbsDown,
-  Calendar, Star, Pencil, ChevronDown, ChevronUp, Clock, History,
+  Calendar, Star, Pencil, ChevronDown, ChevronUp, Clock, History, User,
 } from "lucide-react";
 import {
   useKBArticle, useTransitionKBArticle,
@@ -13,12 +13,14 @@ import {
 } from "@/hooks/useKB";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
 import { DocumentTypeBadge } from "@/components/molecules/DocumentTypeBadge";
+import { VisibilityBadge } from "@/components/molecules/VisibilityBadge";
 import { Spinner } from "@/components/atoms/Spinner";
 import { Button } from "@/components/atoms/Button";
 import { KBEditor } from "@/components/organisms/KBEditor";
 import { ReviewHistoryDrawer } from "@/components/organisms/ReviewHistoryDrawer";
 import { FeedbackWidget } from "@/components/molecules/FeedbackWidget";
 import { RelatedCasesSection } from "@/components/organisms/RelatedCasesSection";
+import { TagsSection } from "@/components/organisms/TagsSection";
 import { formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth.store";
 import type { KBStatus, UserPermission } from "@/lib/types";
@@ -82,7 +84,10 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
   }
 
   const status = article.status as KBStatus;
-  const isEditable = (status === "draft" || status === "rejected") && canCreate;
+  // Editable en cualquier estado salvo `in_review` (un revisor lo está mirando).
+  // Editar un artículo aprobado/publicado lo devuelve al ciclo de revisión —
+  // la lógica de transición vive en el backend (update_article).
+  const isEditable = canCreate && status !== "in_review";
 
   return (
     <div className="flex flex-col gap-5">
@@ -103,6 +108,7 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
           <div className="flex items-center gap-2 flex-wrap">
             <StatusBadge status={article.status} />
             <DocumentTypeBadge type={article.document_type} size="md" />
+            <VisibilityBadge visibility={article.visibility} size="sm" />
             <span className="text-xs text-muted-foreground">Versión {article.version}</span>
           </div>
 
@@ -141,14 +147,15 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
               </Button>
             )}
 
-            {/* Send to review (draft + canCreate) */}
-            {status === "draft" && canCreate && (
+            {/* Enviar a revisión: desde draft (envío inicial) o rejected
+                (autor corrigió tras feedback del revisor) */}
+            {(status === "draft" || status === "rejected") && canCreate && (
               <Button
                 size="sm"
                 onClick={() => handleTransition("in_review")}
                 loading={transition.isPending}
               >
-                Enviar a revisión
+                {status === "rejected" ? "Reenviar a revisión" : "Enviar a revisión"}
               </Button>
             )}
 
@@ -194,22 +201,12 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
         {/* Title */}
         <h1 className="text-2xl font-bold text-foreground">{article.title}</h1>
 
-        {/* Tags */}
-        {article.tags && article.tags.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {article.tags.map((t) => (
-              <span
-                key={t.id}
-                className="inline-flex items-center rounded-md bg-primary/10 text-primary text-xs px-2 py-0.5"
-              >
-                {t.name}
-              </span>
-            ))}
-          </div>
-        )}
-
         {/* Meta row */}
         <div className="flex items-center gap-5 text-xs text-muted-foreground pb-4 border-b border-border flex-wrap">
+          <span className="flex items-center gap-1 truncate">
+            <User className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Por: {article.created_by_name ?? "Desconocido"}</span>
+          </span>
           <span className="flex items-center gap-1">
             <Calendar className="h-3.5 w-3.5" />
             {formatDate(article.updated_at)}
@@ -228,16 +225,17 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
           </span>
         </div>
 
+        {/* Tags — sección dedicada, clicable para filtrar la lista de KB */}
+        <TagsSection tags={article.tags} />
+
+        {/* Casos relacionados — read-only en vista; las modificaciones van en /edit */}
+        <RelatedCasesSection
+          articleId={params.id}
+          canEdit={false}
+        />
+
         {/* Content — BlockNote read-only */}
         <KBEditor initialContent={article.content_json} readOnly />
-
-        {/* Casos relacionados */}
-        <div className="pt-2 border-t border-border">
-          <RelatedCasesSection
-            articleId={params.id}
-            canEdit={hasPerm(permissions, "knowledge_base", "update")}
-          />
-        </div>
 
         {/* Feedback widget (persistent check + stats) */}
         <FeedbackWidget articleId={params.id} />
@@ -316,7 +314,7 @@ export default function KBArticlePage({ params }: { params: { id: string } }) {
                 variant="destructive"
                 loading={transition.isPending}
                 disabled={!rejectComment.trim()}
-                onClick={() => handleTransition("draft", rejectComment)}
+                onClick={() => handleTransition("rejected", rejectComment)}
               >
                 Confirmar rechazo
               </Button>

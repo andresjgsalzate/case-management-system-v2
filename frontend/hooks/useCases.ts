@@ -39,6 +39,21 @@ export function useCase(id: string) {
   });
 }
 
+export function useCaseSearch(q: string, limit = 10) {
+  const query = q.trim();
+  return useQuery({
+    queryKey: [CASES_KEY, "search", query, limit],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ApiResponse<Case[]>>("/cases/search", {
+        params: { q: query, limit },
+      });
+      return data.data ?? [];
+    },
+    enabled: query.length >= 1,
+    staleTime: 10_000,
+  });
+}
+
 export function useCreateCase() {
   const qc = useQueryClient();
   return useMutation({
@@ -47,6 +62,8 @@ export function useCreateCase() {
       description?: string;
       priority_id: string;
       application_id?: string;
+      service_item_id?: string;
+      custom_values?: { field_id: string; value: string | null }[];
     }) => {
       const { data } = await apiClient.post<ApiResponse<Case>>("/cases", payload);
       return data.data;

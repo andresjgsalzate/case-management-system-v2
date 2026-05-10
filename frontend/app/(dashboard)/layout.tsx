@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Sidebar } from "@/components/organisms/Sidebar";
 import { Header } from "@/components/organisms/Header";
+import { NavigationProgress } from "@/components/molecules/NavigationProgress";
 import { useAuthStore } from "@/store/auth.store";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -20,6 +21,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
+      <NavigationProgress />
       <Sidebar />
       <div className="flex flex-col flex-1 overflow-hidden">
         <Header />

@@ -55,6 +55,34 @@ async def cases_by_application(
     return SuccessResponse.ok(await uc.get_cases_by_application())
 
 
+@router.get("/cases/by-level")
+async def cases_by_level(
+    db: DBSession,
+    current_user: CurrentUser = MetricsRead,
+):
+    uc = MetricsUseCases(db=db)
+    return SuccessResponse.ok(await uc.get_cases_by_level())
+
+
+@router.get("/cases/by-service-category")
+async def cases_by_service_category(
+    db: DBSession,
+    current_user: CurrentUser = MetricsRead,
+):
+    uc = MetricsUseCases(db=db)
+    return SuccessResponse.ok(await uc.get_cases_by_service_category())
+
+
+@router.get("/cases/top-service-items")
+async def cases_top_service_items(
+    db: DBSession,
+    limit: int = Query(default=10, ge=1, le=50),
+    current_user: CurrentUser = MetricsRead,
+):
+    uc = MetricsUseCases(db=db)
+    return SuccessResponse.ok(await uc.get_top_service_items(limit=limit))
+
+
 @router.get("/cases/trend")
 async def cases_trend(
     db: DBSession,

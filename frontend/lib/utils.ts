@@ -6,6 +6,49 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/**
+ * Extrae un mensaje legible de cualquier error HTTP (axios).
+ * Maneja:
+ *  - AppError del backend: { message: "..." }
+ *  - Pydantic 422: { detail: [{loc, msg, type, input}] }
+ *  - FastAPI 4xx genéricos: { detail: "..." }
+ *  - Cualquier otro: fallback al mensaje pasado
+ */
+export function extractApiError(err: unknown, fallback = "Error inesperado"): string {
+  const e = err as {
+    response?: {
+      data?: {
+        message?: string;
+        detail?: string | { loc?: (string | number)[]; msg?: string }[];
+      };
+    };
+  };
+  const data = e?.response?.data;
+  if (!data) return fallback;
+  if (typeof data.message === "string") return data.message;
+  if (typeof data.detail === "string") return data.detail;
+  if (Array.isArray(data.detail) && data.detail.length > 0) {
+    return data.detail
+      .map((d) => {
+        const field = Array.isArray(d.loc) ? d.loc.filter((x) => x !== "body").join(".") : "campo";
+        return field ? `${field}: ${d.msg ?? "inválido"}` : (d.msg ?? "inválido");
+      })
+      .join(" · ");
+  }
+  return fallback;
+}
+
+/** Convert a string to a URL-safe slug (lowercase, ASCII, dashes). */
+export function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 100);
+}
+
 /** Format ISO date string to locale date */
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("es-ES", {

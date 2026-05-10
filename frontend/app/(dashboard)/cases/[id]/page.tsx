@@ -27,6 +27,7 @@ import { CaseClassification } from "@/components/organisms/CaseClassification";
 import { CaseActivity } from "@/components/organisms/CaseActivity";
 import { CaseAttachments } from "@/components/organisms/CaseAttachments";
 import { RelatedKBArticlesSection } from "@/components/organisms/RelatedKBArticlesSection";
+import { CaseCustomValuesCard } from "@/components/organisms/ServiceCatalog/CaseCustomValuesCard";
 import { AssignCaseModal } from "@/components/organisms/AssignCaseModal";
 import { TransferCaseModal } from "@/components/organisms/TransferCaseModal";
 import { TransferHistoryDrawer } from "@/components/organisms/TransferHistoryDrawer";
@@ -66,6 +67,9 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const canAssign       = useHasPermission("cases", "assign");
   const canArchive      = useHasPermission("cases", "archive");
   const canViewSLA      = useHasPermission("sla",   "read");
+  const caseActions     = useCasePermissions(c);
+  const canTransition   = caseActions.canTransition;
+  const canTransferCase = caseActions.canTransfer;
 
   // Tabs available based on permissions
   const visibleTabs: { key: Tab; label: string }[] = [
@@ -109,10 +113,6 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const transitionTargets = statuses.filter((s: CaseStatus) =>
     currentStatus?.allowed_transitions?.includes(s.slug)
   );
-
-  const caseActions = useCasePermissions(c);
-  const canTransition = caseActions.canTransition;
-  const canTransferCase = caseActions.canTransfer;
 
   const assignedUserName = c.assigned_user_name ?? null;
 
@@ -352,8 +352,8 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
         ))}
       </div>
 
-      {/* Tab content — altura fija para que la tarjeta de cabecera siempre sea visible */}
-      <div className="rounded-lg border border-border bg-card p-5 flex flex-col h-[calc(100vh-16rem)] overflow-hidden">
+      {/* Tab content — se ajusta al contenido hasta un máximo; cada tab scrollea por su cuenta */}
+      <div className="rounded-lg border border-border bg-card p-5 flex flex-col min-h-[20rem] max-h-[calc(100vh-16rem)] overflow-hidden">
         {tab === "details" && (
           <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0 lg:items-start">
             {/* Left — ~60%: description + attachments */}
@@ -368,6 +368,9 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
                     <p className="text-sm text-muted-foreground italic">Sin descripción</p>
                   )}
                 </div>
+
+                {/* Información del servicio (campos custom) */}
+                <CaseCustomValuesCard caseId={params.id} caseData={c} />
 
                 {/* Solución confirmada por el solicitante — solo si aprobó */}
                 {resolutionFeedback?.status === "accepted" && (

@@ -10,7 +10,9 @@ import { FormField } from "@/components/molecules/FormField";
 import { KBEditor } from "@/components/organisms/KBEditor";
 import { TagMultiSelect } from "@/components/molecules/TagMultiSelect";
 import { DocumentTypeSelect } from "@/components/molecules/DocumentTypeSelect";
+import { VisibilitySelect } from "@/components/molecules/VisibilitySelect";
 import { useCreateKBArticle } from "@/hooks/useKB";
+import type { KBVisibility } from "@/lib/types";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { DOCUMENTATION_TEMPLATE, templateToPlainText } from "@/lib/kb-templates";
 
@@ -25,6 +27,7 @@ export default function NewKBArticlePage() {
   const [error, setError] = useState("");
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [documentTypeId, setDocumentTypeId] = useState<string | null>(null);
+  const [visibility, setVisibility] = useState<KBVisibility>("private");
   const [editorKey, setEditorKey] = useState(0);
   const [editorInitial, setEditorInitial] = useState<
     Record<string, unknown> | undefined
@@ -51,6 +54,7 @@ export default function NewKBArticlePage() {
         content_text: editorValue.content_text,
         tag_ids: tagIds,
         document_type_id: documentTypeId,
+        visibility,
       });
       router.push(`/kb/${article!.id}`);
     } catch {
@@ -85,6 +89,22 @@ export default function NewKBArticlePage() {
             />
           </FormField>
 
+          {/* Tags justo debajo del título */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Tags</label>
+            <TagMultiSelect value={tagIds} onChange={setTagIds} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Tipo de documento</label>
+            <DocumentTypeSelect value={documentTypeId} onChange={setDocumentTypeId} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium">Visibilidad</label>
+            <VisibilitySelect value={visibility} onChange={setVisibility} />
+          </div>
+
           <FormField label="Contenido" htmlFor="kb-content" required>
             <div className="flex flex-col gap-2">
               <div className="flex justify-end">
@@ -105,16 +125,6 @@ export default function NewKBArticlePage() {
               />
             </div>
           </FormField>
-
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium">Tipo de documento</label>
-            <DocumentTypeSelect value={documentTypeId} onChange={setDocumentTypeId} />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium">Tags</label>
-            <TagMultiSelect value={tagIds} onChange={setTagIds} />
-          </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 

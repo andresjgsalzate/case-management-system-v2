@@ -28,6 +28,12 @@ def test_valid_transition_rejected_to_draft():
     assert KBWorkflow.can_transition("rejected", "draft") is True
 
 
+def test_valid_transition_rejected_to_in_review():
+    """El autor corrige tras feedback del revisor y reenvía sin pasar por draft."""
+    from backend.src.modules.knowledge_base.application.review_workflow import KBWorkflow
+    assert KBWorkflow.can_transition("rejected", "in_review") is True
+
+
 def test_invalid_transition_draft_to_published():
     from backend.src.modules.knowledge_base.application.review_workflow import KBWorkflow
     assert KBWorkflow.can_transition("draft", "published") is False

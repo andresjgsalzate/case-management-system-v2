@@ -25,6 +25,9 @@ from backend.src.core.events.bus import event_bus
 from backend.src.core.events.base import BaseEvent
 from backend.src.core.permissions.case_queries import filter_cases_by_permission
 from backend.src.core.permissions.case_permissions import check_case_action
+from backend.src.modules.service_catalog.infrastructure.models import (
+    ServiceCatalogItemModel,
+)
 
 
 class CaseUseCases:
@@ -34,9 +37,38 @@ class CaseUseCases:
     async def create_case(
         self, dto: CreateCaseDTO, actor_id: str, tenant_id: str | None
     ) -> CaseResponseDTO:
+        from backend.src.modules.service_catalog.infrastructure.models import (
+            ServiceCatalogItemModel,
+        )
+        from backend.src.modules.service_catalog.application.use_cases import (
+            CaseCustomValueUseCases,
+        )
+        from backend.src.modules.service_catalog.application.dtos import (
+            CaseCustomValueDTO,
+        )
+
         status_uc = CaseStatusUseCases(self.db)
         initial_status = await status_uc.get_initial_status(tenant_id)
         case_number = await next_case_number(self.db, tenant_id)
+
+        # Resolver service item y aplicar defaults si vienen vacíos
+        priority_id = dto.priority_id
+        team_id: str | None = None
+        current_level = 1
+        service_item: ServiceCatalogItemModel | None = None
+        if dto.service_item_id:
+            service_item = await self.db.get(
+                ServiceCatalogItemModel, dto.service_item_id
+            )
+            if not service_item:
+                raise NotFoundError(f"Service item {dto.service_item_id} not found")
+            if not priority_id and service_item.default_priority_id:
+                priority_id = service_item.default_priority_id
+            team_id = service_item.default_team_id
+            current_level = service_item.default_level
+
+        if not priority_id:
+            raise ValidationError("priority_id is required (or use a service_item with default)")
 
         case = CaseModel(
             id=str(uuid.uuid4()),
@@ -45,15 +77,27 @@ class CaseUseCases:
             title=dto.title,
             description=dto.description,
             status_id=initial_status.id,
-            priority_id=dto.priority_id,
+            priority_id=priority_id,
             complexity=dto.complexity,
             application_id=dto.application_id,
             origin_id=dto.origin_id,
+            service_item_id=dto.service_item_id,
+            team_id=team_id,
+            current_level=current_level,
             created_by=actor_id,
         )
         self.db.add(case)
         await self.db.commit()
         await self.db.refresh(case)
+
+        # Persistir custom values (validados contra los fields del item)
+        if dto.custom_values:
+            cv_uc = CaseCustomValueUseCases(self.db)
+            await cv_uc.upsert_values(
+                case_id=case.id,
+                values=[CaseCustomValueDTO(field_id=v.field_id, value=v.value) for v in dto.custom_values],
+                tenant_id=tenant_id,
+            )
 
         await event_bus.publish(
             BaseEvent(
@@ -75,6 +119,9 @@ class CaseUseCases:
                 selectinload(CaseModel.application),
                 selectinload(CaseModel.origin),
                 selectinload(CaseModel.assigned_user),
+                selectinload(CaseModel.service_item).selectinload(
+                    ServiceCatalogItemModel.category
+                ),
             )
             .where(CaseModel.id == case_id)
         )
@@ -102,6 +149,9 @@ class CaseUseCases:
                 selectinload(CaseModel.application),
                 selectinload(CaseModel.origin),
                 selectinload(CaseModel.assigned_user),
+                selectinload(CaseModel.service_item).selectinload(
+                    ServiceCatalogItemModel.category
+                ),
             )
             .where(CaseModel.tenant_id == tenant_id, CaseModel.is_archived == False)
         )
@@ -346,6 +396,43 @@ class CaseUseCases:
             )
         return output.getvalue()
 
+    async def search_cases(
+        self,
+        tenant_id: str | None,
+        q: str,
+        user,
+        limit: int = 10,
+    ) -> list[CaseResponseDTO]:
+        """Search cases by case_number or title across active AND archived,
+        respecting RBAC scope/level via filter_cases_by_permission."""
+        from sqlalchemy import or_
+        like = f"%{q.strip()}%"
+        query = (
+            select(CaseModel)
+            .options(
+                selectinload(CaseModel.status),
+                selectinload(CaseModel.priority),
+                selectinload(CaseModel.application),
+                selectinload(CaseModel.origin),
+                selectinload(CaseModel.assigned_user),
+                selectinload(CaseModel.service_item).selectinload(
+                    ServiceCatalogItemModel.category
+                ),
+            )
+            .where(CaseModel.tenant_id == tenant_id)
+            .where(
+                or_(
+                    CaseModel.case_number.ilike(like),
+                    CaseModel.title.ilike(like),
+                )
+            )
+        )
+        query = filter_cases_by_permission(query, user, queue="all")
+        result = await self.db.execute(
+            query.order_by(CaseModel.created_at.desc()).limit(limit)
+        )
+        return [self._to_dto(c) for c in result.scalars().all()]
+
     async def list_archived(
         self,
         tenant_id: str | None,
@@ -363,6 +450,9 @@ class CaseUseCases:
                 selectinload(CaseModel.application),
                 selectinload(CaseModel.origin),
                 selectinload(CaseModel.assigned_user),
+                selectinload(CaseModel.service_item).selectinload(
+                    ServiceCatalogItemModel.category
+                ),
             )
             .where(CaseModel.tenant_id == tenant_id, CaseModel.is_archived == True)
         )
@@ -390,6 +480,9 @@ class CaseUseCases:
         return [self._to_dto(c) for c in result.scalars().all()], total
 
     def _to_dto(self, model: CaseModel) -> CaseResponseDTO:
+        # service_item y su category vienen via selectinload — accedemos sin lazy
+        svc_item = getattr(model, "service_item", None)
+        svc_category = svc_item.category if svc_item is not None else None
         return CaseResponseDTO(
             id=model.id,
             case_number=model.case_number,
@@ -407,6 +500,10 @@ class CaseUseCases:
             application_name=model.application.name if model.application else None,
             origin_id=model.origin_id,
             origin_name=model.origin.name if model.origin else None,
+            service_item_id=model.service_item_id,
+            service_item_name=svc_item.name if svc_item else None,
+            service_category_id=svc_category.id if svc_category else None,
+            service_category_name=svc_category.name if svc_category else None,
             created_by=model.created_by,
             assigned_to=model.assigned_to,
             assigned_user_name=model.assigned_user.full_name if model.assigned_user else None,

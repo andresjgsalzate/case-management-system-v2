@@ -2,13 +2,23 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class CustomFieldValueDTO(BaseModel):
+    field_id: str
+    value: str | None = None
+
+
 class CreateCaseDTO(BaseModel):
     title: str = Field(min_length=3, max_length=500)
     description: str | None = None
-    priority_id: str
+    priority_id: str | None = None
     complexity: Literal["simple", "moderate", "complex"] = "simple"
     application_id: str | None = None
     origin_id: str | None = None
+    service_item_id: str = Field(
+        min_length=1,
+        description="ID del ítem del catálogo de servicios (obligatorio)",
+    )
+    custom_values: list[CustomFieldValueDTO] = Field(default_factory=list)
 
 
 class UpdateCaseDTO(BaseModel):
@@ -46,6 +56,10 @@ class CaseResponseDTO(BaseModel):
     application_name: str | None
     origin_id: str | None
     origin_name: str | None
+    service_item_id: str | None = None
+    service_item_name: str | None = None
+    service_category_id: str | None = None
+    service_category_name: str | None = None
     created_by: str
     assigned_to: str | None
     assigned_user_name: str | None

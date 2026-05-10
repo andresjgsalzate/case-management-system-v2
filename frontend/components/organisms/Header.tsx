@@ -8,6 +8,7 @@ import { Avatar } from "@/components/atoms/Avatar";
 import { NotificationBell } from "@/components/molecules/NotificationBell";
 import { ThemeToggle } from "@/components/molecules/ThemeToggle";
 import { Breadcrumb } from "@/components/molecules/Breadcrumb";
+import { GlobalCaseSearch } from "@/components/molecules/GlobalCaseSearch";
 import { useAuthStore } from "@/store/auth.store";
 
 export function Header() {
@@ -54,6 +55,7 @@ export function Header() {
 
       {/* Actions */}
       <div className="flex items-center gap-1">
+        <GlobalCaseSearch />
         <ThemeToggle />
         <NotificationBell />
 

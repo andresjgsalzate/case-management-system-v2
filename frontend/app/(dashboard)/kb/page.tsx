@@ -1,17 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, BookOpen, Eye, ThumbsUp } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Plus, BookOpen, Eye, ThumbsUp, User } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
 import { DocumentTypeBadge } from "@/components/molecules/DocumentTypeBadge";
+import { VisibilityBadge } from "@/components/molecules/VisibilityBadge";
 import { Spinner } from "@/components/atoms/Spinner";
 import { useKBArticles, useKBTags } from "@/hooks/useKB";
 import { PendingReviewBanner } from "@/components/organisms/PendingReviewBanner";
-import { formatDate, truncate } from "@/lib/utils";
+// formatDate y truncate ya no se usan — los stats inferiores fueron simplificados
 import type { KBStatus } from "@/lib/types";
 
 const STATUS_TABS: { label: string; value: KBStatus | "" }[] = [
@@ -22,12 +24,30 @@ const STATUS_TABS: { label: string; value: KBStatus | "" }[] = [
   { label: "Rechazados", value: "rejected" },
 ];
 
+const VALID_STATUSES: KBStatus[] = ["draft", "in_review", "approved", "rejected", "published"];
+
+function parseStatusParam(raw: string | null): KBStatus | "" {
+  return raw && (VALID_STATUSES as string[]).includes(raw) ? (raw as KBStatus) : "";
+}
+
 export default function KBPage() {
   usePermissionGuard("knowledge_base", "read");
+  const searchParams = useSearchParams();
+  const initialTagSlug = searchParams.get("tag") ?? "";
+  const initialStatus = parseStatusParam(searchParams.get("status"));
+
   const [search, setSearch] = useState("");
-  const [activeStatus, setActiveStatus] = useState<KBStatus | "">("");
-  const [activeTagSlug, setActiveTagSlug] = useState<string>("");
+  const [activeStatus, setActiveStatus] = useState<KBStatus | "">(initialStatus);
+  const [activeTagSlug, setActiveTagSlug] = useState<string>(initialTagSlug);
   const { data: tags = [] } = useKBTags();
+
+  // Sincroniza si los query params cambian — útil cuando el usuario llega vía
+  // links externos ("?tag=bug") o desde el banner de pendientes ("?status=in_review")
+  // sin desmontar el componente.
+  useEffect(() => {
+    setActiveTagSlug(searchParams.get("tag") ?? "");
+    setActiveStatus(parseStatusParam(searchParams.get("status")));
+  }, [searchParams]);
 
   const { data: articles = [], isLoading } = useKBArticles(
     activeStatus || undefined,
@@ -121,9 +141,9 @@ export default function KBPage() {
       )}
 
       {!isLoading && (
-        <div className="grid gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {filtered.length === 0 && (
-            <div className="rounded-lg border border-border bg-card p-8 text-center text-muted-foreground">
+            <div className="col-span-full rounded-lg border border-border bg-card p-8 text-center text-muted-foreground">
               <BookOpen className="h-8 w-8 mx-auto mb-2 opacity-30" />
               <p className="text-sm">No hay artículos que mostrar</p>
             </div>
@@ -132,24 +152,45 @@ export default function KBPage() {
             <Link
               key={article.id}
               href={`/kb/${article.id}`}
-              className="rounded-lg border border-border bg-card p-4 hover:border-primary/30 hover:shadow-sm transition-all duration-150 block"
+              className="rounded-lg border border-border bg-card p-3.5 hover:border-primary/30 hover:shadow-sm transition-all duration-150 flex flex-col gap-2"
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                    <StatusBadge status={article.status} />
-                    <DocumentTypeBadge type={article.document_type} />
-                    <span className="text-xs text-muted-foreground">v{article.version}</span>
-                  </div>
-                  <h3 className="font-medium text-foreground hover:text-primary transition-colors">
-                    {article.title}
-                  </h3>
-                  <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                    {truncate(article.content_text, 150)}
-                  </p>
-                </div>
+              {/* Status + versión: línea pequeña arriba (info de estado del documento) */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <StatusBadge status={article.status} />
+                <span className="text-xs text-muted-foreground">v{article.version}</span>
               </div>
-              <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
+
+              {/* 1. Título */}
+              <h3 className="font-semibold text-foreground hover:text-primary transition-colors line-clamp-2">
+                {article.title}
+              </h3>
+
+              {/* 2. Tipo de documento + 3. Visibilidad */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <DocumentTypeBadge type={article.document_type} />
+                <VisibilityBadge visibility={article.visibility} />
+              </div>
+
+              {/* 4. Tags */}
+              {article.tags && article.tags.length > 0 && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {article.tags.map((t) => (
+                    <span
+                      key={t.id}
+                      className="inline-flex items-center rounded-md bg-primary/10 text-primary text-xs px-2 py-0.5"
+                    >
+                      {t.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* 5. Creador + stats — fila final, empuja al fondo del card */}
+              <div className="flex items-center gap-3 mt-auto pt-2 border-t border-border text-xs text-muted-foreground flex-wrap">
+                <span className="flex items-center gap-1 truncate">
+                  <User className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{article.created_by_name ?? "Desconocido"}</span>
+                </span>
                 <span className="flex items-center gap-1">
                   <Eye className="h-3.5 w-3.5" />
                   {article.view_count}
@@ -158,7 +199,6 @@ export default function KBPage() {
                   <ThumbsUp className="h-3.5 w-3.5" />
                   {article.helpful_count}
                 </span>
-                <span>{formatDate(article.updated_at)}</span>
               </div>
             </Link>
           ))}

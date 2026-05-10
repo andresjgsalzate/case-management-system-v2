@@ -125,16 +125,37 @@ async def recalculate_target_at(db: AsyncSession, record: SLARecordModel) -> Non
 
 
 async def check_sla_breaches(db: AsyncSession) -> None:
-    """Job periódico: detecta casos con SLA vencido y emite eventos."""
+    """Job periódico: detecta casos con SLA vencido y emite eventos.
+
+    Excluye:
+      - SLA pausados por timer (paused_at IS NOT NULL)
+      - SLA pausados por estado del caso (status_paused_at IS NOT NULL)
+      - Casos archivados (cases.is_archived = TRUE)
+      - Casos en estados finales (case_statuses.is_final = TRUE)
+    """
     from backend.src.core.events.bus import event_bus
     from backend.src.core.events.base import BaseEvent
+    from backend.src.modules.case_statuses.infrastructure.models import CaseStatusModel
 
     now = datetime.now(timezone.utc)
+
+    # Sub-select: case_ids que SÍ son candidatos a breach (no archivados, no finales)
+    eligible_case_ids = (
+        select(CaseModel.id)
+        .join(CaseStatusModel, CaseStatusModel.id == CaseModel.status_id)
+        .where(
+            CaseModel.is_archived == False,
+            CaseStatusModel.is_final == False,
+        )
+    )
+
     result = await db.execute(
         select(SLARecordModel).where(
             SLARecordModel.is_breached == False,
             SLARecordModel.target_at <= now,
-            SLARecordModel.paused_at.is_(None),  # No verificar SLAs pausados
+            SLARecordModel.paused_at.is_(None),
+            SLARecordModel.status_paused_at.is_(None),
+            SLARecordModel.case_id.in_(eligible_case_ids),
         )
     )
     breached = result.scalars().all()
@@ -142,7 +163,7 @@ async def check_sla_breaches(db: AsyncSession) -> None:
         record.is_breached = True
         record.breached_at = now
         case = await db.get(CaseModel, record.case_id)
-        if case and not case.is_archived:
+        if case:
             await event_bus.publish(
                 BaseEvent(
                     event_name="sla.breached",

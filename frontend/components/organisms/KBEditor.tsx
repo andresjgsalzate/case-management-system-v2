@@ -5,7 +5,55 @@ import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/ariakit";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/ariakit/style.css";
-import type { PartialBlock } from "@blocknote/core";
+import { BlockNoteSchema, createCodeBlockSpec, type PartialBlock } from "@blocknote/core";
+import type { HighlighterGeneric } from "@shikijs/types";
+
+// Lenguajes habilitados en el slash-command `/code` y en el dropdown del bloque.
+// Restringido al stack del proyecto — añadir más implica cargar más grammars de
+// Shiki, que pesan ~5–10 KB cada uno (lazy-loaded en el primer code block).
+const schema = BlockNoteSchema.create().extend({
+  blockSpecs: {
+    codeBlock: createCodeBlockSpec({
+      indentLineWithTab: true,
+      defaultLanguage: "typescript",
+      supportedLanguages: {
+        typescript: { name: "TypeScript", aliases: ["ts"] },
+        tsx: { name: "TSX" },
+        python: { name: "Python", aliases: ["py"] },
+        bash: { name: "Bash", aliases: ["sh", "shell"] },
+        sql: { name: "SQL" },
+        json: { name: "JSON" },
+        powershell: { name: "PowerShell", aliases: ["ps", "ps1"] },
+      },
+      // Highlighter Shiki construido con imports dinámicos: el bundle inicial no
+      // incluye ningún grammar; se descargan al renderizar el primer codeBlock.
+      // Usamos las grammars precompiladas que ya vienen como dep transitiva de
+      // @blocknote/code-block para no añadir el paquete `shiki` completo (~1 MB).
+      createHighlighter: async () => {
+        const [{ createHighlighterCore }, { createJavaScriptRegexEngine }] = await Promise.all([
+          import("@shikijs/core"),
+          import("@shikijs/engine-javascript"),
+        ]);
+        const highlighter = await createHighlighterCore({
+          themes: [import("@shikijs/themes/github-light")],
+          langs: [
+            import("@shikijs/langs-precompiled/typescript"),
+            import("@shikijs/langs-precompiled/tsx"),
+            import("@shikijs/langs-precompiled/python"),
+            import("@shikijs/langs-precompiled/bash"),
+            import("@shikijs/langs-precompiled/sql"),
+            import("@shikijs/langs-precompiled/json"),
+            import("@shikijs/langs-precompiled/powershell"),
+          ],
+          engine: createJavaScriptRegexEngine(),
+        });
+        // HighlighterCore y HighlighterGeneric<any,any> son la misma forma en
+        // runtime; el cast salva el mismatch nominal entre los tipos de Shiki.
+        return highlighter as unknown as HighlighterGeneric<string, string>;
+      },
+    }),
+  },
+});
 
 interface KBEditorProps {
   /** Contenido inicial en formato BlockNote. Se espera { blocks: Block[] }. */
@@ -33,7 +81,7 @@ export function KBEditor({ initialContent, readOnly = false, onChange }: KBEdito
     return validBlocks.length > 0 ? validBlocks : undefined;
   }, []); // Solo en mount — el editor es uncontrolled
 
-  const editor = useCreateBlockNote({ initialContent: initialBlocks });
+  const editor = useCreateBlockNote({ schema, initialContent: initialBlocks });
 
   useEffect(() => {
     if (readOnly || !onChangeRef.current) return;

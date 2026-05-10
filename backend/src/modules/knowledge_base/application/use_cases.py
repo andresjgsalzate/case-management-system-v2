@@ -34,7 +34,13 @@ class KBUseCases:
         tenant_id: str | None = None,
         tag_ids: list[str] | None = None,
         document_type_id: str | None = None,
+        visibility: str = "private",
     ) -> KBArticleModel:
+        # Si el creador pide 'public' al crear, lo dejamos como 'private'
+        # con pending_visibility='public' y forzamos pasar por workflow al
+        # publicar. En la creación inicial el status es draft, así que el
+        # workflow se dispara al solicitar publicación.
+        initial_visibility = visibility if visibility in ("private", "team") else "private"
         article = KBArticleModel(
             id=str(uuid.uuid4()),
             title=title,
@@ -45,13 +51,17 @@ class KBUseCases:
             created_by_id=created_by_id,
             tenant_id=tenant_id,
             document_type_id=document_type_id,
+            visibility=initial_visibility,
+            pending_visibility="public" if visibility == "public" else None,
         )
         self.db.add(article)
         await self.db.flush()
         if tag_ids:
             await self._sync_tags(article, tag_ids)
         await self.db.commit()
-        await self.db.refresh(article)
+        # Re-fetch con selectinload para que el serializer pueda acceder a
+        # `tags` / `created_by` sin disparar lazy-load (rompería en async).
+        article = await self._get_article(article.id)
         await event_bus.publish(
             BaseEvent(
                 event_name="kb.article.created",
@@ -71,10 +81,25 @@ class KBUseCases:
         content_text: str | None = None,
         tag_ids: list[str] | None = None,
         document_type_id: str | None = None,
+        visibility: str | None = None,
     ) -> KBArticleModel:
         article = await self._get_article(article_id)
-        if article.status not in ("draft", "rejected"):
-            raise ForbiddenError("Solo se pueden editar artículos en estado draft o rejected")
+        # Si SOLO se está cambiando visibility (sin tocar contenido), permitir
+        # incluso si el artículo ya está publicado. Si se tocan contenido/título,
+        # mantener la regla original.
+        only_visibility = (
+            title is None and content_json is None and content_text is None
+            and tag_ids is None and document_type_id is None
+            and visibility is not None
+        )
+        # Bloquear edits mientras un revisor está mirando el artículo (race condition).
+        if not only_visibility and article.status == "in_review":
+            raise ForbiddenError("No se puede editar un artículo en revisión")
+        # Editar un artículo aprobado o publicado lo regresa al ciclo: vuelve a
+        # `draft` y debe re-enviarse a revisión para volver a publicarse.
+        revert_to_draft = (
+            not only_visibility and article.status in ("approved", "published")
+        )
         # Snapshot inmutable de la versión actual antes de modificar
         snapshot = KBArticleVersionModel(
             id=str(uuid.uuid4()),
@@ -97,8 +122,32 @@ class KBUseCases:
             await self._sync_tags(article, tag_ids)
         if document_type_id is not None:
             article.document_type_id = document_type_id if document_type_id else None
+        if visibility is not None and visibility != article.visibility:
+            if visibility not in ("private", "team", "public"):
+                raise ForbiddenError(f"Visibilidad inválida: {visibility}")
+            if visibility == "public":
+                # Subir a público requiere aprobación → guarda como pendiente
+                # y manda a revisión solo si el artículo está publicado/aprobado.
+                # Si el artículo está en draft/rejected, deja la pendiente y la
+                # publicación normal recogerá el flag cuando se apruebe.
+                article.pending_visibility = "public"
+                if article.status in ("approved", "published"):
+                    article.status = "in_review"
+            else:
+                # Bajar a private/team es inmediato, no requiere aprobación.
+                article.visibility = visibility
+                # Si había pending de public, se cancela la solicitud.
+                article.pending_visibility = None
+        # Aplicar el revert al final: si era approved/published, el edit lo
+        # devuelve a draft. Pisa cualquier cambio de status hecho por la lógica
+        # de visibility de arriba — preferimos que el autor recorra el ciclo
+        # completo (draft → in_review → approved → published).
+        if revert_to_draft:
+            article.status = "draft"
         await self.db.commit()
-        await self.db.refresh(article)
+        # Re-fetch para refrescar la collection `tags` tras `_sync_tags`
+        # (que hace DELETE/INSERT directo y deja la collection en memoria stale).
+        article = await self._get_article(article.id)
         return article
 
     async def transition_status(
@@ -114,8 +163,15 @@ class KBUseCases:
         article.status = to_status
         if to_status == "published":
             article.published_at = datetime.now(timezone.utc)
+            # Aplicar el cambio de visibilidad pendiente si lo hay
+            if article.pending_visibility:
+                article.visibility = article.pending_visibility
+                article.pending_visibility = None
         if to_status == "approved":
             article.approved_by_id = actor_id
+        if to_status == "rejected":
+            # El revisor rechazó — descartar cualquier cambio de visibilidad pendiente
+            article.pending_visibility = None
         event_record = KBReviewEventModel(
             id=str(uuid.uuid4()),
             article_id=article_id,
@@ -148,11 +204,15 @@ class KBUseCases:
         tag_slug: str | None = None,
         limit: int = 20,
         offset: int = 0,
+        user=None,
     ) -> list[KBArticleModel]:
         stmt = (
             select(KBArticleModel)
             .where(KBArticleModel.is_deleted.is_(False))
-            .options(selectinload(KBArticleModel.tags))
+            .options(
+                selectinload(KBArticleModel.tags).selectinload(KBArticleTagModel.tag),
+                selectinload(KBArticleModel.created_by),
+            )
         )
         if status:
             stmt = stmt.where(KBArticleModel.status == status)
@@ -164,9 +224,45 @@ class KBUseCases:
                     .join(KBTagModel, KBTagModel.id == KBArticleTagModel.tag_id)
                     .where(KBTagModel.slug == tag_slug)
             )
+        if user is not None:
+            stmt = self._filter_by_visibility(stmt, user)
         stmt = stmt.order_by(KBArticleModel.updated_at.desc()).limit(limit).offset(offset)
         result = await self.db.execute(stmt)
         return list(result.scalars().unique().all())
+
+    def _filter_by_visibility(self, stmt, user):
+        """Aplica reglas de visibilidad al SELECT según el usuario actual.
+
+        Reglas:
+          - scope='all' (Admin/Super Admin): ve todo, sin filtro.
+          - scope!='all':
+            * visibility='public' → todos lo ven.
+            * visibility='team' → solo si created_by está en su mismo team_id.
+            * visibility='private' → solo si created_by = el propio user_id.
+        """
+        from sqlalchemy import or_, and_
+        from backend.src.modules.users.infrastructure.models import UserModel
+
+        scope = getattr(user, "scope", "own")
+        if scope == "all":
+            return stmt
+
+        user_id = getattr(user, "user_id", None)
+        team_id = getattr(user, "team_id", None)
+
+        # Necesitamos el team del creador para chequear "team visibility"
+        creator = UserModel.__table__.alias("creator_u")
+        stmt = stmt.outerjoin(creator, creator.c.id == KBArticleModel.created_by_id)
+
+        clauses = [
+            KBArticleModel.visibility == "public",
+            and_(KBArticleModel.visibility == "private", KBArticleModel.created_by_id == user_id),
+        ]
+        if team_id:
+            clauses.append(
+                and_(KBArticleModel.visibility == "team", creator.c.team_id == team_id)
+            )
+        return stmt.where(or_(*clauses))
 
     async def list_pending_review(
         self, tenant_id: str | None = None, limit: int = 50
@@ -177,7 +273,10 @@ class KBUseCases:
                 KBArticleModel.is_deleted.is_(False),
                 KBArticleModel.status == "in_review",
             )
-            .options(selectinload(KBArticleModel.tags))
+            .options(
+                selectinload(KBArticleModel.tags).selectinload(KBArticleTagModel.tag),
+                selectinload(KBArticleModel.created_by),
+            )
             .order_by(KBArticleModel.updated_at.desc())
             .limit(limit)
         )
@@ -186,11 +285,43 @@ class KBUseCases:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_article(self, article_id: str) -> KBArticleModel:
+    async def get_article(self, article_id: str, user=None) -> KBArticleModel:
         article = await self._get_article(article_id)
+        if user is not None:
+            await self._enforce_visibility(article, user)
         article.view_count += 1
         await self.db.commit()
         return article
+
+    async def _enforce_visibility(self, article: KBArticleModel, user) -> None:
+        """Lanza ForbiddenError si el usuario no puede ver el artículo según
+        las reglas de visibility.
+
+        Reglas:
+          - scope='all' → siempre ve.
+          - public → todos lo ven.
+          - private → solo el autor.
+          - team → autor o usuario del mismo team que el autor.
+        """
+        scope = getattr(user, "scope", "own")
+        if scope == "all":
+            return
+        if article.visibility == "public":
+            return
+        user_id = getattr(user, "user_id", None)
+        if article.created_by_id == user_id:
+            return  # el autor siempre lo ve
+        if article.visibility == "team":
+            from backend.src.modules.users.infrastructure.models import UserModel
+            res = await self.db.execute(
+                select(UserModel.team_id).where(UserModel.id == article.created_by_id)
+            )
+            creator_team = res.scalar_one_or_none()
+            user_team = getattr(user, "team_id", None)
+            if creator_team and user_team and creator_team == user_team:
+                return
+        # private (no autor) o team (sin coincidencia) → denegar
+        raise ForbiddenError("No tienes permiso para ver este artículo")
 
     async def toggle_favorite(self, article_id: str, user_id: str) -> bool:
         """Retorna True si se agregó el favorito, False si se eliminó."""
@@ -309,12 +440,62 @@ class KBUseCases:
         result = await self.db.execute(select(KBTagModel).order_by(KBTagModel.name))
         return list(result.scalars().all())
 
+    async def list_popular_tags(
+        self, limit: int = 10, tenant_id: str | None = None
+    ) -> list[dict]:
+        """Top N tags más usados, ordenados por número de artículos no eliminados
+        que los usan (cualquier estado excepto is_deleted=true).
+
+        Devuelve dicts con id/name/slug/usage_count para que el router serialice
+        sin tocar el modelo ORM directamente."""
+        from sqlalchemy import func
+
+        stmt = (
+            select(
+                KBTagModel.id,
+                KBTagModel.name,
+                KBTagModel.slug,
+                func.count(KBArticleTagModel.article_id).label("usage_count"),
+            )
+            .join(KBArticleTagModel, KBArticleTagModel.tag_id == KBTagModel.id)
+            .join(KBArticleModel, KBArticleModel.id == KBArticleTagModel.article_id)
+            .where(KBArticleModel.is_deleted.is_(False))
+            .group_by(KBTagModel.id, KBTagModel.name, KBTagModel.slug)
+            .order_by(func.count(KBArticleTagModel.article_id).desc(), KBTagModel.name.asc())
+            .limit(limit)
+        )
+        if tenant_id:
+            stmt = stmt.where(KBTagModel.tenant_id == tenant_id)
+        result = await self.db.execute(stmt)
+        return [
+            {"id": r.id, "name": r.name, "slug": r.slug, "usage_count": r.usage_count}
+            for r in result.all()
+        ]
+
     async def create_tag(
         self, name: str, slug: str, tenant_id: str | None = None
     ) -> KBTagModel:
+        """Crea un tag KB. Si ya existe uno con el mismo nombre case-insensitive
+        (o el mismo slug), retorna el existente — idempotente. Esto evita
+        duplicados como 'Pruebas', 'PRUEBAS', 'PrueBas' que comparten slug."""
+        from sqlalchemy import func, or_
+
+        normalized_name = name.strip()
+        existing = await self.db.execute(
+            select(KBTagModel).where(
+                or_(
+                    func.lower(KBTagModel.name) == normalized_name.lower(),
+                    KBTagModel.slug == slug,
+                )
+            )
+        )
+        existing_tag = existing.scalar_one_or_none()
+        if existing_tag:
+            return existing_tag
+
         tag = KBTagModel(
             id=str(uuid.uuid4()),
-            name=name,
+            name=normalized_name,
             slug=slug,
             tenant_id=tenant_id,
         )
@@ -530,21 +711,28 @@ class KBUseCases:
             for link, case in rows
         ]
 
-    async def list_case_articles(self, case_id: str) -> list[dict]:
-        """Devuelve los artículos KB vinculados a un caso. Solo published."""
+    async def list_case_articles(self, case_id: str, user=None) -> list[dict]:
+        """Devuelve los artículos KB vinculados a un caso.
+
+        No filtra por status — un caso puede mostrar drafts/in_review vinculados
+        si el usuario tiene visibility para verlos. El filtro real de "qué puedo
+        ver" lo hace `_filter_by_visibility`.
+        """
         from backend.src.modules.knowledge_base.infrastructure.models import KBArticleCaseModel
 
-        result = await self.db.execute(
+        stmt = (
             select(KBArticleCaseModel, KBArticleModel)
             .join(KBArticleModel, KBArticleModel.id == KBArticleCaseModel.article_id)
             .where(
                 KBArticleCaseModel.case_id == case_id,
                 KBArticleModel.is_deleted.is_(False),
-                KBArticleModel.status == "published",
             )
             .options(selectinload(KBArticleModel.document_type))
             .order_by(KBArticleCaseModel.linked_at.desc())
         )
+        if user is not None:
+            stmt = self._filter_by_visibility(stmt, user)
+        result = await self.db.execute(stmt)
         rows = result.all()
         return [
             {
@@ -572,8 +760,10 @@ class KBUseCases:
             select(KBArticleModel)
             .where(KBArticleModel.id == article_id, KBArticleModel.is_deleted.is_(False))
             .options(
-                selectinload(KBArticleModel.tags),
+                # Carga anidada: tags (puentes) → cada puente carga su .tag
+                selectinload(KBArticleModel.tags).selectinload(KBArticleTagModel.tag),
                 selectinload(KBArticleModel.versions),
+                selectinload(KBArticleModel.created_by),
             )
         )
         article = result.scalar_one_or_none()

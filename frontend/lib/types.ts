@@ -84,6 +84,10 @@ export interface Case {
   application_name?: string;
   origin_id?: string;
   origin_name?: string;
+  service_item_id?: string | null;
+  service_item_name?: string | null;
+  service_category_id?: string | null;
+  service_category_name?: string | null;
   assigned_to?: string;
   assigned_user_name?: string | null;
   team_id?: string;
@@ -127,6 +131,8 @@ export interface KBTag {
   slug: string;
 }
 
+export type KBVisibility = "private" | "team" | "public";
+
 export interface KBArticle {
   id: string;
   title: string;
@@ -135,6 +141,7 @@ export interface KBArticle {
   status: KBStatus;
   version: number;
   created_by_id: string;
+  created_by_name?: string | null;
   approved_by_id?: string;
   published_at?: string;
   view_count: number;
@@ -145,6 +152,8 @@ export interface KBArticle {
   tags?: KBTag[];
   document_type_id?: string | null;
   document_type?: KBDocumentTypeRef | null;
+  visibility: KBVisibility;
+  pending_visibility?: KBVisibility | null;
 }
 
 export interface KBArticleVersion {
@@ -260,6 +269,17 @@ export interface DashboardSummary {
   created_today: number;
   resolved_today: number;
   unassigned: number;
+  solved_cases: number;
+  at_risk_sla: number;
+  stale_backlog: number;
+  reopened_cases: number;
+  total_closed_ever: number;
+  reopen_rate_pct: number;
+}
+
+export interface LevelCount {
+  level: number;
+  count: number;
 }
 
 export interface StatusCount {
@@ -359,4 +379,75 @@ export interface CaseKBArticleRef {
   status: KBStatus;
   document_type: KBDocumentTypeRef | null;
   linked_at: string;
+}
+
+// ─── Service Catalog ──────────────────────────────────────────────────────────
+
+export type ServiceFieldType =
+  | "text"
+  | "textarea"
+  | "number"
+  | "date"
+  | "datetime"
+  | "select"
+  | "radio"
+  | "checkbox"
+  | "multiselect"
+  | "email"
+  | "phone";
+
+export interface ServiceFieldOption {
+  value: string;
+  label: string;
+}
+
+export interface ServiceCatalogCategory {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  icon?: string | null;
+  color?: string | null;
+  is_active: boolean;
+  sort_order: number;
+  item_count: number;
+}
+
+export interface ServiceCatalogItem {
+  id: string;
+  category_id: string;
+  category_name?: string | null;
+  name: string;
+  slug: string;
+  description?: string | null;
+  default_priority_id?: string | null;
+  default_team_id?: string | null;
+  default_level: number;
+  sla_policy_id?: string | null;
+  is_active: boolean;
+  sort_order: number;
+  field_count: number;
+}
+
+export interface ServiceCatalogField {
+  id: string;
+  item_id: string;
+  field_key: string;
+  label: string;
+  field_type: ServiceFieldType;
+  is_required: boolean;
+  placeholder?: string | null;
+  help_text?: string | null;
+  options?: ServiceFieldOption[] | null;
+  validation?: Record<string, unknown> | null;
+  sort_order: number;
+}
+
+export interface CaseCustomValue {
+  field_id: string;
+  field_key: string;
+  label: string;
+  field_type: ServiceFieldType;
+  value: string | null;
+  options?: ServiceFieldOption[] | null;
 }

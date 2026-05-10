@@ -56,6 +56,10 @@ from backend.src.modules.knowledge_base.infrastructure.models import (
 from backend.src.modules.notifications.infrastructure.models import NotificationModel
 from backend.src.modules.audit.infrastructure.models import AuditLogModel
 from backend.src.modules.automation.infrastructure.models import AutomationRuleModel
+from backend.src.modules.service_catalog.infrastructure.models import (
+    ServiceCatalogCategoryModel, ServiceCatalogItemModel,
+    ServiceCatalogFieldModel, CaseCustomValueModel,
+)
 
 
 async def verify_connection() -> bool:
@@ -80,6 +84,7 @@ MODULES = [
     "cases", "users", "teams", "roles", "sla", "knowledge_base", "audit",
     "metrics", "dispositions", "todos", "notes", "time_entries", "classification",
     "attachments", "notifications", "automation", "search", "document_types",
+    "service_catalog",
 ]
 
 # Todas las acciones que existen en el sistema
@@ -365,7 +370,7 @@ STATUSES_SEED = [
     {"name": "En Progreso", "slug": "in_progress",  "color": "#F59E0B", "order": 2, "is_initial": False, "is_final": False, "pauses_sla": False, "transitions": ["pending", "resolved", "open"]},
     {"name": "Pendiente",   "slug": "pending",      "color": "#8B5CF6", "order": 3, "is_initial": False, "is_final": False, "pauses_sla": True,  "transitions": ["in_progress", "open"]},
     {"name": "Resuelto",    "slug": "resolved",     "color": "#10B981", "order": 4, "is_initial": False, "is_final": False, "pauses_sla": True,  "transitions": ["closed", "open"]},
-    {"name": "Cerrado",     "slug": "closed",       "color": "#6B7280", "order": 5, "is_initial": False, "is_final": True,  "pauses_sla": False, "transitions": []},
+    {"name": "Cerrado",     "slug": "closed",       "color": "#6B7280", "order": 5, "is_initial": False, "is_final": True,  "pauses_sla": True,  "transitions": []},
 ]
 
 PRIORITIES_SEED = [

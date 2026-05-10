@@ -28,6 +28,24 @@ CasesUpdate = Depends(PermissionChecker("cases", "update"))
 CasesExport = Depends(PermissionChecker("cases", "export"))
 
 
+@router.get("/search", response_model=SuccessResponse[list[CaseResponseDTO]])
+async def search_cases(
+    db: DBSession,
+    q: str = Query(..., min_length=1, max_length=100),
+    limit: int = Query(default=10, ge=1, le=25),
+    current_user: CurrentUser = CasesRead,
+):
+    """Global case search: activos + archivados, respetando RBAC del usuario."""
+    uc = CaseUseCases(db)
+    cases = await uc.search_cases(
+        tenant_id=current_user.tenant_id,
+        q=q,
+        user=current_user,
+        limit=limit,
+    )
+    return SuccessResponse.ok(cases)
+
+
 @router.get("/archived", response_model=PaginatedResponse[CaseResponseDTO])
 async def list_archived_cases(
     db: DBSession,
@@ -91,6 +109,39 @@ async def get_case(
 ):
     uc = CaseUseCases(db)
     return SuccessResponse.ok(await uc.get_case(case_id))
+
+
+@router.get("/{case_id}/custom-values")
+async def get_case_custom_values(
+    case_id: str,
+    db: DBSession,
+    current_user: CurrentUser = CasesRead,
+):
+    from backend.src.modules.service_catalog.application.use_cases import (
+        CaseCustomValueUseCases,
+    )
+    cv_uc = CaseCustomValueUseCases(db)
+    values = await cv_uc.list_for_case(case_id)
+    return SuccessResponse.ok(values)
+
+
+@router.put("/{case_id}/custom-values")
+async def upsert_case_custom_values(
+    case_id: str,
+    body: dict,
+    db: DBSession,
+    current_user: CurrentUser = CasesUpdate,
+):
+    from backend.src.modules.service_catalog.application.use_cases import (
+        CaseCustomValueUseCases,
+    )
+    from backend.src.modules.service_catalog.application.dtos import CaseCustomValueDTO
+
+    raw_values = body.get("values", [])
+    values = [CaseCustomValueDTO(**v) for v in raw_values]
+    cv_uc = CaseCustomValueUseCases(db)
+    await cv_uc.upsert_values(case_id, values, current_user.tenant_id)
+    return SuccessResponse.ok(await cv_uc.list_for_case(case_id))
 
 
 @router.patch("/{case_id}", response_model=SuccessResponse[CaseResponseDTO])
@@ -244,6 +295,6 @@ async def list_case_kb_articles(
 ):
     from backend.src.modules.knowledge_base.application.use_cases import KBUseCases
     uc = KBUseCases(db=db)
-    items = await uc.list_case_articles(case_id=case_id)
+    items = await uc.list_case_articles(case_id=case_id, user=current_user)
     return SuccessResponse.ok(items)
 

@@ -39,6 +39,7 @@ from backend.src.modules.audit.router import router as audit_router
 from backend.src.modules.automation.router import router as automation_router
 from backend.src.modules.tenants.router import router as tenants_router
 from backend.src.modules.email_config.router import router as email_config_router
+from backend.src.modules.service_catalog.router import router as service_catalog_router
 
 
 @asynccontextmanager
@@ -134,6 +135,7 @@ def create_app() -> FastAPI:
     app.include_router(automation_router)
     app.include_router(tenants_router)
     app.include_router(email_config_router)
+    app.include_router(service_catalog_router)
 
     return app
 

@@ -5,14 +5,16 @@ import { apiClient } from "@/lib/apiClient";
 import { Spinner } from "@/components/atoms/Spinner";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { Clock, CheckCircle2, AlertTriangle } from "lucide-react";
-import type { DashboardSummary, StatusCount, TrendPoint, ApiResponse } from "@/lib/types";
+import type { DashboardSummary, StatusCount, TrendPoint, LevelCount, ApiResponse } from "@/lib/types";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-interface PriorityCount  { priority_name: string; color: string; count: number }
-interface AgentCount     { full_name: string; email: string; assigned_cases: number }
-interface AppCount       { application: string; count: number }
-interface SlaCompliance  { total: number; breached: number; met: number; compliance_pct: number }
-interface ResolutionTime { avg_minutes: number; avg_hours: number }
+interface PriorityCount       { priority_name: string; color: string; count: number }
+interface AgentCount          { full_name: string; email: string; assigned_cases: number }
+interface AppCount            { application: string; count: number }
+interface SlaCompliance       { total: number; breached: number; met: number; compliance_pct: number }
+interface ResolutionTime      { avg_minutes: number; avg_hours: number }
+interface CategoryCount       { category: string; color: string | null; count: number }
+interface ServiceItemCount    { item_name: string; category_name: string; count: number }
 
 // ── Hooks ──────────────────────────────────────────────────────────────────────
 function useMetrics() {
@@ -32,6 +34,9 @@ function useMetrics() {
     trend:          q<TrendPoint[]>    (["metrics","trend"],         "/metrics/cases/trend"),
     byAgent:        q<AgentCount[]>    (["metrics","by-agent"],      "/metrics/cases/by-agent"),
     byApp:          q<AppCount[]>      (["metrics","by-app"],        "/metrics/cases/by-application"),
+    byLevel:        q<LevelCount[]>    (["metrics","by-level"],      "/metrics/cases/by-level"),
+    byCategory:     q<CategoryCount[]> (["metrics","by-category"],   "/metrics/cases/by-service-category"),
+    topItems:       q<ServiceItemCount[]>(["metrics","top-items"],   "/metrics/cases/top-service-items"),
     sla:            q<SlaCompliance>   (["metrics","sla"],           "/metrics/sla/compliance"),
     resolution:     q<ResolutionTime>  (["metrics","resolution"],    "/metrics/resolution-time"),
   };
@@ -129,7 +134,7 @@ function BarList({ items }: { items: { label: string; count: number; color: stri
 // ── Page ───────────────────────────────────────────────────────────────────────
 export default function MetricsPage() {
   usePermissionGuard("metrics", "read");
-  const { dashboard, byStatus, byPriority, trend, byAgent, byApp, sla, resolution } = useMetrics();
+  const { dashboard, byStatus, byPriority, trend, byAgent, byApp, byLevel, byCategory, topItems, sla, resolution } = useMetrics();
 
   const d           = dashboard.data;
   const statuses    = (byStatus.data   ?? []) as StatusCount[];
@@ -137,6 +142,9 @@ export default function MetricsPage() {
   const trendData   = (trend.data      ?? []) as TrendPoint[];
   const agents      = (byAgent.data    ?? []) as AgentCount[];
   const apps        = (byApp.data      ?? []) as AppCount[];
+  const levels      = (byLevel.data    ?? []) as LevelCount[];
+  const cats        = (byCategory.data ?? []) as CategoryCount[];
+  const items       = (topItems.data   ?? []) as ServiceItemCount[];
   const slaData     = sla.data         as SlaCompliance | undefined;
   const resData     = resolution.data  as ResolutionTime | undefined;
 
@@ -159,12 +167,25 @@ export default function MetricsPage() {
         <p className="text-sm text-muted-foreground mt-0.5">Resumen de actividad del sistema</p>
       </div>
 
-      {/* ── Fila 1: KPI cards ── */}
+      {/* ── Fila 1: KPI cards operativos (lo que pasa ahora) ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Casos abiertos"  value={d?.open_cases ?? 0}    accent="bg-blue-500" />
-        <StatCard label="Creados hoy"     value={d?.created_today ?? 0}  accent="bg-emerald-500" />
-        <StatCard label="Resueltos hoy"   value={d?.resolved_today ?? 0} accent="bg-violet-500" />
-        <StatCard label="Sin asignar"     value={d?.unassigned ?? 0}     accent="bg-amber-500" />
+        <StatCard label="Casos abiertos"     value={d?.open_cases ?? 0}     accent="bg-blue-500" />
+        <StatCard label="Sin asignar"        value={d?.unassigned ?? 0}     accent="bg-amber-500" />
+        <StatCard label="SLA en riesgo"      value={d?.at_risk_sla ?? 0}    accent="bg-orange-500" sub="≥ 75% del tiempo consumido" />
+        <StatCard label="Backlog estancado"  value={d?.stale_backlog ?? 0}  accent="bg-rose-500" sub="Sin actualizar > 7 días" />
+      </div>
+
+      {/* ── Fila 1b: KPI cards de productividad y calidad ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="Creados hoy"        value={d?.created_today ?? 0}  accent="bg-emerald-500" />
+        <StatCard label="Resueltos hoy"      value={d?.resolved_today ?? 0} accent="bg-violet-500" />
+        <StatCard label="Casos solucionados" value={d?.solved_cases ?? 0}   accent="bg-teal-500" sub="Resueltos + cerrados + archivados" />
+        <StatCard
+          label="Tasa de reapertura"
+          value={`${d?.reopen_rate_pct ?? 0}%`}
+          accent={(d?.reopen_rate_pct ?? 0) >= 10 ? "bg-red-500" : "bg-sky-500"}
+          sub={`${d?.reopened_cases ?? 0} de ${d?.total_closed_ever ?? 0} cerrados`}
+        />
       </div>
 
       {/* ── Fila 2: SLA + Tiempo resolución ── */}
@@ -294,6 +315,64 @@ export default function MetricsPage() {
             const COLORS = ["bg-violet-500","bg-cyan-500","bg-rose-500","bg-teal-500","bg-orange-500","bg-indigo-500"];
             return { label: a.application, count: a.count, color: COLORS[i % COLORS.length] };
           })} />
+        </Panel>
+      </div>
+
+      {/* ── Fila 5: Distribución por nivel ── */}
+      <div className="grid grid-cols-1 gap-4">
+        <Panel title="Distribución por nivel (casos activos)" loading={byLevel.isLoading} empty={levels.length === 0}>
+          <BarList items={levels.map((l) => {
+            const LEVEL_COLORS = ["bg-slate-500", "bg-blue-500", "bg-indigo-500", "bg-purple-500", "bg-fuchsia-500"];
+            return {
+              label: `N${l.level}`,
+              count: l.count,
+              color: LEVEL_COLORS[l.level] ?? "bg-gray-400",
+            };
+          })} />
+        </Panel>
+      </div>
+
+      {/* ── Fila 6: Catálogo de servicios ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Panel title="Casos por categoría del catálogo" loading={byCategory.isLoading} empty={cats.length === 0}>
+          <BarList items={cats.map((c, i) => {
+            const FALLBACK = ["bg-violet-500","bg-cyan-500","bg-rose-500","bg-teal-500","bg-orange-500","bg-indigo-500","bg-amber-500","bg-lime-500"];
+            return {
+              label: c.category,
+              count: c.count,
+              color: c.color ?? FALLBACK[i % FALLBACK.length],
+            };
+          })} />
+        </Panel>
+
+        <Panel title="Top 10 tipos de solicitud" loading={topItems.isLoading} empty={items.length === 0}>
+          <div className="flex flex-col gap-3">
+            {items.map((it, i) => {
+              const max = items[0]?.count ?? 1;
+              const pct = Math.round((it.count / max) * 100);
+              return (
+                <div key={`${it.category_name}-${it.item_name}`} className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-muted-foreground">
+                        {i + 1}
+                      </span>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-sm font-medium text-foreground truncate">{it.item_name}</span>
+                        <span className="text-[11px] text-muted-foreground truncate">{it.category_name}</span>
+                      </div>
+                    </div>
+                    <span className="text-xs font-semibold text-foreground tabular-nums shrink-0">
+                      {it.count} caso{it.count !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                  <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                    <div className="h-full rounded-full bg-fuchsia-500/70 transition-all duration-500" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </Panel>
       </div>
     </div>

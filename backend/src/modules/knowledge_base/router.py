@@ -29,6 +29,7 @@ class ArticleCreateDTO(BaseModel):
     content_text: str
     tag_ids: list[str] = []
     document_type_id: str | None = None
+    visibility: str = "private"
 
 
 class ArticleUpdateDTO(BaseModel):
@@ -37,6 +38,7 @@ class ArticleUpdateDTO(BaseModel):
     content_text: str | None = None
     tag_ids: list[str] | None = None
     document_type_id: str | None = None
+    visibility: str | None = None
 
 
 class TransitionDTO(BaseModel):
@@ -81,6 +83,18 @@ async def list_tags(
     return SuccessResponse.ok([{"id": t.id, "name": t.name, "slug": t.slug} for t in tags])
 
 
+@router.get("/tags/popular", response_model=SuccessResponse[list[dict]])
+async def list_popular_tags(
+    db: DBSession,
+    limit: int = Query(default=10, ge=1, le=50),
+    current_user: CurrentUser = KBRead,
+):
+    """Top N tags más usados (cualquier estado excepto is_deleted=true)."""
+    uc = KBUseCases(db=db)
+    tags = await uc.list_popular_tags(limit=limit, tenant_id=current_user.tenant_id)
+    return SuccessResponse.ok(tags)
+
+
 @router.post("/tags", status_code=201)
 async def create_tag(
     body: TagCreateDTO,
@@ -114,6 +128,7 @@ async def list_articles(
         tag_slug=tag_slug,
         limit=limit,
         offset=offset,
+        user=current_user,
     )
     return SuccessResponse.ok([_serialize_article(a) for a in articles])
 
@@ -133,6 +148,7 @@ async def create_article(
         tenant_id=current_user.tenant_id,
         tag_ids=body.tag_ids or None,
         document_type_id=body.document_type_id,
+        visibility=body.visibility,
     )
     return SuccessResponse.ok(_serialize_article(article))
 
@@ -154,7 +170,7 @@ async def get_article(
     current_user: CurrentUser = KBRead,
 ):
     uc = KBUseCases(db=db)
-    article = await uc.get_article(article_id=article_id)
+    article = await uc.get_article(article_id=article_id, user=current_user)
     return SuccessResponse.ok(_serialize_article(article))
 
 
@@ -174,6 +190,7 @@ async def update_article(
         content_text=body.content_text,
         tag_ids=body.tag_ids,
         document_type_id=body.document_type_id,
+        visibility=body.visibility,
     )
     return SuccessResponse.ok(_serialize_article(article))
 
@@ -371,6 +388,18 @@ def _serialize_article(a) -> dict:
             "icon": a.document_type.icon,
             "color": a.document_type.color,
         }
+    # Serializar tags: la relación a.tags es lista de KBArticleTagModel (tabla
+    # puente). Cada uno expone .tag (KBTagModel). Filtramos None defensivamente
+    # por si la carga eager no trajo el tag asociado.
+    tags = []
+    article_tags = getattr(a, "tags", None) or []
+    for at in article_tags:
+        t = getattr(at, "tag", None)
+        if t is not None:
+            tags.append({"id": t.id, "name": t.name, "slug": t.slug})
+    # Nombre del creador (si la relación está cargada vía selectinload)
+    creator = getattr(a, "created_by", None)
+    created_by_name = creator.full_name if creator else None
     return {
         "id": a.id,
         "title": a.title,
@@ -379,6 +408,7 @@ def _serialize_article(a) -> dict:
         "status": a.status,
         "version": a.version,
         "created_by_id": a.created_by_id,
+        "created_by_name": created_by_name,
         "approved_by_id": a.approved_by_id,
         "published_at": a.published_at.isoformat() if a.published_at else None,
         "view_count": a.view_count,
@@ -387,7 +417,10 @@ def _serialize_article(a) -> dict:
         "created_at": a.created_at.isoformat(),
         "updated_at": a.updated_at.isoformat(),
         "document_type_id": a.document_type_id,
+        "visibility": a.visibility,
+        "pending_visibility": a.pending_visibility,
         "document_type": doc_type,
+        "tags": tags,
     }
 
 

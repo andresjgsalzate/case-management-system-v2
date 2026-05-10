@@ -41,6 +41,13 @@ class KBArticleModel(Base):
         String(36), ForeignKey("kb_document_types.id", ondelete="SET NULL"),
         nullable=True, index=True,
     )
+    # Visibilidad activa: private (solo creador) | team (equipo del creador) | public (todos)
+    visibility: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="private", server_default="private", index=True
+    )
+    # Si hay un cambio de visibilidad pendiente de aprobación, queda aquí.
+    # El campo `visibility` solo se actualiza cuando el approval lo confirma.
+    pending_visibility: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -52,6 +59,11 @@ class KBArticleModel(Base):
 
     tags: Mapped[list["KBArticleTagModel"]] = relationship(
         back_populates="article", lazy="select", cascade="all, delete-orphan"
+    )
+    # Creador del artículo (lazy="select" para no traerlo por defecto en cada
+    # consulta — los endpoints que lo necesiten lo cargan con selectinload)
+    created_by: Mapped["UserModel"] = relationship(  # type: ignore[name-defined]
+        "UserModel", foreign_keys=[created_by_id], lazy="select"
     )
     versions: Mapped[list["KBArticleVersionModel"]] = relationship(
         back_populates="article", lazy="select", cascade="all, delete-orphan"

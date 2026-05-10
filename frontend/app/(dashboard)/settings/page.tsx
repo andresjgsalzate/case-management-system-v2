@@ -2,7 +2,7 @@ import Link from "next/link";
 import {
   Users, Shield, Clock, Zap, Bell,
   AlertTriangle, Flag, Layers, Globe, Hash, LayoutGrid, Building2, Mail,
-  BookOpen,
+  BookOpen, Package,
 } from "lucide-react";
 
 const SETTINGS_SECTIONS = [
@@ -24,6 +24,7 @@ const SETTINGS_SECTIONS = [
       { href: "/settings/origins",        icon: Globe,         color: "text-cyan-500",    bg: "bg-cyan-50 dark:bg-cyan-950/40",        title: "Orígenes",                 description: "Canales de entrada: email, chat, teléfono…" },
       { href: "/settings/classification", icon: LayoutGrid,    color: "text-purple-500",  bg: "bg-purple-50 dark:bg-purple-950/40",    title: "Rúbrica de clasificación", description: "Criterios y puntajes para clasificar complejidad de casos" },
       { href: "/settings/case-numbers",   icon: Hash,          color: "text-slate-500",   bg: "bg-slate-100 dark:bg-slate-800/40",     title: "Numeración de casos",      description: "Prefijo y formato de los números de caso" },
+      { href: "/settings/service-catalog",icon: Package,       color: "text-fuchsia-500", bg: "bg-fuchsia-50 dark:bg-fuchsia-950/40",  title: "Catálogo de servicios",    description: "Categorías, tipos de solicitud y campos dinámicos" },
     ],
   },
   {
