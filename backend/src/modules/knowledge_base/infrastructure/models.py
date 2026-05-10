@@ -1,11 +1,14 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.src.core.database import Base
+
+if TYPE_CHECKING:
+    from backend.src.modules.cases.infrastructure.models import CaseModel
 
 
 class KBTagModel(Base):
@@ -72,6 +75,15 @@ class KBArticleModel(Base):
         back_populates="article", lazy="select", cascade="all, delete-orphan"
     )
     document_type: Mapped["KBDocumentTypeModel | None"] = relationship(lazy="joined")
+    # Asociaciones con casos — lazy='select' para que liste_articles puedan
+    # cargar selectivo con selectinload sin pagar el costo en otros queries.
+    # viewonly=True porque la edición se hace por KBArticleCaseModel directo.
+    kb_article_cases: Mapped[list["KBArticleCaseModel"]] = relationship(
+        "KBArticleCaseModel",
+        primaryjoin="KBArticleModel.id == KBArticleCaseModel.article_id",
+        lazy="select",
+        viewonly=True,
+    )
 
 
 class KBArticleTagModel(Base):
@@ -200,4 +212,12 @@ class KBArticleCaseModel(Base):
     )
     linked_by_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=False
+    )
+    # Caso vinculado — viewonly para preservar la integridad de quién manipula
+    # la tabla puente (siempre KBUseCases). Cargado bajo demanda vía selectinload.
+    case_ref: Mapped["CaseModel"] = relationship(
+        "CaseModel",
+        primaryjoin="KBArticleCaseModel.case_id == CaseModel.id",
+        lazy="select",
+        viewonly=True,
     )
