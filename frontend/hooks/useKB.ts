@@ -20,11 +20,11 @@ export function useKBArticles(status?: string, tagSlug?: string) {
   return useQuery({
     queryKey: [KB_KEY, status, tagSlug],
     queryFn: async () => {
-      const params: Record<string, string> = {};
+      const params: Record<string, string | number> = { limit: 500 };
       if (status) params.status = status;
       if (tagSlug) params.tag_slug = tagSlug;
       const { data } = await apiClient.get<ApiResponse<KBArticle[]>>("/kb/articles", {
-        params: Object.keys(params).length ? params : undefined,
+        params,
       });
       return data.data ?? [];
     },

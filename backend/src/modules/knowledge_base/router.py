@@ -117,7 +117,7 @@ async def list_articles(
     db: DBSession,
     status: str | None = Query(default=None),
     tag_slug: str | None = Query(default=None),
-    limit: int = Query(default=20, le=100),
+    limit: int = Query(default=50, le=500),
     offset: int = Query(default=0),
     current_user: CurrentUser = KBRead,
 ):
