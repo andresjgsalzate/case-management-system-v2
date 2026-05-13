@@ -214,6 +214,15 @@ ROLE_PERMISSION_ADDITIONS = {
         {"module": "knowledge_base", "action": "manage",     "scope": "all"},
         {"module": "dispositions",   "action": "manage",     "scope": "all"},
         {"module": "search",         "action": "read",       "scope": "all"},
+        # Sub-spec 01 § 3.6 granular case creation permissions
+        {"module": "cases",          "action": "create:request",            "scope": "all"},
+        {"module": "cases",          "action": "create:incident",           "scope": "all"},
+        {"module": "cases",          "action": "create:event",              "scope": "all"},
+        {"module": "cases",          "action": "promote:event_to_incident", "scope": "all"},
+    ],
+    "Reporter": [
+        # Sub-spec 01 § 3.6 granular case creation permissions
+        {"module": "cases",          "action": "create:request", "scope": "own"},
     ],
     "Agent": [
         {"module": "cases",          "action": "assign",  "scope": "own"},
@@ -232,6 +241,8 @@ ROLE_PERMISSION_ADDITIONS = {
         {"module": "dispositions",   "action": "create",  "scope": "own"},
         {"module": "cases",          "action": "archive", "scope": "own"},
         {"module": "sla",            "action": "read",    "scope": "own"},
+        # Sub-spec 01 § 3.6 granular case creation permissions
+        {"module": "cases",          "action": "create:request", "scope": "own"},
     ],
 }
 
