@@ -179,6 +179,7 @@ class CaseUseCases:
         filters: dict | None = None,
         user=None,
         queue: str = "all",
+        case_types: list[str] | None = None,
     ) -> tuple[list[CaseResponseDTO], int]:
         query = (
             select(CaseModel)
@@ -207,6 +208,9 @@ class CaseUseCases:
                 query = query.where(CaseModel.priority_id == priority_id)
             if assigned_to := filters.get("assigned_to"):
                 query = query.where(CaseModel.assigned_to == assigned_to)
+
+        if case_types:
+            query = query.where(CaseModel.case_type.in_(case_types))
 
         count_result = await self.db.execute(
             select(func.count()).select_from(query.subquery())

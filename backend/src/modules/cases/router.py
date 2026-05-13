@@ -75,9 +75,19 @@ async def list_cases(
     priority_id: str | None = Query(default=None),
     assigned_to: str | None = Query(default=None),
     queue: str = Query(default="all", pattern="^(mine|team|all)$"),
+    case_type: str | None = Query(default=None, pattern="^(request|incident|event)$"),
+    case_types: str | None = Query(default=None, description="Comma-separated list of case types"),
 ):
     uc = CaseUseCases(db)
     filters = {"status_id": status_id, "priority_id": priority_id, "assigned_to": assigned_to}
+
+    # Parse case_type filter: single type or comma-separated list
+    types_filter: list[str] | None = None
+    if case_type:
+        types_filter = [case_type]
+    elif case_types:
+        types_filter = [t.strip() for t in case_types.split(",") if t.strip()]
+
     cases, total = await uc.list_cases(
         current_user.tenant_id,
         current_user.user_id,
@@ -87,6 +97,7 @@ async def list_cases(
         filters,
         user=current_user,
         queue=queue,
+        case_types=types_filter,
     )
     return PaginatedResponse.ok(cases, pagination.page, pagination.page_size, total)
 
