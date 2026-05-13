@@ -6,6 +6,7 @@ from backend.src.core.dependencies import DBSession, Pagination
 from backend.src.modules.cases.application.dtos import (
     AssignCaseDTO,
     CreateCaseDTO,
+    PromoteEventDTO,
     TransitionCaseDTO,
     UpdateCaseDTO,
     CaseResponseDTO,
@@ -265,6 +266,26 @@ async def list_case_assignments(
         }
         for a in assignments
     ])
+
+
+@router.post("/{case_id}/promote", response_model=SuccessResponse[CaseResponseDTO])
+async def promote_event_to_incident(
+    case_id: str,
+    dto: PromoteEventDTO,
+    db: DBSession,
+    current_user: CurrentUser = Depends(PermissionChecker("cases", "update")),
+):
+    uc = CaseUseCases(db)
+    result = await uc.promote_event_to_incident(
+        case_id=case_id,
+        promoted_by=current_user.user_id,
+        reason=dto.reason,
+        new_taxonomy_id=dto.new_taxonomy_id,
+        new_service_item_id=dto.new_service_item_id,
+        new_priority_id=dto.new_priority_id,
+        new_team_id=dto.new_team_id,
+    )
+    return SuccessResponse.ok(result)
 
 
 @router.post("/{case_id}/archive", status_code=204)

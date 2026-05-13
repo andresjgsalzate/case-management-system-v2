@@ -84,3 +84,11 @@ class CaseResponseDTO(BaseModel):
     pending_triage_until: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PromoteEventDTO(BaseModel):
+    new_taxonomy_id: str | None = None
+    new_service_item_id: str | None = None
+    new_priority_id: str | None = None
+    new_team_id: str | None = None
+    reason: str = Field(min_length=1, max_length=2000, description="Razón de promoción (audit trail)")
