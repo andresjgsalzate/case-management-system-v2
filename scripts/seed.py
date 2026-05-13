@@ -439,19 +439,23 @@ async def seed_case_statuses(session, tenant_id) -> None:
 
     await session.flush()
 
-    # PASS 2: resolve allowed_transitions slugs → status IDs
+    # PASS 2: set allowed_transitions as slug lists (NOT IDs).
+    # Existing code (case_statuses.use_cases.validate_transition + router DTO)
+    # treats allowed_transitions as list[str] of target slugs. Keeping slugs
+    # also matches the existing seed/migration patterns (e.g., migration
+    # 067bf148971a updates allowed_transitions with slug strings via raw SQL).
     result = await session.execute(
         select(CaseStatusModel).where(CaseStatusModel.tenant_id == tenant_id)
     )
     all_rows = result.scalars().all()
-    slug_to_id = {r.slug: r.id for r in all_rows}
+    valid_slugs = {r.slug for r in all_rows}
 
     for slug, _, _, _, _, _, _, _, transitions_slugs in CANONICAL_STATUSES:
         row = next((r for r in all_rows if r.slug == slug), None)
         if row is None:
             continue
         row.allowed_transitions = [
-            slug_to_id[t_slug] for t_slug in transitions_slugs if t_slug in slug_to_id
+            t_slug for t_slug in transitions_slugs if t_slug in valid_slugs
         ]
 
     await session.commit()
