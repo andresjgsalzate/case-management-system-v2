@@ -8,6 +8,7 @@ class CustomFieldValueDTO(BaseModel):
 
 
 class CreateCaseDTO(BaseModel):
+    case_type: Literal["request", "incident", "event"] = "request"
     title: str = Field(min_length=3, max_length=500)
     description: str | None = None
     priority_id: str | None = None
@@ -18,6 +19,7 @@ class CreateCaseDTO(BaseModel):
         min_length=1,
         description="ID del ítem del catálogo de servicios (obligatorio)",
     )
+    initial_status_slug: str | None = None
     custom_values: list[CustomFieldValueDTO] = Field(default_factory=list)
 
 

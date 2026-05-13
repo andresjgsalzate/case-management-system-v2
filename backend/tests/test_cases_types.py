@@ -3,7 +3,7 @@ import asyncio
 import datetime
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 
 # ---------------------------------------------------------------------------
@@ -130,3 +130,201 @@ async def test_next_case_number_raises_when_no_range():
 
     with pytest.raises(Exception):
         await uc._next_case_number(tenant_id=None, prefix="INC")
+
+
+# ---------------------------------------------------------------------------
+# Helpers for create_case tests (Task 9)
+# ---------------------------------------------------------------------------
+
+def _make_fake_status(slug: str, applies_to: list[str]) -> MagicMock:
+    status = MagicMock()
+    status.id = "status-uuid-1"
+    status.slug = slug
+    status.applies_to_case_types = applies_to
+    return status
+
+
+def _make_fake_case_response(case_number: str, case_type: str) -> MagicMock:
+    resp = MagicMock()
+    resp.case_number = case_number
+    resp.case_type = case_type
+    return resp
+
+
+def _make_fake_service_item(priority_id: str = "pri-1") -> MagicMock:
+    item = MagicMock()
+    item.default_priority_id = priority_id
+    item.default_team_id = None
+    item.default_level = 1
+    return item
+
+
+def _base_db_mock() -> AsyncMock:
+    """Minimal AsyncMock session for create_case: add/commit/refresh/get return fakes."""
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+    # db.get used for ServiceCatalogItemModel → return a fake item so service lookup passes
+    session.get = AsyncMock(return_value=_make_fake_service_item())
+    return session
+
+
+# ---------------------------------------------------------------------------
+# Task 9 Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_with_invalid_case_type_raises():
+    """DTO with invalid case_type → Pydantic ValidationError before reaching use case."""
+    from pydantic import ValidationError as PydanticValidationError
+    from backend.src.modules.cases.application.dtos import CreateCaseDTO
+
+    with pytest.raises(PydanticValidationError) as exc:
+        CreateCaseDTO(
+            case_type="bogus",  # type: ignore[arg-type]
+            title="some title",
+            service_item_id="svc-1",
+        )
+    assert "bogus" in str(exc.value).lower() or "case_type" in str(exc.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_create_request_uses_REQ_prefix():
+    """case_type='request' → _next_case_number called with 'REQ' → case_number starts REQ-."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.cases.application.dtos import CreateCaseDTO
+
+    db = _base_db_mock()
+    dto = CreateCaseDTO(
+        case_type="request",
+        title="VPN access request",
+        service_item_id="svc-1",
+        priority_id="pri-1",
+    )
+
+    fake_status = _make_fake_status("new", ["request", "incident", "event"])
+    year = datetime.datetime.utcnow().year
+    expected_number = f"REQ-{year}-000001"
+    fake_response = _make_fake_case_response(expected_number, "request")
+
+    uc = CaseUseCases(db=db)
+
+    with (
+        patch.object(uc, "_next_case_number", new=AsyncMock(return_value=expected_number)) as mock_next,
+        patch.object(uc, "_get_status_by_slug", new=AsyncMock(return_value=fake_status)),
+        patch.object(uc, "get_case", new=AsyncMock(return_value=fake_response)),
+        patch("backend.src.modules.cases.application.use_cases.event_bus") as mock_bus,
+    ):
+        mock_bus.publish = AsyncMock()
+        result = await uc.create_case(dto=dto, actor_id="user-1", tenant_id=None)
+
+    mock_next.assert_awaited_once_with(None, "REQ")
+    assert result.case_number.startswith("REQ-")
+    assert result.case_type == "request"
+
+
+@pytest.mark.asyncio
+async def test_create_incident_uses_INC_prefix():
+    """case_type='incident' → _next_case_number called with 'INC' → case_number starts INC-."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.cases.application.dtos import CreateCaseDTO
+
+    db = _base_db_mock()
+    dto = CreateCaseDTO(
+        case_type="incident",
+        title="Possible ransomware on host",
+        service_item_id="svc-1",
+        priority_id="pri-1",
+    )
+
+    fake_status = _make_fake_status("new", ["request", "incident", "event"])
+    year = datetime.datetime.utcnow().year
+    expected_number = f"INC-{year}-000001"
+    fake_response = _make_fake_case_response(expected_number, "incident")
+
+    uc = CaseUseCases(db=db)
+
+    with (
+        patch.object(uc, "_next_case_number", new=AsyncMock(return_value=expected_number)) as mock_next,
+        patch.object(uc, "_get_status_by_slug", new=AsyncMock(return_value=fake_status)),
+        patch.object(uc, "get_case", new=AsyncMock(return_value=fake_response)),
+        patch("backend.src.modules.cases.application.use_cases.event_bus") as mock_bus,
+    ):
+        mock_bus.publish = AsyncMock()
+        result = await uc.create_case(dto=dto, actor_id="user-1", tenant_id=None)
+
+    mock_next.assert_awaited_once_with(None, "INC")
+    assert result.case_number.startswith("INC-")
+    assert result.case_type == "incident"
+
+
+@pytest.mark.asyncio
+async def test_create_event_uses_EVT_prefix_and_logged_status():
+    """case_type='event' → prefix EVT, default status slug 'logged'."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.cases.application.dtos import CreateCaseDTO
+
+    db = _base_db_mock()
+    dto = CreateCaseDTO(
+        case_type="event",
+        title="Brute force attempt detected",
+        service_item_id="svc-1",
+        priority_id="pri-1",
+    )
+
+    fake_status = _make_fake_status("logged", ["event"])
+    year = datetime.datetime.utcnow().year
+    expected_number = f"EVT-{year}-000001"
+    fake_response = _make_fake_case_response(expected_number, "event")
+
+    uc = CaseUseCases(db=db)
+
+    with (
+        patch.object(uc, "_next_case_number", new=AsyncMock(return_value=expected_number)) as mock_next,
+        patch.object(uc, "_get_status_by_slug", new=AsyncMock(return_value=fake_status)) as mock_status,
+        patch.object(uc, "get_case", new=AsyncMock(return_value=fake_response)),
+        patch("backend.src.modules.cases.application.use_cases.event_bus") as mock_bus,
+    ):
+        mock_bus.publish = AsyncMock()
+        result = await uc.create_case(dto=dto, actor_id="user-1", tenant_id=None)
+
+    mock_next.assert_awaited_once_with(None, "EVT")
+    # status resolved with 'logged' (the default for event when no initial_status_slug given)
+    mock_status.assert_awaited_once_with(None, "logged")
+    assert result.case_number.startswith("EVT-")
+    assert result.case_type == "event"
+
+
+@pytest.mark.asyncio
+async def test_create_with_status_that_does_not_apply_raises():
+    """Resolved status applies_to_case_types excludes case_type → ValidationError."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.cases.application.dtos import CreateCaseDTO
+    from backend.src.core.exceptions import ValidationError
+
+    db = _base_db_mock()
+    dto = CreateCaseDTO(
+        case_type="event",
+        title="Brute force",
+        service_item_id="svc-1",
+        priority_id="pri-1",
+        initial_status_slug="in_progress",  # only applies to request
+    )
+
+    # Status that only applies to 'request', NOT 'event'
+    fake_status = _make_fake_status("in_progress", ["request"])
+    year = datetime.datetime.utcnow().year
+    expected_number = f"EVT-{year}-000001"
+
+    uc = CaseUseCases(db=db)
+
+    with (
+        patch.object(uc, "_next_case_number", new=AsyncMock(return_value=expected_number)),
+        patch.object(uc, "_get_status_by_slug", new=AsyncMock(return_value=fake_status)),
+    ):
+        with pytest.raises(ValidationError) as exc:
+            await uc.create_case(dto=dto, actor_id="user-1", tenant_id=None)
+
+    msg = str(exc.value).lower()
+    assert "event" in msg or "does not apply" in msg or "applies_to" in msg

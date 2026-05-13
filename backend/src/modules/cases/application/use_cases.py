@@ -34,6 +34,20 @@ class CaseUseCases:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    # Mapping from case_type → case number prefix
+    _PREFIX_BY_TYPE: dict[str, str] = {
+        "request": "REQ",
+        "incident": "INC",
+        "event": "EVT",
+    }
+
+    # Default initial status slug per case_type
+    _DEFAULT_STATUS_SLUG: dict[str, str] = {
+        "request": "new",
+        "incident": "new",
+        "event": "logged",
+    }
+
     async def create_case(
         self, dto: CreateCaseDTO, actor_id: str, tenant_id: str | None
     ) -> CaseResponseDTO:
@@ -47,9 +61,33 @@ class CaseUseCases:
             CaseCustomValueDTO,
         )
 
-        status_uc = CaseStatusUseCases(self.db)
-        initial_status = await status_uc.get_initial_status(tenant_id)
-        case_number = await next_case_number(self.db, tenant_id)
+        # Validate case_type (Pydantic Literal already does this, but guard for
+        # callers that bypass the DTO, e.g. direct use_case calls in tests)
+        case_type = dto.case_type
+        if case_type not in self._PREFIX_BY_TYPE:
+            raise ValidationError(
+                f"Invalid case_type '{case_type}'. Must be one of: {list(self._PREFIX_BY_TYPE)}"
+            )
+
+        # Generate case number using the per-type prefix
+        prefix = self._PREFIX_BY_TYPE[case_type]
+        case_number = await self._next_case_number(tenant_id, prefix)
+
+        # Resolve initial status: explicit slug overrides default per type
+        status_slug = dto.initial_status_slug or self._DEFAULT_STATUS_SLUG[case_type]
+        initial_status = await self._get_status_by_slug(tenant_id, status_slug)
+        if initial_status is None:
+            raise ValidationError(
+                f"Status with slug '{status_slug}' not found for tenant {tenant_id}"
+            )
+
+        # Validate status applies to this case_type
+        applies = initial_status.applies_to_case_types or []
+        if case_type not in applies:
+            raise ValidationError(
+                f"Status '{status_slug}' does not apply to case_type '{case_type}'. "
+                f"applies_to_case_types={applies}"
+            )
 
         # Resolver service item y aplicar defaults si vienen vacíos
         priority_id = dto.priority_id
@@ -74,6 +112,7 @@ class CaseUseCases:
             id=str(uuid.uuid4()),
             tenant_id=tenant_id,
             case_number=case_number,
+            case_type=case_type,
             title=dto.title,
             description=dto.description,
             status_id=initial_status.id,
@@ -478,6 +517,20 @@ class CaseUseCases:
             .order_by(CaseModel.archived_at.desc())
         )
         return [self._to_dto(c) for c in result.scalars().all()], total
+
+    async def _get_status_by_slug(
+        self, tenant_id: str | None, slug: str
+    ) -> "CaseStatusModel | None":
+        """Return the CaseStatusModel matching slug for the given tenant (or global)."""
+        from backend.src.core.tenant import catalog_filter
+
+        result = await self.db.execute(
+            select(CaseStatusModel).where(
+                catalog_filter(CaseStatusModel, tenant_id),
+                CaseStatusModel.slug == slug,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def _next_case_number(self, tenant_id, prefix: str) -> str:
         """Atomically increment the active range for (tenant_id, prefix) and return
