@@ -19,6 +19,11 @@ class CaseStatusModel(Base):
     is_final: Mapped[bool] = mapped_column(Boolean, default=False)
     pauses_sla: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     allowed_transitions: Mapped[list] = mapped_column(JSON, default=list)
+    applies_to_case_types: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=lambda: ["request", "incident", "event"],
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
