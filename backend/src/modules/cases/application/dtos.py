@@ -44,6 +44,7 @@ class AssignCaseDTO(BaseModel):
 class CaseResponseDTO(BaseModel):
     id: str
     case_number: str
+    case_type: Literal["request", "incident", "event"] = "request"
     title: str
     description: str | None
     status_id: str
@@ -73,5 +74,13 @@ class CaseResponseDTO(BaseModel):
     closed_at: str | None
     created_at: str
     updated_at: str
+
+    # ─── Sub-spec 01 promotion / taxonomy fields ───
+    taxonomy_id: str | None = None
+    original_case_number: str | None = None
+    original_case_type: Literal["request", "incident", "event"] | None = None
+    promoted_at: str | None = None
+    promoted_by: str | None = None
+    pending_triage_until: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
