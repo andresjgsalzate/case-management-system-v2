@@ -473,11 +473,51 @@ async def seed_case_statuses(session, tenant_id) -> None:
     print(f"  + Seeded {len(CANONICAL_STATUSES)} case statuses for tenant {tenant_id}")
 
 
+async def seed_case_number_ranges(session, tenant_id) -> None:
+    """Ensure tenant has 3 active number ranges: REQ, INC, EVT. Idempotent.
+
+    Per sub-spec 01 § 3.3:
+    - REQ 1-200000  (high-volume helpdesk requests)
+    - INC 1-100000  (security incidents, rarer)
+    - EVT 1-1000000 (security events, noisiest from Wazuh)
+    """
+    from sqlalchemy import select
+
+    canonical_ranges = [
+        ("REQ", 1,       200000),
+        ("INC", 1,       100000),
+        ("EVT", 1,      1000000),
+    ]
+    inserted = 0
+    for prefix, start, end in canonical_ranges:
+        existing = await session.execute(
+            select(CaseNumberRangeModel).where(
+                CaseNumberRangeModel.tenant_id == tenant_id,
+                CaseNumberRangeModel.prefix == prefix,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            continue  # already exists, skip
+        row = CaseNumberRangeModel(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            prefix=prefix,
+            range_start=start,
+            range_end=end,
+            current_number=start - 1,
+        )
+        session.add(row)
+        inserted += 1
+    await session.commit()
+    print(f"  + Ensured 3 number ranges for tenant {tenant_id} ({inserted} new)")
+
+
 async def seed_phase_2(session) -> None:
-    """Seed case statuses, priorities, and origins."""
+    """Seed case statuses, priorities, origins, and number ranges."""
     from sqlalchemy import select
 
     await seed_case_statuses(session, tenant_id=None)
+    await seed_case_number_ranges(session, tenant_id=None)
 
     priority_count = 0
     for p in PRIORITIES_SEED:
