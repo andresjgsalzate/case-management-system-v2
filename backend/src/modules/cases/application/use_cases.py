@@ -479,6 +479,46 @@ class CaseUseCases:
         )
         return [self._to_dto(c) for c in result.scalars().all()], total
 
+    async def _next_case_number(self, tenant_id, prefix: str) -> str:
+        """Atomically increment the active range for (tenant_id, prefix) and return
+        a formatted case number like 'INC-2026-000047'.
+
+        Uses SELECT FOR UPDATE to serialize concurrent calls at the DB row level.
+        The first transaction that acquires the lock reads the latest current_number,
+        increments it, and flushes — subsequent concurrent transactions wait and then
+        see the already-incremented value, guaranteeing uniqueness.
+        """
+        from backend.src.modules.cases.infrastructure.models import CaseNumberRangeModel
+
+        tenant_clause = (
+            CaseNumberRangeModel.tenant_id.is_(None)
+            if tenant_id is None
+            else CaseNumberRangeModel.tenant_id == tenant_id
+        )
+
+        result = await self.db.execute(
+            select(CaseNumberRangeModel)
+            .where(
+                tenant_clause,
+                CaseNumberRangeModel.prefix == prefix,
+                CaseNumberRangeModel.current_number < CaseNumberRangeModel.range_end,
+            )
+            .order_by(CaseNumberRangeModel.range_start)
+            .with_for_update()
+            .limit(1)
+        )
+        range_row = result.scalar_one_or_none()
+        if range_row is None:
+            raise ValueError(
+                f"No active number range for {prefix} in tenant {tenant_id}. "
+                "Create a new range or extend the existing one."
+            )
+
+        range_row.current_number += 1
+        await self.db.flush()
+        year = datetime.now(timezone.utc).year
+        return f"{prefix}-{year}-{range_row.current_number:06d}"
+
     def _to_dto(self, model: CaseModel) -> CaseResponseDTO:
         # service_item y su category vienen via selectinload — accedemos sin lazy
         svc_item = getattr(model, "service_item", None)
