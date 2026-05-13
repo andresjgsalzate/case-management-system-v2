@@ -288,6 +288,13 @@ class CaseUseCases:
         if not target_status:
             raise NotFoundError(f"Status {dto.target_status_id} not found")
 
+        # Validate the status applies to the case's case_type (sub-spec 01 § 4.4)
+        if case.case_type not in (target_status.applies_to_case_types or []):
+            raise ValidationError(
+                f"Status '{target_status.slug}' does not apply to cases of type "
+                f"'{case.case_type}'. applies_to_case_types={target_status.applies_to_case_types}"
+            )
+
         validate_transition(target_status.slug, case.status.allowed_transitions or [])
 
         if target_status.slug == "closed":

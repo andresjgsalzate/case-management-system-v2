@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from backend.src.core.dependencies import DBSession
 from backend.src.modules.case_statuses.application.dtos import (
@@ -16,10 +16,11 @@ Manage = Depends(PermissionChecker("cases", "manage"))
 @router.get("", response_model=SuccessResponse[list[CaseStatusResponseDTO]])
 async def list_statuses(
     db: DBSession,
+    case_type: str | None = Query(default=None, pattern="^(request|incident|event)$"),
     current_user: CurrentUser = Depends(PermissionChecker("cases", "read")),
 ):
     uc = CaseStatusUseCases(db)
-    return SuccessResponse.ok(await uc.list_statuses(current_user.tenant_id))
+    return SuccessResponse.ok(await uc.list_statuses(current_user.tenant_id, case_type=case_type))
 
 
 @router.post("", response_model=SuccessResponse[CaseStatusResponseDTO], status_code=201)

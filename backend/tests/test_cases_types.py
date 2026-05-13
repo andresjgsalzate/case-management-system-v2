@@ -328,3 +328,94 @@ async def test_create_with_status_that_does_not_apply_raises():
 
     msg = str(exc.value).lower()
     assert "event" in msg or "does not apply" in msg or "applies_to" in msg
+
+
+# ---------------------------------------------------------------------------
+# Task 10 Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_transition_to_status_that_does_not_apply_raises():
+    """transitioning a request case to a status whose applies_to_case_types
+    excludes 'request' raises ValidationError."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.cases.application.dtos import TransitionCaseDTO
+    from backend.src.core.exceptions import ValidationError
+
+    current_status = MagicMock()
+    current_status.allowed_transitions = ["triage-uuid"]
+
+    case = MagicMock()
+    case.id = "case-uuid"
+    case.case_type = "request"
+    case.status_id = "current-status-uuid"
+    case.status = current_status
+
+    target_status = MagicMock()
+    target_status.id = "triage-uuid"
+    target_status.slug = "triage"
+    target_status.applies_to_case_types = ["incident"]  # NOT request
+
+    session = AsyncMock()
+
+    # execute() → returns the case (for selectinload query)
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = case
+    session.execute = AsyncMock(return_value=execute_result)
+
+    # db.get(CaseStatusModel, target_status_id) → returns target_status
+    session.get = AsyncMock(return_value=target_status)
+
+    uc = CaseUseCases(db=session)
+    dto = TransitionCaseDTO(target_status_id="triage-uuid")
+
+    with pytest.raises(ValidationError) as exc:
+        await uc.transition_case(
+            case_id="case-uuid",
+            dto=dto,
+            actor_id="user-1",
+            tenant_id=None,
+        )
+    msg = str(exc.value).lower()
+    assert "does not apply" in msg or "applies_to" in msg or "case_type" in msg
+
+
+@pytest.mark.asyncio
+async def test_list_statuses_filters_by_case_type():
+    """list_statuses with case_type='event' returns only event-applicable statuses."""
+    from backend.src.modules.case_statuses.application.use_cases import CaseStatusUseCases
+
+    def _fake_status_model(slug, applies_to, order):
+        s = MagicMock()
+        s.id = f"id-{slug}"
+        s.slug = slug
+        s.applies_to_case_types = applies_to
+        s.name = slug.capitalize()
+        s.color = "#fff"
+        s.order = order
+        s.is_initial = order == 1
+        s.is_final = False
+        s.pauses_sla = False
+        s.allowed_transitions = []
+        s.created_at = MagicMock()
+        s.created_at.isoformat.return_value = "2024-01-01T00:00:00"
+        return s
+
+    s_new = _fake_status_model("new", ["request", "incident"], 1)
+    s_logged = _fake_status_model("logged", ["event"], 2)
+    s_resolved = _fake_status_model("resolved", ["request", "incident", "event"], 3)
+
+    all_statuses = [s_new, s_logged, s_resolved]
+
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = all_statuses
+    session.execute = AsyncMock(return_value=result)
+
+    uc = CaseStatusUseCases(db=session)
+    filtered = await uc.list_statuses(tenant_id=None, case_type="event")
+    slugs = [s.slug for s in filtered]
+
+    assert "logged" in slugs
+    assert "resolved" in slugs  # applies to all 3
+    assert "new" not in slugs  # only request+incident

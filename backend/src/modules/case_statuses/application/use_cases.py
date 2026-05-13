@@ -49,13 +49,21 @@ class CaseStatusUseCases:
         await self.db.refresh(status)
         return self._to_dto(status)
 
-    async def list_statuses(self, tenant_id: str | None) -> list[CaseStatusResponseDTO]:
+    async def list_statuses(
+        self,
+        tenant_id: str | None,
+        case_type: str | None = None,
+    ) -> list[CaseStatusResponseDTO]:
         result = await self.db.execute(
             select(CaseStatusModel)
             .where(catalog_filter(CaseStatusModel, tenant_id))
             .order_by(CaseStatusModel.order)
         )
-        return [self._to_dto(s) for s in result.scalars().all()]
+        rows = result.scalars().all()
+        if case_type is not None:
+            # Filter in Python: applies_to_case_types is JSON, easier than SQL JSON ops
+            rows = [s for s in rows if case_type in (s.applies_to_case_types or [])]
+        return [self._to_dto(s) for s in rows]
 
     async def get_initial_status(self, tenant_id: str | None) -> CaseStatusModel:
         result = await self.db.execute(
