@@ -365,12 +365,19 @@ async def seed_phase_1(session) -> None:
     print("OK Phase 1 complete")
 
 
-STATUSES_SEED = [
-    {"name": "Abierto",     "slug": "open",        "color": "#3B82F6", "order": 1, "is_initial": True,  "is_final": False, "pauses_sla": False, "transitions": ["in_progress"]},
-    {"name": "En Progreso", "slug": "in_progress",  "color": "#F59E0B", "order": 2, "is_initial": False, "is_final": False, "pauses_sla": False, "transitions": ["pending", "resolved", "open"]},
-    {"name": "Pendiente",   "slug": "pending",      "color": "#8B5CF6", "order": 3, "is_initial": False, "is_final": False, "pauses_sla": True,  "transitions": ["in_progress", "open"]},
-    {"name": "Resuelto",    "slug": "resolved",     "color": "#10B981", "order": 4, "is_initial": False, "is_final": False, "pauses_sla": True,  "transitions": ["closed", "open"]},
-    {"name": "Cerrado",     "slug": "closed",       "color": "#6B7280", "order": 5, "is_initial": False, "is_final": True,  "pauses_sla": True,  "transitions": []},
+CANONICAL_STATUSES = [
+    # (slug, name, color, order, is_initial, is_final, pauses_sla, applies_to_case_types, allowed_transitions_slugs)
+    ("new",            "Nuevo",                "#3b82f6", 10, True,  False, False, ["request", "incident"],           ["in_progress", "on_hold", "resolved", "triage"]),
+    ("logged",         "Registrado",           "#94a3b8", 11, True,  False, False, ["event"],                         ["discarded", "resolved"]),
+    ("pending_triage", "En triage automático", "#f59e0b", 12, False, False, False, ["event"],                         ["logged", "discarded"]),
+    ("triage",         "En triage manual",     "#f59e0b", 20, False, False, False, ["incident"],                      ["in_response", "resolved"]),
+    ("in_progress",    "En progreso",          "#3b82f6", 30, False, False, False, ["request"],                       ["on_hold", "resolved"]),
+    ("in_response",    "En respuesta",         "#f97316", 31, False, False, False, ["incident"],                      ["contained", "resolved", "on_hold"]),
+    ("contained",      "Contenido",            "#a855f7", 32, False, False, False, ["incident"],                      ["resolved"]),
+    ("on_hold",        "En espera",            "#9ca3af", 40, False, False, True,  ["request", "incident"],           ["in_progress", "triage", "in_response", "resolved"]),
+    ("resolved",       "Resuelto",             "#10b981", 50, False, False, False, ["request", "incident", "event"],  ["closed", "in_progress", "in_response"]),
+    ("discarded",      "Descartado",           "#64748b", 51, False, True,  False, ["event"],                         []),
+    ("closed",         "Cerrado",              "#475569", 60, False, True,  False, ["request", "incident", "event"],  []),
 ]
 
 PRIORITIES_SEED = [
@@ -388,29 +395,74 @@ ORIGINS_SEED = [
 ]
 
 
+async def seed_case_statuses(session, tenant_id) -> None:
+    """Idempotent seed: insert each canonical status if missing; update on existing rows.
+
+    Two-pass logic: first inserts/updates statuses (without transitions), then resolves
+    allowed_transitions slugs → status IDs. This avoids FK-like dependency between rows
+    being inserted in same batch (a status can reference another that wasn't created yet).
+    """
+    from sqlalchemy import select
+
+    # PASS 1: insert or update statuses with core fields + applies_to_case_types
+    for slug, name, color, order, is_initial, is_final, pauses_sla, applies_to, _ in CANONICAL_STATUSES:
+        result = await session.execute(
+            select(CaseStatusModel).where(
+                CaseStatusModel.slug == slug,
+                CaseStatusModel.tenant_id == tenant_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = CaseStatusModel(
+                id=str(uuid.uuid4()),
+                tenant_id=tenant_id,
+                slug=slug,
+                name=name,
+                color=color,
+                order=order,
+                is_initial=is_initial,
+                is_final=is_final,
+                pauses_sla=pauses_sla,
+                applies_to_case_types=applies_to,
+                allowed_transitions=[],
+            )
+            session.add(row)
+        else:
+            row.name = name
+            row.color = color
+            row.order = order
+            row.is_initial = is_initial
+            row.is_final = is_final
+            row.pauses_sla = pauses_sla
+            row.applies_to_case_types = applies_to
+
+    await session.flush()
+
+    # PASS 2: resolve allowed_transitions slugs → status IDs
+    result = await session.execute(
+        select(CaseStatusModel).where(CaseStatusModel.tenant_id == tenant_id)
+    )
+    all_rows = result.scalars().all()
+    slug_to_id = {r.slug: r.id for r in all_rows}
+
+    for slug, _, _, _, _, _, _, _, transitions_slugs in CANONICAL_STATUSES:
+        row = next((r for r in all_rows if r.slug == slug), None)
+        if row is None:
+            continue
+        row.allowed_transitions = [
+            slug_to_id[t_slug] for t_slug in transitions_slugs if t_slug in slug_to_id
+        ]
+
+    await session.commit()
+    print(f"  + Seeded {len(CANONICAL_STATUSES)} case statuses for tenant {tenant_id}")
+
+
 async def seed_phase_2(session) -> None:
     """Seed case statuses, priorities, and origins."""
     from sqlalchemy import select
 
-    status_count = 0
-    for s in STATUSES_SEED:
-        result = await session.execute(
-            select(CaseStatusModel).where(CaseStatusModel.slug == s["slug"], CaseStatusModel.tenant_id == None)
-        )
-        existing = result.scalar_one_or_none()
-        if existing:
-            existing.allowed_transitions = s["transitions"]
-            existing.pauses_sla = s["pauses_sla"]
-        else:
-            session.add(CaseStatusModel(
-                id=str(uuid.uuid4()), tenant_id=None,
-                name=s["name"], slug=s["slug"], color=s["color"],
-                order=s["order"], is_initial=s["is_initial"], is_final=s["is_final"],
-                pauses_sla=s["pauses_sla"],
-                allowed_transitions=s["transitions"],
-            ))
-            status_count += 1
-    print(f"  + {status_count} estados de caso creados (transiciones actualizadas)")
+    await seed_case_statuses(session, tenant_id=None)
 
     priority_count = 0
     for p in PRIORITIES_SEED:
