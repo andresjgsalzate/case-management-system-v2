@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Boolean, Integer, Text, ForeignKey, text
+from sqlalchemy import String, DateTime, Boolean, Integer, Text, ForeignKey, text, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.src.core.database import Base
@@ -64,6 +64,48 @@ class CaseModel(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     solution_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ─── Case type discrimination (sub-spec 01) ───
+    case_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default="request",
+        index=True,
+    )
+
+    # ─── Taxonomy FK (defined in sub-spec 02; FK constraint added later) ───
+    taxonomy_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True,
+    )
+
+    # ─── Promotion history (event → incident) ───
+    original_case_number: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+        index=True,
+    )
+    original_case_type: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+    promoted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    promoted_by: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+
+    # ─── Delegated triage timeout (used when taxonomy.triage_mode='delegate_to_n8n') ───
+    pending_triage_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -72,6 +114,18 @@ class CaseModel(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "case_type IN ('request', 'incident', 'event')",
+            name="ck_cases_case_type_valid",
+        ),
+        CheckConstraint(
+            "(promoted_at IS NULL AND original_case_number IS NULL AND original_case_type IS NULL) "
+            "OR (promoted_at IS NOT NULL AND original_case_number IS NOT NULL AND original_case_type IS NOT NULL)",
+            name="ck_cases_promotion_consistency",
+        ),
     )
 
     status: Mapped["CaseStatusModel"] = relationship(  # type: ignore[name-defined]
