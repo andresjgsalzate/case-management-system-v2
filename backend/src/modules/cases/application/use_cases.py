@@ -414,6 +414,79 @@ class CaseUseCases:
 
         return await self.get_case(case_id)
 
+    async def promote_event_to_incident(
+        self,
+        *,
+        case_id: str,
+        promoted_by: str,
+        reason: str,
+        new_taxonomy_id: str | None = None,
+        new_service_item_id: str | None = None,
+        new_priority_id: str | None = None,
+        new_team_id: str | None = None,
+    ) -> CaseResponseDTO:
+        """Atomically promote an event case to an incident.
+
+        Preserves case.id but rewrites case_number to new INC range. Original
+        EVT number preserved in original_case_number. case_type becomes
+        'incident'. Status transitions to 'triage'. Promotion metadata
+        (promoted_at, promoted_by) is captured for audit.
+
+        Subsequent calls on the same case raise ValidationError.
+        """
+        # 1. Validate reason
+        if not reason or not reason.strip():
+            raise ValidationError("Reason is required for promotion.")
+
+        # 2. Load + lock case
+        result = await self.db.execute(
+            select(CaseModel).where(CaseModel.id == case_id).with_for_update()
+        )
+        case = result.scalar_one_or_none()
+        if case is None:
+            raise NotFoundError(f"Case {case_id} not found")
+
+        # 3. Validate state
+        if case.case_type != "event":
+            raise ValidationError(
+                f"Cannot promote case of type '{case.case_type}'. "
+                "Only events can be promoted."
+            )
+        if case.promoted_at is not None:
+            raise ValidationError("Case already promoted. Cannot promote again.")
+
+        # 4. Generate new INC number
+        new_number = await self._next_case_number(case.tenant_id, "INC")
+
+        # 5. Preserve promotion history
+        case.original_case_number = case.case_number
+        case.original_case_type = "event"
+        case.case_number = new_number
+        case.case_type = "incident"
+        case.promoted_at = datetime.now(timezone.utc)
+        case.promoted_by = promoted_by
+
+        # 6. Apply optional re-classification
+        if new_taxonomy_id is not None:
+            case.taxonomy_id = new_taxonomy_id
+        if new_service_item_id is not None:
+            case.service_item_id = new_service_item_id
+        if new_priority_id is not None:
+            case.priority_id = new_priority_id
+        if new_team_id is not None:
+            case.team_id = new_team_id
+
+        # 7. Transition status to 'triage' (incident workflow initial)
+        triage_status = await self._get_status_by_slug(case.tenant_id, "triage")
+        if triage_status is None:
+            raise NotFoundError("Status 'triage' not found for this tenant.")
+        case.status_id = triage_status.id
+
+        await self.db.flush()
+
+        # 8. Return refreshed DTO
+        return await self.get_case(case_id)
+
     async def export_csv(self, tenant_id: str | None) -> str:
         result = await self.db.execute(
             select(CaseModel)
@@ -613,6 +686,11 @@ class CaseUseCases:
             archived_at=model.archived_at.isoformat() if model.archived_at else None,
             archived_by=model.archived_by,
             closed_at=model.closed_at.isoformat() if model.closed_at else None,
+            case_type=model.case_type,
+            original_case_number=model.original_case_number,
+            original_case_type=model.original_case_type,
+            promoted_at=model.promoted_at.isoformat() if model.promoted_at else None,
+            promoted_by=model.promoted_by,
             created_at=model.created_at.isoformat(),
             updated_at=model.updated_at.isoformat(),
         )

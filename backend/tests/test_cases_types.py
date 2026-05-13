@@ -419,3 +419,173 @@ async def test_list_statuses_filters_by_case_type():
     assert "logged" in slugs
     assert "resolved" in slugs  # applies to all 3
     assert "new" not in slugs  # only request+incident
+
+
+# ---------------------------------------------------------------------------
+# Task 11 Tests — promote_event_to_incident
+# ---------------------------------------------------------------------------
+
+def _make_event_case_mock():
+    """Build a mock event case ready to be promoted."""
+    case = MagicMock()
+    case.id = "case-uuid"
+    case.tenant_id = None
+    case.case_number = "EVT-2026-000005"
+    case.case_type = "event"
+    case.original_case_number = None
+    case.original_case_type = None
+    case.promoted_at = None
+    case.promoted_by = None
+    case.taxonomy_id = None
+    case.service_item_id = None
+    case.priority_id = "priority-uuid"
+    case.team_id = None
+    case.status_id = "logged-status-uuid"
+    return case
+
+
+def _make_promote_session(case, *, range_current=10):
+    """Build mock session that handles:
+    - Main case lookup (SELECT ... WHERE id=...)
+    - INC range lookup (_next_case_number → CaseNumberRangeModel)
+    - Triage status lookup (_get_status_by_slug)
+    - get_case reload (selectinload query returning case again)
+    """
+    range_row = MagicMock()
+    range_row.range_start = 1
+    range_row.range_end = 1000
+    range_row.current_number = range_current
+
+    triage_status = MagicMock()
+    triage_status.id = "triage-uuid"
+    triage_status.slug = "triage"
+    triage_status.name = "Triage"
+    triage_status.color = "#f00"
+    triage_status.applies_to_case_types = ["incident"]
+
+    session = AsyncMock()
+
+    async def execute_side_effect(stmt, *args, **kwargs):
+        result = MagicMock()
+        stmt_str = str(stmt).lower()
+        if "casenumberrangemodel" in stmt_str or "case_number_range" in stmt_str:
+            result.scalar_one_or_none.return_value = range_row
+        elif "casestatusmodel" in stmt_str or "case_status" in stmt_str:
+            result.scalar_one_or_none.return_value = triage_status
+            result.scalar_one.return_value = triage_status
+        else:
+            # main case lookup (both the FOR UPDATE lock and the get_case reload)
+            result.scalar_one_or_none.return_value = case
+        return result
+
+    session.execute = AsyncMock(side_effect=execute_side_effect)
+    session.flush = AsyncMock()
+    return session
+
+
+@pytest.mark.asyncio
+async def test_promote_preserves_id_and_rewrites_case_number():
+    """case.id unchanged; case_number rewritten to INC prefix; original_case_number stores old EVT number."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+
+    case = _make_event_case_mock()
+    session = _make_promote_session(case)
+    uc = CaseUseCases(db=session)
+
+    # Patch get_case so it returns a simple MagicMock instead of trying to
+    # build a real CaseResponseDTO from the mocked ORM object.
+    with patch.object(uc, "get_case", new=AsyncMock(return_value=MagicMock())):
+        await uc.promote_event_to_incident(
+            case_id="case-uuid",
+            promoted_by="user-uuid",
+            reason="Pattern of brute force followed by successful auth at 3am",
+        )
+
+    assert case.id == "case-uuid"
+    assert case.case_number.startswith("INC-"), f"Expected INC- prefix, got: {case.case_number}"
+    assert case.original_case_number == "EVT-2026-000005"
+    assert case.original_case_type == "event"
+    assert case.case_type == "incident"
+    assert case.promoted_at is not None
+    assert case.promoted_by == "user-uuid"
+
+
+@pytest.mark.asyncio
+async def test_promote_request_raises():
+    """Cannot promote a case of type 'request'."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.core.exceptions import ValidationError
+
+    case = _make_event_case_mock()
+    case.case_type = "request"
+    session = _make_promote_session(case)
+    uc = CaseUseCases(db=session)
+
+    with pytest.raises(ValidationError) as exc:
+        await uc.promote_event_to_incident(
+            case_id="case-uuid",
+            promoted_by="user-uuid",
+            reason="bad call",
+        )
+    msg = str(exc.value).lower()
+    assert "event" in msg or "request" in msg or "promote" in msg
+
+
+@pytest.mark.asyncio
+async def test_promote_already_promoted_raises():
+    """Cannot promote a case that already has promoted_at set (idempotency guard)."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.core.exceptions import ValidationError
+
+    case = _make_event_case_mock()
+    case.promoted_at = datetime.datetime.now(datetime.timezone.utc)
+    session = _make_promote_session(case)
+    uc = CaseUseCases(db=session)
+
+    with pytest.raises(ValidationError) as exc:
+        await uc.promote_event_to_incident(
+            case_id="case-uuid",
+            promoted_by="user-uuid",
+            reason="duplicate",
+        )
+    msg = str(exc.value).lower()
+    assert "already" in msg or "promoted" in msg
+
+
+@pytest.mark.asyncio
+async def test_promote_requires_reason():
+    """Empty reason raises ValidationError before any DB access."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.core.exceptions import ValidationError
+
+    case = _make_event_case_mock()
+    session = _make_promote_session(case)
+    uc = CaseUseCases(db=session)
+
+    with pytest.raises(ValidationError) as exc:
+        await uc.promote_event_to_incident(
+            case_id="case-uuid",
+            promoted_by="user-uuid",
+            reason="",
+        )
+    msg = str(exc.value).lower()
+    assert "reason" in msg
+
+
+@pytest.mark.asyncio
+async def test_promote_transitions_to_triage_status():
+    """After promotion, case.status_id is set to the triage status id."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+
+    case = _make_event_case_mock()
+    session = _make_promote_session(case)
+    uc = CaseUseCases(db=session)
+
+    with patch.object(uc, "get_case", new=AsyncMock(return_value=MagicMock())):
+        await uc.promote_event_to_incident(
+            case_id="case-uuid",
+            promoted_by="user-uuid",
+            reason="x",
+        )
+
+    assert case.status_id == "triage-uuid"
