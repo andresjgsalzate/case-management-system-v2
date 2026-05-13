@@ -39,6 +39,8 @@ export interface Team {
 
 // ─── Cases ────────────────────────────────────────────────────────────────────
 
+export type CaseType = 'request' | 'incident' | 'event';
+
 export interface CaseStatus {
   id: string;
   name: string;
@@ -101,6 +103,14 @@ export interface Case {
   updated_at: string;
   // Enriched optional fields (populated by some endpoints)
   assigned_user?: User;
+  // Case type and promotion fields
+  case_type?: CaseType;
+  taxonomy_id?: string | null;
+  original_case_number?: string | null;
+  original_case_type?: CaseType | null;
+  promoted_at?: string | null;
+  promoted_by?: string | null;
+  pending_triage_until?: string | null;
 }
 
 export interface CaseNote {
