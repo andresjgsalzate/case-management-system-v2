@@ -87,6 +87,34 @@ export function useUpdateCase(id: string) {
   });
 }
 
+/**
+ * Promote an event case to incident. Returns the updated case (with new
+ * INC-… case_number and original_case_number preserving the old EVT-…).
+ * Sub-spec 01 § 4.3.
+ */
+export function usePromoteEvent(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: {
+      reason: string;
+      new_taxonomy_id?: string;
+      new_service_item_id?: string;
+      new_priority_id?: string;
+      new_team_id?: string;
+    }) => {
+      const { data } = await apiClient.post<ApiResponse<Case>>(
+        `/cases/${id}/promote`,
+        payload,
+      );
+      return data.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [CASES_KEY, id] });
+      qc.invalidateQueries({ queryKey: [CASES_KEY] });
+    },
+  });
+}
+
 export function useCaseStatuses() {
   return useQuery({
     queryKey: ["case-statuses"],
