@@ -1,7 +1,6 @@
 "use client";
 
 import { Badge, type BadgeVariant } from "@/components/atoms/Badge";
-import { cn } from "@/lib/utils";
 import type { CaseType } from "@/lib/types";
 
 const CASE_TYPE_MAP: Record<
