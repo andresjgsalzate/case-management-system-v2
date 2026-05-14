@@ -12,10 +12,30 @@ import {
   useItemFields,
 } from "@/hooks/useServiceCatalog";
 import { FieldPreview } from "@/components/organisms/ServiceCatalog/FieldPreview";
-import type { ServiceCatalogField } from "@/lib/types";
+import { useAuthStore } from "@/store/auth.store";
+import { hasPermission } from "@/lib/permissions";
+import type { CaseType, ServiceCatalogField } from "@/lib/types";
 
 export function CaseForm() {
   const router = useRouter();
+
+  // Per-type creation permissions (sub-spec 01 § 3.6)
+  const permissions = useAuthStore((s) => s.user?.permissions);
+  const canCreate = {
+    request: hasPermission(permissions, "cases", "create:request"),
+    incident: hasPermission(permissions, "cases", "create:incident"),
+    event: hasPermission(permissions, "cases", "create:event"),
+  };
+  // Default to first allowed type (preference: request → incident → event)
+  const initialType: CaseType = canCreate.request
+    ? "request"
+    : canCreate.incident
+    ? "incident"
+    : canCreate.event
+    ? "event"
+    : "request";
+  const [caseType, setCaseType] = useState<CaseType>(initialType);
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priorityId, setPriorityId] = useState("");
@@ -73,6 +93,7 @@ export function CaseForm() {
 
     try {
       const created = await createCase.mutateAsync({
+        case_type: caseType,
         title: title.trim(),
         description: description.trim() || undefined,
         priority_id: priorityId,
@@ -109,6 +130,56 @@ export function CaseForm() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-6 max-w-6xl">
+      {/* Tipo de caso (radio): visible solo si el usuario tiene
+          permisos para crear más de un tipo. Si solo puede crear uno,
+          el radio se oculta y el valor por defecto sigue activo. */}
+      {(Number(canCreate.request) + Number(canCreate.incident) + Number(canCreate.event)) > 1 && (
+        <div className="flex flex-col gap-2">
+          <label className="text-sm font-medium text-foreground">Tipo</label>
+          <div className="flex gap-4 flex-wrap">
+            {canCreate.request && (
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="case_type"
+                  value="request"
+                  checked={caseType === "request"}
+                  onChange={() => setCaseType("request")}
+                  className="accent-primary"
+                />
+                Solicitud
+              </label>
+            )}
+            {canCreate.incident && (
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="case_type"
+                  value="incident"
+                  checked={caseType === "incident"}
+                  onChange={() => setCaseType("incident")}
+                  className="accent-primary"
+                />
+                Incidencia
+              </label>
+            )}
+            {canCreate.event && (
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="case_type"
+                  value="event"
+                  checked={caseType === "event"}
+                  onChange={() => setCaseType("event")}
+                  className="accent-primary"
+                />
+                Evento
+              </label>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Layout adaptativo:
           - Sin campos custom → 1 columna con ancho moderado.
           - Con campos custom → 2 columnas en lg+, apiladas en sm/md. */}

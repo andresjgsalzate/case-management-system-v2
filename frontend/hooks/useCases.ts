@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/apiClient";
-import type { Case, ApiResponse } from "@/lib/types";
+import type { Case, CaseType, ApiResponse } from "@/lib/types";
 
 export interface CaseNote {
   id: string;
@@ -58,6 +58,7 @@ export function useCreateCase() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (payload: {
+      case_type?: CaseType;
       title: string;
       description?: string;
       priority_id: string;
