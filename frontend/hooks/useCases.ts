@@ -15,6 +15,7 @@ const ARCHIVED_KEY = "cases-archived";
 
 export function useCases(params?: {
   status?: string;
+  case_type?: CaseType;
   limit?: number;
   offset?: number;
   queue?: "mine" | "team" | "all";

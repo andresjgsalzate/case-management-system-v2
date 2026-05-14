@@ -7,7 +7,7 @@ import { Button } from "@/components/atoms/Button";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { CaseTable } from "@/components/organisms/CaseTable";
 import { useCases, useCasePriorities } from "@/hooks/useCases";
-import type { Case } from "@/lib/types";
+import type { Case, CaseType } from "@/lib/types";
 
 const STATUS_TABS = [
   { label: "Todos", value: "" },
@@ -27,10 +27,12 @@ export default function CasesPage() {
   const [search, setSearch] = useState("");
   const [activeStatus, setActiveStatus] = useState("");
   const [activePriority, setActivePriority] = useState("");
+  const [activeType, setActiveType] = useState<"" | CaseType>("");
   const [queue, setQueue] = useState<"mine" | "team" | "all">("mine");
 
   const { data: cases = [], isLoading } = useCases({
     ...(activeStatus ? { status: activeStatus } : {}),
+    ...(activeType ? { case_type: activeType } : {}),
     queue,
   });
   const { data: priorities = [] } = useCasePriorities();
@@ -117,6 +119,18 @@ export default function CasesPage() {
           {priorities.map((p: { id: string; name: string }) => (
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
+        </select>
+
+        {/* Case type filter (sub-spec 01 § 4.4) */}
+        <select
+          value={activeType}
+          onChange={(e) => setActiveType(e.target.value as "" | CaseType)}
+          className="h-8 rounded-md border border-border bg-background px-2 text-sm text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <option value="">Todos los tipos</option>
+          <option value="request">Solicitudes</option>
+          <option value="incident">Incidencias</option>
+          <option value="event">Eventos</option>
         </select>
 
       </div>

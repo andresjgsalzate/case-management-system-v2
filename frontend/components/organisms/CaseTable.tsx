@@ -5,6 +5,7 @@ import { ExternalLink } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
 import { PriorityBadge } from "@/components/molecules/PriorityBadge";
+import { CaseTypeBadge } from "@/components/molecules/CaseTypeBadge";
 import { Avatar } from "@/components/atoms/Avatar";
 import { Spinner } from "@/components/atoms/Spinner";
 import type { Case } from "@/lib/types";
@@ -55,9 +56,12 @@ export function CaseTable({ cases, isLoading, className }: CaseTableProps) {
               className="hover:bg-muted/40 transition-colors duration-100 group"
             >
               <td className="px-4 py-3 whitespace-nowrap">
-                <span className="font-mono text-xs text-muted-foreground">
-                  {c.case_number}
-                </span>
+                <div className="flex flex-col gap-1">
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {c.case_number}
+                  </span>
+                  {c.case_type && <CaseTypeBadge caseType={c.case_type} />}
+                </div>
               </td>
               <td className="px-4 py-3 max-w-64">
                 <Link
