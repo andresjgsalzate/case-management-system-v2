@@ -7,16 +7,17 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Clock, User, Tag, Calendar,
   ChevronDown, UserCheck, Archive, BarChart2, Layers,
-  RotateCcw, ArrowLeftRight, History,
+  RotateCcw, ArrowLeftRight, History, ArrowUpCircle,
 } from "lucide-react";
 import {
   useCase, useCaseStatuses, useTransitionCase,
   useArchiveCase, useRestoreCase, useCaseSLA,
-  useClassification, useResolutionFeedback,
+  useClassification, useResolutionFeedback, usePromoteEvent,
   type CaseSLARecord, type ResolutionFeedback,
 } from "@/hooks/useCases";
 import { StatusBadge } from "@/components/molecules/StatusBadge";
 import { PriorityBadge } from "@/components/molecules/PriorityBadge";
+import { CaseTypeBadge } from "@/components/molecules/CaseTypeBadge";
 import { Avatar } from "@/components/atoms/Avatar";
 import { Spinner } from "@/components/atoms/Spinner";
 import { useConfirm } from "@/components/providers/ConfirmProvider";
@@ -31,6 +32,7 @@ import { CaseCustomValuesCard } from "@/components/organisms/ServiceCatalog/Case
 import { AssignCaseModal } from "@/components/organisms/AssignCaseModal";
 import { TransferCaseModal } from "@/components/organisms/TransferCaseModal";
 import { TransferHistoryDrawer } from "@/components/organisms/TransferHistoryDrawer";
+import { PromoteEventModal } from "@/components/organisms/PromoteEventModal";
 import { useCasePermissions } from "@/hooks/useCasePermissions";
 import { useHasPermission } from "@/hooks/useHasPermission";
 import { getCurrentUserId } from "@/lib/apiClient";
@@ -53,10 +55,12 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const [solutionErrors, setSolutionErrors] = useState<Partial<Record<keyof SolutionData, string>>>({});
   const [showTransfer, setShowTransfer] = useState(false);
   const [showTransferHistory, setShowTransferHistory] = useState(false);
+  const [showPromote, setShowPromote] = useState(false);
 
   const transition = useTransitionCase(params.id);
   const archive = useArchiveCase(params.id);
   const restore = useRestoreCase(params.id);
+  const promote = usePromoteEvent(params.id);
   const { data: sla } = useCaseSLA(params.id);
   const { data: classification } = useClassification(params.id);
   const { data: resolutionFeedback } = useResolutionFeedback(params.id);
@@ -67,6 +71,7 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const canAssign       = useHasPermission("cases", "assign");
   const canArchive      = useHasPermission("cases", "archive");
   const canViewSLA      = useHasPermission("sla",   "read");
+  const canPromoteEvent = useHasPermission("cases", "promote:event_to_incident");
   const caseActions     = useCasePermissions(c);
   const canTransition   = caseActions.canTransition;
   const canTransferCase = caseActions.canTransfer;
@@ -118,6 +123,19 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Promoted banner — visible when this case came from a promotion
+          (sub-spec 01 § 4.3). Shows the original EVT-… number so a reviewer
+          can trace the chain back to the raw event. */}
+      {c.original_case_number && (
+        <div className="flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm text-violet-800 dark:border-violet-900 dark:bg-violet-950/30 dark:text-violet-300">
+          <ArrowUpCircle className="h-4 w-4 shrink-0" />
+          <span>
+            Promovido desde <strong className="font-mono">{c.original_case_number}</strong>
+            {c.promoted_at && <> · {formatRelative(c.promoted_at)}</>}
+          </span>
+        </div>
+      )}
+
       {/* Archived banner */}
       {c.is_archived && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
@@ -157,6 +175,7 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className="font-mono text-xs text-muted-foreground">{c.case_number}</span>
+              {c.case_type && <CaseTypeBadge caseType={c.case_type} />}
               <StatusBadge status={c.status_name} pulse />
               <PriorityBadge priority={c.priority_name} />
             </div>
@@ -221,6 +240,18 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
                 </DropdownMenu.Content>
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
+
+            {/* Promote event → incident (sub-spec 01 § 4.3) */}
+            {c.case_type === "event" && canPromoteEvent && !c.is_archived && (
+              <button
+                type="button"
+                onClick={() => setShowPromote(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-violet-300 bg-violet-50 px-3 py-1.5 text-sm text-violet-700 hover:bg-violet-100 transition-colors dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300 dark:hover:bg-violet-900/40"
+              >
+                <ArrowUpCircle className="h-3.5 w-3.5" />
+                Promover a incidencia
+              </button>
+            )}
 
             {/* Assign — only for users with cases/assign permission, and only when they can act */}
             {canAssign && !c.is_archived && canTransferCase && (
@@ -538,6 +569,15 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
         caseId={params.id}
         open={showTransferHistory}
         onClose={() => setShowTransferHistory(false)}
+      />
+      <PromoteEventModal
+        caseNumber={c.case_number}
+        open={showPromote}
+        onClose={() => setShowPromote(false)}
+        onSubmit={async ({ reason }) => {
+          setActionError(null);
+          await promote.mutateAsync({ reason });
+        }}
       />
     </div>
   );
