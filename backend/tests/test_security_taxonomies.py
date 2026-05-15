@@ -30,6 +30,48 @@ def _run_db_query(async_query):
     return asyncio.run(_go())
 
 
+def test_soc_teams_seeded():
+    """16 SOC teams from spec §4.1 are present as globals with correct attributes."""
+    from sqlalchemy import text
+
+    expected = {
+        # name → (team_category, is_notification_only)
+        "Incidentes - SOC":          ("operational",       False),
+        "Soporte IT":                ("operational",       False),
+        "Customer Success":          ("operational",       True),
+        "Infraestructura":           ("technical_support", False),
+        "Bases de datos":            ("technical_support", False),
+        "Aplicaciones":              ("technical_support", False),
+        "Adm. Antivirus":            ("technical_support", False),
+        "Adm. Correo":               ("technical_support", False),
+        "Net&Sec":                   ("technical_support", False),
+        "Ethical Hacker":            ("technical_support", False),
+        "Segu Info. - Risk":         ("governance",        False),
+        "Recursos Humanos":          ("governance",        True),
+        "Datos Personales":          ("governance",        True),
+        "Legal":                     ("legal",             True),
+        "Director de Producto":      ("executive",         True),
+        "Director Arquitectura":     ("executive",         True),
+        "Alta Dirección":            ("executive",         True),
+    }
+    # Spec §4.1 has 17 entries (3 operational + 7 technical + 3 governance + 1 legal + 3 executive)
+
+    async def _q(session):
+        result = await session.execute(text(
+            "SELECT name, team_category, is_notification_only FROM teams "
+            "WHERE tenant_id IS NULL AND name = ANY(:names)"
+        ).bindparams(names=list(expected.keys())))
+        return {row[0]: (row[1], row[2]) for row in result.all()}
+
+    actual = _run_db_query(_q)
+    missing = set(expected) - set(actual)
+    assert not missing, f"Missing teams: {missing}"
+    for name, (cat, notif_only) in expected.items():
+        assert actual[name] == (cat, notif_only), (
+            f"Team '{name}': expected ({cat}, {notif_only}), got {actual[name]}"
+        )
+
+
 def test_security_taxonomies_permissions_seeded():
     """8 security_taxonomies permissions assigned to expected roles (Sub-spec 02 Task 4)."""
     from sqlalchemy import text
