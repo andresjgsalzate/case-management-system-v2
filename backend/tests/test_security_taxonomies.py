@@ -30,6 +30,34 @@ def _run_db_query(async_query):
     return asyncio.run(_go())
 
 
+def test_global_taxonomies_seeded_with_hierarchy():
+    """≥30 global taxonomies + RANSOM-LOCKBIT has RANSOMWARE as parent (Sub-spec 02 Task 6)."""
+    from sqlalchemy import text
+
+    async def _count(session):
+        result = await session.execute(text(
+            "SELECT COUNT(*) FROM security_taxonomies WHERE tenant_id IS NULL"
+        ))
+        return result.scalar()
+
+    async def _lockbit_parent(session):
+        result = await session.execute(text(
+            "SELECT p.tuic_code FROM security_taxonomies c "
+            "JOIN security_taxonomies p ON p.id = c.parent_id "
+            "WHERE c.tuic_code = 'RANSOM-LOCKBIT' AND c.tenant_id IS NULL"
+        ))
+        row = result.first()
+        return row[0] if row else None
+
+    count = _run_db_query(_count)
+    assert count >= 30, f"Expected ≥30 global taxonomies, got {count}"
+
+    parent_code = _run_db_query(_lockbit_parent)
+    assert parent_code == "RANSOMWARE", (
+        f"RANSOM-LOCKBIT parent expected 'RANSOMWARE', got '{parent_code}'"
+    )
+
+
 def test_soc_teams_seeded():
     """16 SOC teams from spec §4.1 are present as globals with correct attributes."""
     from sqlalchemy import text
