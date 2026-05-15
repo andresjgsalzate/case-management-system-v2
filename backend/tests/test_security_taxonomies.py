@@ -1,5 +1,86 @@
 """Tests for Sub-spec 02 — Security Taxonomies module."""
+import asyncio
 import pytest
+
+
+def _run_db_query(async_query):
+    """Run an async DB query inline using a fresh session/event loop.
+
+    Tests in this repo run against a sandbox conftest that overrides DATABASE_URL
+    to a fake host, so AsyncSessionLocal can't be used in unit tests. This helper
+    constructs an engine bound to the REAL DATABASE_URL from .env so seed-state
+    tests can verify migrations actually applied.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from dotenv import dotenv_values
+
+    env = dotenv_values("backend/.env")
+    real_url = env.get("DATABASE_URL")
+    if not real_url:
+        pytest.skip("DATABASE_URL not in backend/.env")
+
+    async def _go():
+        engine = create_async_engine(real_url)
+        try:
+            async with AsyncSession(engine) as session:
+                return await async_query(session)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_go())
+
+
+def test_security_taxonomies_permissions_seeded():
+    """8 security_taxonomies permissions assigned to expected roles (Sub-spec 02 Task 4)."""
+    from sqlalchemy import text
+
+    expected_actions = {
+        "read", "create", "update", "delete",
+        "manage_global", "read_audit_log", "export", "import",
+    }
+
+    async def _q(session):
+        result = await session.execute(text(
+            "SELECT DISTINCT action FROM permissions WHERE module = 'security_taxonomies'"
+        ))
+        return {row[0] for row in result.all()}
+
+    actions = _run_db_query(_q)
+    missing = expected_actions - actions
+    assert not missing, f"Missing actions: {missing}"
+
+
+def test_security_taxonomies_role_assignments():
+    """Each role gets the right subset of security_taxonomies permissions."""
+    from sqlalchemy import text
+
+    expected = {
+        "Super Admin": {"read", "create", "update", "delete",
+                        "manage_global", "read_audit_log", "export", "import"},
+        "Admin":       {"read", "create", "update", "delete",
+                        "read_audit_log", "export", "import"},
+        "Manager":     {"read", "create", "update", "read_audit_log", "export"},
+        "Agent":       {"read", "read_audit_log"},
+        "Reporter":    {"read"},
+    }
+
+    async def _q(session):
+        result = await session.execute(text(
+            "SELECT r.name, p.action "
+            "FROM permissions p JOIN roles r ON r.id = p.role_id "
+            "WHERE p.module = 'security_taxonomies' AND r.tenant_id IS NULL"
+        ))
+        out: dict[str, set[str]] = {}
+        for role_name, action in result.all():
+            out.setdefault(role_name, set()).add(action)
+        return out
+
+    actual = _run_db_query(_q)
+    for role_name, exp_actions in expected.items():
+        got = actual.get(role_name, set())
+        assert got == exp_actions, (
+            f"Role '{role_name}': expected {exp_actions}, got {got}"
+        )
 
 
 def test_cases_taxonomy_id_has_fk_to_security_taxonomies():
