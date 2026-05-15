@@ -22,12 +22,410 @@ def _run_db_query(async_query):
     async def _go():
         engine = create_async_engine(real_url)
         try:
-            async with AsyncSession(engine) as session:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
                 return await async_query(session)
         finally:
             await engine.dispose()
 
     return asyncio.run(_go())
+
+
+class _FakeActor:
+    """Minimal CurrentUser-like stub for use case tests."""
+    def __init__(self, user_id, role_name, tenant_id="t-fake"):
+        from sqlalchemy import text as _text
+        self.user_id = user_id
+        self.tenant_id = tenant_id
+        self.role_name = role_name
+        # role_id resolved at first access via DB
+        self._role_id: str | None = None
+
+
+async def _actor_role_id(session, actor):
+    if actor._role_id is None:
+        from sqlalchemy import text
+        row = (await session.execute(text(
+            "SELECT id FROM roles WHERE name = :name AND tenant_id IS NULL LIMIT 1"
+        ), {"name": actor.role_name})).first()
+        actor._role_id = row[0] if row else None
+    return actor._role_id
+
+
+def _build_admin_actor():
+    """Returns a fake actor bound to Super Admin user/role."""
+    actor = _FakeActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d", role_name="Super Admin")
+    return actor
+
+
+def _build_manager_actor():
+    """Manager role: has create/update but NOT manage_global, NOT delete."""
+    actor = _FakeActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d", role_name="Manager")
+    return actor
+
+
+def test_create_taxonomy_global_emits_audit():
+    """Platform admin creates global taxonomy → row + audit log entry."""
+    import uuid
+    from sqlalchemy import text
+
+    tuic = f"TEST-CREATE-{uuid.uuid4().hex[:8].upper()}"
+
+    async def _run(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        payload = TaxonomyCreatePayload(
+            tenant_id=None, tuic_code=tuic, name="Test create",
+            default_case_type="event", requires_ticket=False, triage_mode="auto",
+            tlp_default="amber", mitre_techniques=[],
+        )
+        tax = await uc.create_taxonomy(actor=actor, payload=payload)
+        await session.commit()
+        # Verify audit row
+        audit = (await session.execute(text(
+            "SELECT change_type FROM security_taxonomies_audit_log "
+            "WHERE taxonomy_id = :id"
+        ), {"id": tax.id})).first()
+        return tax.id, tax.tenant_id, tax.tuic_code, (audit[0] if audit else None)
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code AND tenant_id IS NULL"
+        ), {"code": tuic})
+        await session.commit()
+
+    try:
+        tax_id, tenant_id, code, audit_type = _run_db_query(_run)
+        assert tenant_id is None
+        assert code == tuic
+        assert audit_type == "created"
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_create_global_denied_without_manage_global():
+    """Manager role cannot create global taxonomies."""
+    from backend.src.core.exceptions import PermissionDeniedError
+
+    async def _run(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_manager_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        payload = TaxonomyCreatePayload(
+            tenant_id=None, tuic_code="MANAGER-CANT-DO-THIS",
+            name="x", default_case_type="event",
+        )
+        try:
+            await uc.create_taxonomy(actor=actor, payload=payload)
+            return False  # should have raised
+        except PermissionDeniedError:
+            return True
+
+    assert _run_db_query(_run) is True
+
+
+def test_tuic_code_unique_per_tenant():
+    """Two globals with same tuic_code → second raises ValidationError."""
+    import uuid
+    from sqlalchemy import text
+    from backend.src.core.exceptions import ValidationError
+
+    tuic = f"TEST-DUP-{uuid.uuid4().hex[:8].upper()}"
+
+    async def _create_first(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(tenant_id=None, tuic_code=tuic, name="dup"),
+        )
+        await session.commit()
+
+    async def _create_dup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        try:
+            await uc.create_taxonomy(
+                actor=actor,
+                payload=TaxonomyCreatePayload(tenant_id=None, tuic_code=tuic, name="dup2"),
+            )
+            return False
+        except ValidationError:
+            return True
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code AND tenant_id IS NULL"
+        ), {"code": tuic})
+        await session.commit()
+
+    try:
+        _run_db_query(_create_first)
+        assert _run_db_query(_create_dup) is True
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_update_creates_audit_log_entry():
+    """Updating a field writes a diff row to audit log."""
+    import uuid
+    from sqlalchemy import text
+
+    tuic = f"TEST-UPD-{uuid.uuid4().hex[:8].upper()}"
+
+    async def _setup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        tax = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(tenant_id=None, tuic_code=tuic, name="before"),
+        )
+        await session.commit()
+        return tax.id
+
+    async def _update(session, tax_id):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyUpdatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        await uc.update_taxonomy(
+            actor=actor, taxonomy_id=tax_id,
+            updates=TaxonomyUpdatePayload(name="after"),
+        )
+        await session.commit()
+        audits = (await session.execute(text(
+            "SELECT change_type, field_changes FROM security_taxonomies_audit_log "
+            "WHERE taxonomy_id = :id ORDER BY changed_at ASC"
+        ), {"id": tax_id})).all()
+        return [(r[0], r[1]) for r in audits]
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code AND tenant_id IS NULL"
+        ), {"code": tuic})
+        await session.commit()
+
+    try:
+        tax_id = _run_db_query(_setup)
+        audits = _run_db_query(lambda s: _update(s, tax_id))
+        types = [t for (t, _) in audits]
+        assert "created" in types
+        assert "updated" in types
+        # Diff for update should record name change
+        update_diff = next(c for (t, c) in audits if t == "updated")
+        assert "name" in update_diff
+        assert update_diff["name"]["from"] == "before"
+        assert update_diff["name"]["to"] == "after"
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_update_no_changes_skips_audit():
+    """Update with same values → no new audit row."""
+    import uuid
+    from sqlalchemy import text
+
+    tuic = f"TEST-NOOP-{uuid.uuid4().hex[:8].upper()}"
+
+    async def _setup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        tax = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(tenant_id=None, tuic_code=tuic, name="same"),
+        )
+        await session.commit()
+        return tax.id
+
+    async def _noop(session, tax_id):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyUpdatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        await uc.update_taxonomy(
+            actor=actor, taxonomy_id=tax_id,
+            updates=TaxonomyUpdatePayload(name="same"),
+        )
+        await session.commit()
+        count = (await session.execute(text(
+            "SELECT COUNT(*) FROM security_taxonomies_audit_log "
+            "WHERE taxonomy_id = :id"
+        ), {"id": tax_id})).scalar()
+        return count
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code AND tenant_id IS NULL"
+        ), {"code": tuic})
+        await session.commit()
+
+    try:
+        tax_id = _run_db_query(_setup)
+        count = _run_db_query(lambda s: _noop(s, tax_id))
+        assert count == 1, f"Expected 1 audit row (created only), got {count}"
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_soft_delete_reason_required():
+    """soft_delete without reason → ValidationError."""
+    import uuid
+    from sqlalchemy import text
+    from backend.src.core.exceptions import ValidationError
+
+    tuic = f"TEST-DEL-{uuid.uuid4().hex[:8].upper()}"
+
+    async def _setup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        tax = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(tenant_id=None, tuic_code=tuic, name="to-delete"),
+        )
+        await session.commit()
+        return tax.id
+
+    async def _try_delete(session, tax_id):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        try:
+            await uc.soft_delete(actor=actor, taxonomy_id=tax_id, reason="")
+            return False
+        except ValidationError:
+            return True
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code AND tenant_id IS NULL"
+        ), {"code": tuic})
+        await session.commit()
+
+    try:
+        tax_id = _run_db_query(_setup)
+        assert _run_db_query(lambda s: _try_delete(s, tax_id)) is True
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_soft_delete_with_active_descendants_rejected():
+    """Cannot soft-delete parent if active children exist."""
+    import uuid
+    from sqlalchemy import text
+    from backend.src.core.exceptions import ValidationError
+
+    parent_code = f"TEST-PARENT-{uuid.uuid4().hex[:8].upper()}"
+    child_code = f"TEST-CHILD-{uuid.uuid4().hex[:8].upper()}"
+    parent_id_holder: dict[str, str] = {}
+
+    async def _setup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        parent = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(tenant_id=None, tuic_code=parent_code, name="parent"),
+        )
+        await session.commit()
+        child = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(
+                tenant_id=None, tuic_code=child_code, name="child", parent_id=parent.id,
+            ),
+        )
+        await session.commit()
+        parent_id_holder["id"] = parent.id
+
+    async def _try_delete(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        try:
+            await uc.soft_delete(actor=actor, taxonomy_id=parent_id_holder["id"], reason="test")
+            return False
+        except ValidationError:
+            return True
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code IN (:p, :c) AND tenant_id IS NULL"
+        ), {"p": parent_code, "c": child_code})
+        await session.commit()
+
+    try:
+        _run_db_query(_setup)
+        assert _run_db_query(_try_delete) is True
+    finally:
+        _run_db_query(_cleanup)
 
 
 def test_get_taxonomy_fallback_to_global():
