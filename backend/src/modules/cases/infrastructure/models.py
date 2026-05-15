@@ -73,9 +73,10 @@ class CaseModel(Base):
         index=True,
     )
 
-    # ─── Taxonomy FK (defined in sub-spec 02; FK constraint added later) ───
+    # ─── Taxonomy FK (Sub-spec 02 wires the FK constraint) ───
     taxonomy_id: Mapped[str | None] = mapped_column(
         String(36),
+        ForeignKey("security_taxonomies.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
