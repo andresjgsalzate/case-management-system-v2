@@ -47,6 +47,15 @@ from backend.src.modules.notifications.infrastructure.models import Notification
 from backend.src.modules.audit.infrastructure.models import AuditLogModel
 from backend.src.modules.automation.infrastructure.models import AutomationRuleModel
 from backend.src.modules.tenants.infrastructure.models import TenantModel
+from backend.src.modules.service_catalog.infrastructure.models import (
+    ServiceCatalogCategoryModel, ServiceCatalogItemModel,
+    ServiceCatalogFieldModel, CaseCustomValueModel,
+)
+# SOC Sub-spec 02
+from backend.src.modules.security_taxonomies.infrastructure.models import (
+    SecurityTaxonomyModel, SecurityTaxonomyAuditLogModel,
+    TaxonomyNotificationModel, TaxonomyCatalogMappingModel,
+)
 
 # Alembic Config object
 config = context.config
