@@ -68,6 +68,60 @@ log "Python: $($PYTHON --version)"
 log "Node:   $(node --version)"
 
 # ─────────────────────────────────────────────────────────────
+# 1.5  Matar procesos backend/frontend de runs previos
+# ─────────────────────────────────────────────────────────────
+# Cierres impuros (Ctrl+C interrumpido, TaskStop, reload roto) dejan workers
+# uvicorn (multiprocessing.spawn) y procesos node next-dev huérfanos que
+# siguen ocupando puertos 8000/3000-3002 con código viejo o conexiones DB
+# rotas — el síntoma típico es un 500 silencioso en /auth/login después de
+# editar .env. Limpiar antes de arrancar es más rápido que diagnosticar.
+head_ "1.5/6  Limpieza de procesos previos"
+
+_kill_port() {
+  local port="$1"
+  if command -v powershell.exe >/dev/null 2>&1; then
+    # Windows: usa Get-NetTCPConnection — captura LISTEN incluso con padre muerto
+    local pids
+    pids="$(powershell.exe -NoProfile -Command \
+      "Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue \
+       | Select-Object -ExpandProperty OwningProcess -Unique" 2>/dev/null | tr -d '\r')"
+    for pid in $pids; do
+      [[ -z "$pid" || "$pid" == "0" ]] && continue
+      powershell.exe -NoProfile -Command "Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue" 2>/dev/null || true
+      log "  killed PID $pid on :$port"
+    done
+  elif command -v lsof >/dev/null 2>&1; then
+    # Linux/macOS
+    local pids
+    pids="$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    for pid in $pids; do
+      kill -9 "$pid" 2>/dev/null && log "  killed PID $pid on :$port" || true
+    done
+  fi
+}
+
+for p in 8000 3000 3001 3002; do _kill_port "$p"; done
+
+# Matar zombies de multiprocessing.spawn con parent_pid muerto (Windows).
+# uvicorn --reload spawns un worker child; si reloader muere, el worker
+# queda con el socket FD heredado y sigue respondiendo.
+if command -v powershell.exe >/dev/null 2>&1; then
+  powershell.exe -NoProfile -Command "
+    Get-CimInstance Win32_Process -Filter \"Name='python3.13.exe' OR Name='python.exe'\" |
+      Where-Object { \$_.CommandLine -match 'multiprocessing.spawn.*parent_pid=(\d+)' } |
+      ForEach-Object {
+        \$ppid = [int]\$matches[1]
+        if (-not (Get-Process -Id \$ppid -ErrorAction SilentlyContinue)) {
+          Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue
+          Write-Output \"  killed zombie uvicorn worker PID \$(\$_.ProcessId) (dead parent \$ppid)\"
+        }
+      }" 2>/dev/null | sed 's/^/[dev] /' || true
+fi
+
+sleep 1
+log "Limpieza OK ✓"
+
+# ─────────────────────────────────────────────────────────────
 # 2. Docker (Postgres + Redis)
 # ─────────────────────────────────────────────────────────────
 head_ "2/6  Servicios Docker (Postgres + Redis)"
