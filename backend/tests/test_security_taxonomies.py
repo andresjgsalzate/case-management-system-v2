@@ -33,22 +33,21 @@ def _run_db_query(async_query):
 class _FakeActor:
     """Minimal CurrentUser-like stub for use case tests."""
     def __init__(self, user_id, role_name, tenant_id="t-fake"):
-        from sqlalchemy import text as _text
         self.user_id = user_id
         self.tenant_id = tenant_id
         self.role_name = role_name
         # role_id resolved at first access via DB
-        self._role_id: str | None = None
+        self.role_id: str | None = None
 
 
 async def _actor_role_id(session, actor):
-    if actor._role_id is None:
+    if actor.role_id is None:
         from sqlalchemy import text
         row = (await session.execute(text(
             "SELECT id FROM roles WHERE name = :name AND tenant_id IS NULL LIMIT 1"
         ), {"name": actor.role_name})).first()
-        actor._role_id = row[0] if row else None
-    return actor._role_id
+        actor.role_id = row[0] if row else None
+    return actor.role_id
 
 
 def _build_admin_actor():
@@ -61,6 +60,46 @@ def _build_manager_actor():
     """Manager role: has create/update but NOT manage_global, NOT delete."""
     actor = _FakeActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d", role_name="Manager")
     return actor
+
+
+def test_router_endpoints_registered():
+    """Smoke: security_taxonomies router mounted with expected paths."""
+    from backend.src.main import app
+
+    # Collect declared paths from the FastAPI routes registry
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+
+    expected = {
+        "/api/v1/security-taxonomies",
+        "/api/v1/security-taxonomies/tree",
+        "/api/v1/security-taxonomies/{taxonomy_id}",
+        "/api/v1/security-taxonomies/{taxonomy_id}/fork",
+        "/api/v1/security-taxonomies/{taxonomy_id}/refresh-from-global",
+        "/api/v1/security-taxonomies/{taxonomy_id}/audit-log",
+        "/api/v1/security-taxonomies/{taxonomy_id}/notifications",
+        "/api/v1/security-taxonomies/{taxonomy_id}/notifications/{notification_id}",
+        "/api/v1/security-taxonomies/{taxonomy_id}/catalog-mappings",
+        "/api/v1/security-taxonomies/{taxonomy_id}/catalog-mappings/{mapping_id}",
+        "/api/v1/security-taxonomies/{taxonomy_id}/catalog-mappings/{mapping_id}/set-default",
+    }
+    missing = expected - paths
+    assert not missing, f"Missing routes: {missing}"
+
+
+def test_router_unauthenticated_returns_401():
+    """No Authorization header → 401 (router enforces PermissionChecker)."""
+    import asyncio
+    from httpx import AsyncClient, ASGITransport
+    from backend.src.main import app
+
+    async def _go():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/security-taxonomies")
+            return r.status_code
+
+    status = asyncio.run(_go())
+    assert status == 401, f"Expected 401, got {status}"
 
 
 def test_list_audit_log_filters_by_change_type():
@@ -80,7 +119,7 @@ def test_list_audit_log_filters_by_change_type():
             TaxonomyCreatePayload, TaxonomyUpdatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         tax = await uc.create_taxonomy(
             actor=actor,
@@ -149,7 +188,7 @@ def test_add_notification_uniqueness():
             TaxonomyCreatePayload, NotificationCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         tax = await uc.create_taxonomy(
             actor=actor,
@@ -178,7 +217,7 @@ def test_add_notification_uniqueness():
             NotificationCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         try:
             await uc.add_notification(
@@ -220,7 +259,7 @@ def test_set_default_catalog_mapping_unsets_previous():
             TaxonomyCreatePayload, CatalogMappingCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         tax = await uc.create_taxonomy(
             actor=actor,
@@ -270,7 +309,7 @@ def test_set_default_catalog_mapping_unsets_previous():
         )
         from sqlalchemy import text
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         await uc.set_default_catalog_mapping(actor=actor, mapping_id=holder["m2"])
         await session.commit()
@@ -314,7 +353,7 @@ def test_fork_creates_independent_copy_with_notifications_and_mappings():
             TaxonomyCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         src = await uc.create_taxonomy(
             actor=actor,
@@ -374,7 +413,7 @@ def test_fork_creates_independent_copy_with_notifications_and_mappings():
             SecurityTaxonomyUseCases,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         forked = await uc.fork_to_tenant(
             actor=actor, global_taxonomy_id=src_id, target_tenant_id=target_tenant,
@@ -429,7 +468,7 @@ def test_fork_double_rejected():
             TaxonomyCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         src = await uc.create_taxonomy(
             actor=actor,
@@ -450,7 +489,7 @@ def test_fork_double_rejected():
             SecurityTaxonomyUseCases,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         try:
             await uc.fork_to_tenant(
@@ -505,7 +544,7 @@ def test_fork_only_from_global_rejects_tenant_source():
             SecurityTaxonomyUseCases,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         try:
             await uc.fork_to_tenant(
@@ -547,7 +586,7 @@ def test_refresh_from_global_overwrites_with_audit():
             TaxonomyCreatePayload, TaxonomyUpdatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         # Create global with name 'original'
         src = await uc.create_taxonomy(
@@ -580,7 +619,7 @@ def test_refresh_from_global_overwrites_with_audit():
             SecurityTaxonomyUseCases,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         forked = await uc.refresh_from_global(
             actor=actor, taxonomy_id=forked_id_holder["id"],
@@ -627,7 +666,7 @@ def test_is_outdated_vs_global_returns_true_after_global_edit():
             TaxonomyCreatePayload, TaxonomyUpdatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         src = await uc.create_taxonomy(
             actor=actor,
@@ -659,7 +698,7 @@ def test_is_outdated_vs_global_returns_true_after_global_edit():
             TaxonomyUpdatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         await uc.update_taxonomy(
             actor=actor, taxonomy_id=src_id_holder["id"],
@@ -701,7 +740,7 @@ def test_create_taxonomy_global_emits_audit():
             TaxonomyCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         payload = TaxonomyCreatePayload(
             tenant_id=None, tuic_code=tuic, name="Test create",
@@ -744,7 +783,7 @@ def test_create_global_denied_without_manage_global():
             TaxonomyCreatePayload,
         )
         actor = _build_manager_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         payload = TaxonomyCreatePayload(
             tenant_id=None, tuic_code="MANAGER-CANT-DO-THIS",
@@ -775,7 +814,7 @@ def test_tuic_code_unique_per_tenant():
             TaxonomyCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         await uc.create_taxonomy(
             actor=actor,
@@ -791,7 +830,7 @@ def test_tuic_code_unique_per_tenant():
             TaxonomyCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         try:
             await uc.create_taxonomy(
@@ -830,7 +869,7 @@ def test_update_creates_audit_log_entry():
             TaxonomyCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         tax = await uc.create_taxonomy(
             actor=actor,
@@ -847,7 +886,7 @@ def test_update_creates_audit_log_entry():
             TaxonomyUpdatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         await uc.update_taxonomy(
             actor=actor, taxonomy_id=tax_id,
@@ -896,7 +935,7 @@ def test_update_no_changes_skips_audit():
             TaxonomyCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         tax = await uc.create_taxonomy(
             actor=actor,
@@ -913,7 +952,7 @@ def test_update_no_changes_skips_audit():
             TaxonomyUpdatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         await uc.update_taxonomy(
             actor=actor, taxonomy_id=tax_id,
@@ -956,7 +995,7 @@ def test_soft_delete_reason_required():
             TaxonomyCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         tax = await uc.create_taxonomy(
             actor=actor,
@@ -970,7 +1009,7 @@ def test_soft_delete_reason_required():
             SecurityTaxonomyUseCases,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         try:
             await uc.soft_delete(actor=actor, taxonomy_id=tax_id, reason="")
@@ -1009,7 +1048,7 @@ def test_soft_delete_with_active_descendants_rejected():
             TaxonomyCreatePayload,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         parent = await uc.create_taxonomy(
             actor=actor,
@@ -1030,7 +1069,7 @@ def test_soft_delete_with_active_descendants_rejected():
             SecurityTaxonomyUseCases,
         )
         actor = _build_admin_actor()
-        actor._role_id = await _actor_role_id(session, actor)
+        actor.role_id = await _actor_role_id(session, actor)
         uc = SecurityTaxonomyUseCases(db=session)
         try:
             await uc.soft_delete(actor=actor, taxonomy_id=parent_id_holder["id"], reason="test")

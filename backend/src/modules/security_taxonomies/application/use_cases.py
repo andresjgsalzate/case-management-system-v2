@@ -632,7 +632,7 @@ class SecurityTaxonomyUseCases:
         """
         if target_tenant_id is None:
             ok = await has_permission(
-                self.db, actor._role_id, "security_taxonomies", "manage_global"
+                self.db, actor.role_id, "security_taxonomies", "manage_global"
             )
             if not ok:
                 raise PermissionDeniedError(
@@ -641,7 +641,7 @@ class SecurityTaxonomyUseCases:
             return
         # Tenant-scoped
         ok = await has_permission(
-            self.db, actor._role_id, "security_taxonomies", action
+            self.db, actor.role_id, "security_taxonomies", action
         )
         if not ok:
             raise PermissionDeniedError(
@@ -651,7 +651,7 @@ class SecurityTaxonomyUseCases:
         from sqlalchemy import text as _text
         row = (await self.db.execute(_text(
             "SELECT is_global FROM roles WHERE id = :rid"
-        ), {"rid": actor._role_id})).first()
+        ), {"rid": actor.role_id})).first()
         is_global_role = bool(row[0]) if row else False
         if not is_global_role and getattr(actor, "tenant_id", None) != target_tenant_id:
             raise ForbiddenError(
