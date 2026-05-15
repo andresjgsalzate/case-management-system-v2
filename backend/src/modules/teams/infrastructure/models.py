@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Boolean, String, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.src.core.database import Base
 
@@ -12,6 +12,12 @@ class TeamModel(Base):
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # Sub-spec 02: 'operational' | 'technical_support' | 'governance' | 'executive' | 'legal' | NULL
+    team_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Sub-spec 02: if true, team is distribution-list only — cannot be assigned as case.team_id
+    is_notification_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     members: Mapped[list["TeamMemberModel"]] = relationship("TeamMemberModel", back_populates="team", cascade="all, delete-orphan")
