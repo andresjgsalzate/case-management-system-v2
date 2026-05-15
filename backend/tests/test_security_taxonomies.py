@@ -30,6 +30,100 @@ def _run_db_query(async_query):
     return asyncio.run(_go())
 
 
+def test_get_taxonomy_fallback_to_global():
+    """get_taxonomy(tuic_code, tenant_id) returns global when no tenant override exists."""
+    async def _q(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        uc = SecurityTaxonomyUseCases(db=session)
+        tax = await uc.get_taxonomy(tuic_code="RANSOM-LOCKBIT", tenant_id="any-tenant-id-no-override")
+        return (tax.tuic_code if tax else None, tax.tenant_id if tax else None)
+
+    code, tenant_id = _run_db_query(_q)
+    assert code == "RANSOM-LOCKBIT"
+    assert tenant_id is None, f"Expected global (tenant_id=None), got {tenant_id}"
+
+
+def test_get_taxonomy_with_override_wins():
+    """When a tenant-specific override exists, it overrides the global."""
+    import uuid
+    from sqlalchemy import text
+
+    tenant = "test-tenant-override-1"
+    override_id = str(uuid.uuid4())
+
+    async def _setup(session):
+        # Need a created_by user
+        user_row = (await session.execute(text(
+            "SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id "
+            "WHERE r.name IN ('Super Admin', 'Admin') AND r.tenant_id IS NULL LIMIT 1"
+        ))).first()
+        assert user_row, "no admin user available"
+        user_id = user_row[0]
+        await session.execute(text(
+            "INSERT INTO security_taxonomies "
+            "(id, tenant_id, tuic_code, name, default_case_type, requires_ticket, "
+            " triage_mode, triage_timeout_seconds, tlp_default, mitre_techniques, "
+            " is_active, created_at, updated_at, created_by) "
+            "VALUES (:id, :tenant, 'RANSOM-LOCKBIT', 'Tenant Override', 'incident', "
+            "        true, 'auto', 300, 'red', CAST('[]' AS json), true, NOW(), NOW(), :uid)"
+        ), {"id": override_id, "tenant": tenant, "uid": user_id})
+        await session.commit()
+
+    async def _lookup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        uc = SecurityTaxonomyUseCases(db=session)
+        tax = await uc.get_taxonomy(tuic_code="RANSOM-LOCKBIT", tenant_id=tenant)
+        return (tax.tenant_id, tax.name) if tax else (None, None)
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE id = :id"
+        ), {"id": override_id})
+        await session.commit()
+
+    try:
+        _run_db_query(_setup)
+        tenant_id, name = _run_db_query(_lookup)
+        assert tenant_id == tenant, f"Expected tenant override, got tenant_id={tenant_id}"
+        assert name == "Tenant Override", f"Expected override name, got '{name}'"
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_get_taxonomy_returns_none_when_no_match():
+    """No tenant override AND no global → returns None."""
+    async def _q(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        uc = SecurityTaxonomyUseCases(db=session)
+        return await uc.get_taxonomy(tuic_code="NONEXISTENT-CODE-XYZ", tenant_id="any-tenant")
+
+    result = _run_db_query(_q)
+    assert result is None
+
+
+def test_list_taxonomies_returns_globals_for_tenant_without_overrides():
+    """list_taxonomies(tenant_id=X with no overrides) returns globals."""
+    async def _q(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        uc = SecurityTaxonomyUseCases(db=session)
+        taxonomies = await uc.list_taxonomies(tenant_id="tenant-with-no-overrides-xyz")
+        return [t.tuic_code for t in taxonomies]
+
+    codes = _run_db_query(_q)
+    # Should include at least the well-known globals seeded in Task 6
+    assert "RANSOM-LOCKBIT" in codes
+    assert "PHISH-MAIL" in codes
+    assert len(codes) >= 30
+
+
 def test_global_taxonomies_seeded_with_hierarchy():
     """≥30 global taxonomies + RANSOM-LOCKBIT has RANSOMWARE as parent (Sub-spec 02 Task 6)."""
     from sqlalchemy import text
