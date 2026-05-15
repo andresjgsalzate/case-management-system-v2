@@ -429,6 +429,41 @@ class SecurityTaxonomyUseCases:
         )
         return forked
 
+    async def list_audit_log(
+        self,
+        *,
+        taxonomy_id: str,
+        change_type: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        limit: int = 50,
+    ) -> list[SecurityTaxonomyAuditLogModel]:
+        """Audit log entries for a taxonomy with optional filters.
+
+        Permission gating is expected at the router layer (read_audit_log).
+        Returns newest-first.
+        """
+        stmt = select(SecurityTaxonomyAuditLogModel).where(
+            SecurityTaxonomyAuditLogModel.taxonomy_id == taxonomy_id
+        )
+        if change_type:
+            stmt = stmt.where(
+                SecurityTaxonomyAuditLogModel.change_type == change_type
+            )
+        if date_from is not None:
+            stmt = stmt.where(
+                SecurityTaxonomyAuditLogModel.changed_at >= date_from
+            )
+        if date_to is not None:
+            stmt = stmt.where(
+                SecurityTaxonomyAuditLogModel.changed_at <= date_to
+            )
+        stmt = stmt.order_by(
+            SecurityTaxonomyAuditLogModel.changed_at.desc()
+        ).limit(limit)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def is_outdated_vs_global(
         self, taxonomy: SecurityTaxonomyModel
     ) -> bool:

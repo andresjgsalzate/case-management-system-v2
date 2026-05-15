@@ -63,6 +63,75 @@ def _build_manager_actor():
     return actor
 
 
+def test_list_audit_log_filters_by_change_type():
+    """list_audit_log(change_type='updated') returns only updated entries."""
+    import uuid
+    from sqlalchemy import text
+
+    tuic = f"TEST-AUDIT-FILTER-{uuid.uuid4().hex[:8].upper()}"
+    holder: dict[str, str] = {}
+
+    async def _setup(session):
+        # Create + update + soft_delete → 3 audit entries (created, updated, soft_deleted)
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload, TaxonomyUpdatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        tax = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(tenant_id=None, tuic_code=tuic, name="audit-x"),
+        )
+        await session.commit()
+        await uc.update_taxonomy(
+            actor=actor, taxonomy_id=tax.id,
+            updates=TaxonomyUpdatePayload(name="audit-y"),
+        )
+        await session.commit()
+        await uc.soft_delete(actor=actor, taxonomy_id=tax.id, reason="cleanup test")
+        await session.commit()
+        holder["id"] = tax.id
+
+    async def _list_all(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        uc = SecurityTaxonomyUseCases(db=session)
+        entries = await uc.list_audit_log(taxonomy_id=holder["id"])
+        return [e.change_type for e in entries]
+
+    async def _list_filtered(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        uc = SecurityTaxonomyUseCases(db=session)
+        entries = await uc.list_audit_log(
+            taxonomy_id=holder["id"], change_type="updated",
+        )
+        return [e.change_type for e in entries]
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :c"
+        ), {"c": tuic})
+        await session.commit()
+
+    try:
+        _run_db_query(_setup)
+        all_types = _run_db_query(_list_all)
+        assert set(all_types) == {"created", "updated", "soft_deleted"}, (
+            f"Unexpected types: {all_types}"
+        )
+        filtered = _run_db_query(_list_filtered)
+        assert filtered == ["updated"], f"Expected only 'updated', got {filtered}"
+    finally:
+        _run_db_query(_cleanup)
+
+
 def test_add_notification_uniqueness():
     """Adding 2 notifications with same (taxonomy_id, team_id, notify_phase) → 2nd rejected."""
     import uuid
