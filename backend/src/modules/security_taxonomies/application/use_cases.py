@@ -53,6 +53,20 @@ _AUDITABLE_FIELDS: tuple[str, ...] = (
     "is_active",
 )
 
+# Fields copied from source to fork (or re-applied on refresh_from_global).
+# Excludes: id, tenant_id, tuic_code (immutable identity), audit fields,
+# fork-tracking fields (managed by fork/refresh itself).
+_CLONABLE_FIELDS: tuple[str, ...] = (
+    "name", "description", "parent_id",
+    "attack_type", "attack_subtype",
+    "internal_impact_context", "external_impact_context",
+    "managed_by_team_id",
+    "default_case_type", "requires_ticket",
+    "triage_mode", "delegated_workflow_id", "triage_timeout_seconds",
+    "tlp_default", "prioritization_formula_id", "mitre_techniques",
+    "is_active",
+)
+
 
 class SecurityTaxonomyUseCases:
     def __init__(self, db: AsyncSession):
@@ -289,6 +303,140 @@ class SecurityTaxonomyUseCases:
             field_changes={"is_active": {"from": True, "to": False}},
             reason=reason,
         )
+
+    # ── WRITE: fork / refresh ────────────────────────────────────────────
+
+    async def fork_to_tenant(
+        self, *, actor, global_taxonomy_id: str, target_tenant_id: str
+    ) -> SecurityTaxonomyModel:
+        """Clone a global taxonomy into a tenant-specific override.
+
+        Copies all _CLONABLE_FIELDS + N:M relations (notifications + catalog mappings),
+        sets forked_from_global_id and forked_from_global_at. Rejected if:
+          - source is not global (tenant_id IS NULL)
+          - target tenant already has an override for this tuic_code (or already
+            has a fork from this exact source)
+        """
+        from sqlalchemy import text as _text
+
+        source = await self.get_taxonomy_by_id(global_taxonomy_id)
+        if source is None:
+            raise NotFoundError(f"Taxonomy {global_taxonomy_id} not found")
+        if source.tenant_id is not None:
+            raise ValidationError("Only global taxonomies can be forked")
+
+        # Permission: forking creates a tenant-scoped row → 'create' perm
+        await self._require_write_permission(
+            actor=actor, target_tenant_id=target_tenant_id, action="create"
+        )
+
+        # Idempotency: reject if target tenant already has this tuic_code
+        if await self._tuic_code_exists(target_tenant_id, source.tuic_code):
+            raise ValidationError(
+                f"Tenant '{target_tenant_id}' already has an override for "
+                f"tuic_code '{source.tuic_code}'"
+            )
+
+        forked = SecurityTaxonomyModel(
+            id=str(uuid.uuid4()),
+            tenant_id=target_tenant_id,
+            tuic_code=source.tuic_code,
+            forked_from_global_id=source.id,
+            forked_from_global_at=datetime.now(timezone.utc),
+            created_by=actor.user_id,
+        )
+        for field in _CLONABLE_FIELDS:
+            setattr(forked, field, getattr(source, field))
+        self.db.add(forked)
+        await self.db.flush()
+
+        # Clone N:M children (notifications + catalog_mappings)
+        await self.db.execute(_text(
+            "INSERT INTO taxonomy_notifications "
+            "(id, taxonomy_id, team_id, notify_phase, notify_channel, escalation_minutes) "
+            "SELECT gen_random_uuid()::text, :forked_id, team_id, notify_phase, "
+            "       notify_channel, escalation_minutes "
+            "FROM taxonomy_notifications WHERE taxonomy_id = :src_id"
+        ), {"forked_id": forked.id, "src_id": source.id})
+        await self.db.execute(_text(
+            "INSERT INTO taxonomy_catalog_mappings "
+            "(id, taxonomy_id, service_catalog_item_id, is_default, priority_order) "
+            "SELECT gen_random_uuid()::text, :forked_id, service_catalog_item_id, "
+            "       is_default, priority_order "
+            "FROM taxonomy_catalog_mappings WHERE taxonomy_id = :src_id"
+        ), {"forked_id": forked.id, "src_id": source.id})
+
+        await self._log_audit(
+            taxonomy_id=forked.id,
+            changed_by=actor.user_id,
+            change_type="forked",
+            field_changes={"_forked_from": {"from": None, "to": source.id}},
+        )
+        return forked
+
+    async def refresh_from_global(
+        self, *, actor, taxonomy_id: str
+    ) -> SecurityTaxonomyModel:
+        """Re-sync a tenant fork with the current global state.
+
+        Overwrites _CLONABLE_FIELDS with the current values from
+        forked_from_global_id. Updates forked_from_global_at to mark a fresh sync.
+        Refresh of N:M children would require explicit semantics
+        (delete+reinsert vs merge) — deferred to a later sub-task.
+        """
+        forked = await self._load_for_update(taxonomy_id)
+        if forked is None:
+            raise NotFoundError(f"Taxonomy {taxonomy_id} not found")
+        if forked.tenant_id is None:
+            raise ValidationError("Cannot refresh — this is a global taxonomy")
+        if forked.forked_from_global_id is None:
+            raise ValidationError(
+                "Cannot refresh — taxonomy is not forked from a global parent"
+            )
+
+        await self._require_write_permission(
+            actor=actor, target_tenant_id=forked.tenant_id, action="update"
+        )
+
+        source = await self.get_taxonomy_by_id(forked.forked_from_global_id)
+        if source is None:
+            raise ValidationError(
+                "Global parent no longer exists; cannot refresh."
+            )
+
+        # Compute diff for audit; apply on fields that actually differ
+        changes: dict[str, dict] = {}
+        for field in _CLONABLE_FIELDS:
+            old_value = getattr(forked, field)
+            new_value = getattr(source, field)
+            if old_value != new_value:
+                changes[field] = {"from": old_value, "to": new_value}
+                setattr(forked, field, new_value)
+
+        forked.forked_from_global_at = datetime.now(timezone.utc)
+        forked.updated_at = datetime.now(timezone.utc)
+        forked.updated_by = actor.user_id
+
+        await self._log_audit(
+            taxonomy_id=forked.id,
+            changed_by=actor.user_id,
+            change_type="refreshed_from_global",
+            field_changes=changes,
+        )
+        return forked
+
+    async def is_outdated_vs_global(
+        self, taxonomy: SecurityTaxonomyModel
+    ) -> bool:
+        """True if this is a fork AND the global parent updated after the last sync."""
+        if taxonomy.forked_from_global_id is None:
+            return False
+        source = await self.get_taxonomy_by_id(taxonomy.forked_from_global_id)
+        if source is None:
+            return False
+        if taxonomy.forked_from_global_at is None:
+            return True
+        return source.updated_at > taxonomy.forked_from_global_at
 
     # ── Helpers ──────────────────────────────────────────────────────────
 

@@ -63,6 +63,396 @@ def _build_manager_actor():
     return actor
 
 
+def test_fork_creates_independent_copy_with_notifications_and_mappings():
+    """fork_to_tenant copies all fields + notifications + catalog mappings."""
+    import uuid
+    from sqlalchemy import text
+
+    src_code = f"TEST-FORK-SRC-{uuid.uuid4().hex[:8].upper()}"
+    target_tenant = "t-fork-target"
+    src_id_holder: dict[str, str] = {}
+
+    async def _setup(session):
+        # Need a global taxonomy + 1 notification + 1 catalog mapping
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        src = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(
+                tenant_id=None, tuic_code=src_code, name="src-global",
+                default_case_type="incident", requires_ticket=True, triage_mode="auto",
+                tlp_default="red", mitre_techniques=["T1486"],
+            ),
+        )
+        src_id_holder["id"] = src.id
+        # Add a notification (any global team OK)
+        team_row = (await session.execute(text(
+            "SELECT id FROM teams WHERE tenant_id IS NULL AND name = 'Incidentes - SOC' LIMIT 1"
+        ))).first()
+        if team_row:
+            await session.execute(text(
+                "INSERT INTO taxonomy_notifications "
+                "(id, taxonomy_id, team_id, notify_phase, notify_channel) "
+                "VALUES (:id, :tid, :team_id, 'created', 'email')"
+            ), {
+                "id": str(uuid.uuid4()), "tid": src.id, "team_id": team_row[0],
+            })
+        # Ensure a service_catalog_item exists; create one if needed
+        item_row = (await session.execute(text(
+            "SELECT id FROM service_catalog_items LIMIT 1"
+        ))).first()
+        if not item_row:
+            cat_id = str(uuid.uuid4())
+            item_id_local = str(uuid.uuid4())
+            await session.execute(text(
+                "INSERT INTO service_catalog_categories "
+                "(id, tenant_id, name, slug, is_active, sort_order, created_at, updated_at) "
+                "VALUES (:id, NULL, 'test-cat-fork', 'test-cat-fork', true, 0, NOW(), NOW())"
+            ), {"id": cat_id})
+            await session.execute(text(
+                "INSERT INTO service_catalog_items "
+                "(id, tenant_id, category_id, name, slug, default_level, is_active, "
+                " sort_order, created_at, updated_at) "
+                "VALUES (:id, NULL, :cid, 'test-item-fork', 'test-item-fork', 1, true, "
+                "        0, NOW(), NOW())"
+            ), {"id": item_id_local, "cid": cat_id})
+            item_id_for_mapping = item_id_local
+        else:
+            item_id_for_mapping = item_row[0]
+        await session.execute(text(
+            "INSERT INTO taxonomy_catalog_mappings "
+            "(id, taxonomy_id, service_catalog_item_id, is_default, priority_order) "
+            "VALUES (:id, :tid, :item, true, 0)"
+        ), {
+            "id": str(uuid.uuid4()), "tid": src.id, "item": item_id_for_mapping,
+        })
+        await session.commit()
+        return src.id
+
+    async def _fork(session, src_id):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        forked = await uc.fork_to_tenant(
+            actor=actor, global_taxonomy_id=src_id, target_tenant_id=target_tenant,
+        )
+        await session.commit()
+        # Count notifs and mappings on forked
+        notif_count = (await session.execute(text(
+            "SELECT COUNT(*) FROM taxonomy_notifications WHERE taxonomy_id = :id"
+        ), {"id": forked.id})).scalar()
+        map_count = (await session.execute(text(
+            "SELECT COUNT(*) FROM taxonomy_catalog_mappings WHERE taxonomy_id = :id"
+        ), {"id": forked.id})).scalar()
+        return (forked.id, forked.tenant_id, forked.tuic_code,
+                forked.forked_from_global_id, forked.forked_from_global_at,
+                notif_count, map_count)
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code"
+        ), {"code": src_code})
+        await session.commit()
+
+    try:
+        src_id = _run_db_query(_setup)
+        result = _run_db_query(lambda s: _fork(s, src_id))
+        forked_id, forked_tenant, code, src_link, forked_at, n_count, m_count = result
+        assert forked_id != src_id
+        assert forked_tenant == target_tenant
+        assert code == src_code
+        assert src_link == src_id
+        assert forked_at is not None
+        assert n_count == 1, f"Notifications not forked, got count={n_count}"
+        assert m_count == 1, f"Catalog mappings not forked, got count={m_count}"
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_fork_double_rejected():
+    """Forking twice for the same (tenant, source) → ValidationError."""
+    import uuid
+    from sqlalchemy import text
+    from backend.src.core.exceptions import ValidationError
+
+    src_code = f"TEST-FORK-DUP-{uuid.uuid4().hex[:8].upper()}"
+    target_tenant = "t-fork-dup"
+
+    async def _setup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        src = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(
+                tenant_id=None, tuic_code=src_code, name="src",
+                default_case_type="event",
+            ),
+        )
+        await session.commit()
+        await uc.fork_to_tenant(
+            actor=actor, global_taxonomy_id=src.id, target_tenant_id=target_tenant,
+        )
+        await session.commit()
+        return src.id
+
+    async def _double_fork(session, src_id):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        try:
+            await uc.fork_to_tenant(
+                actor=actor, global_taxonomy_id=src_id, target_tenant_id=target_tenant,
+            )
+            return False
+        except ValidationError:
+            return True
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code"
+        ), {"code": src_code})
+        await session.commit()
+
+    try:
+        src_id = _run_db_query(_setup)
+        assert _run_db_query(lambda s: _double_fork(s, src_id)) is True
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_fork_only_from_global_rejects_tenant_source():
+    """Cannot fork a tenant taxonomy — must be global."""
+    import uuid
+    from sqlalchemy import text
+    from backend.src.core.exceptions import ValidationError
+
+    tuic = f"TEST-NOT-GLOBAL-{uuid.uuid4().hex[:8].upper()}"
+    src_id_holder: dict[str, str] = {}
+
+    async def _setup(session):
+        # Create a tenant-only taxonomy (not global)
+        user_row = (await session.execute(text(
+            "SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id "
+            "WHERE r.name IN ('Super Admin', 'Admin') AND r.tenant_id IS NULL LIMIT 1"
+        ))).first()
+        tax_id = str(uuid.uuid4())
+        await session.execute(text(
+            "INSERT INTO security_taxonomies "
+            "(id, tenant_id, tuic_code, name, default_case_type, requires_ticket, "
+            " triage_mode, triage_timeout_seconds, tlp_default, mitre_techniques, "
+            " is_active, created_at, updated_at, created_by) "
+            "VALUES (:id, 't-source', :code, 'tenant-src', 'event', false, 'auto', "
+            "        300, 'amber', CAST('[]' AS json), true, NOW(), NOW(), :uid)"
+        ), {"id": tax_id, "code": tuic, "uid": user_row[0]})
+        await session.commit()
+        src_id_holder["id"] = tax_id
+
+    async def _try_fork(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        try:
+            await uc.fork_to_tenant(
+                actor=actor,
+                global_taxonomy_id=src_id_holder["id"],
+                target_tenant_id="t-other",
+            )
+            return False
+        except ValidationError:
+            return True
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code"
+        ), {"code": tuic})
+        await session.commit()
+
+    try:
+        _run_db_query(_setup)
+        assert _run_db_query(_try_fork) is True
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_refresh_from_global_overwrites_with_audit():
+    """refresh_from_global re-syncs fork with current global state + writes audit."""
+    import uuid
+    from sqlalchemy import text
+
+    src_code = f"TEST-REFRESH-{uuid.uuid4().hex[:8].upper()}"
+    target_tenant = "t-refresh"
+    forked_id_holder: dict[str, str] = {}
+
+    async def _setup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload, TaxonomyUpdatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        # Create global with name 'original'
+        src = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(
+                tenant_id=None, tuic_code=src_code, name="original",
+            ),
+        )
+        await session.commit()
+        forked = await uc.fork_to_tenant(
+            actor=actor, global_taxonomy_id=src.id, target_tenant_id=target_tenant,
+        )
+        await session.commit()
+        # Now modify the tenant fork in-place (simulating user customization)
+        await uc.update_taxonomy(
+            actor=actor, taxonomy_id=forked.id,
+            updates=TaxonomyUpdatePayload(name="tenant-modified"),
+        )
+        await session.commit()
+        # Then change the global
+        await uc.update_taxonomy(
+            actor=actor, taxonomy_id=src.id,
+            updates=TaxonomyUpdatePayload(name="updated-global"),
+        )
+        await session.commit()
+        forked_id_holder["id"] = forked.id
+
+    async def _refresh(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        forked = await uc.refresh_from_global(
+            actor=actor, taxonomy_id=forked_id_holder["id"],
+        )
+        await session.commit()
+        audits = (await session.execute(text(
+            "SELECT change_type FROM security_taxonomies_audit_log "
+            "WHERE taxonomy_id = :id ORDER BY changed_at"
+        ), {"id": forked.id})).all()
+        types = [r[0] for r in audits]
+        return forked.name, types
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code"
+        ), {"code": src_code})
+        await session.commit()
+
+    try:
+        _run_db_query(_setup)
+        name, audit_types = _run_db_query(_refresh)
+        assert name == "updated-global", f"Expected refreshed name, got '{name}'"
+        assert "refreshed_from_global" in audit_types
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_is_outdated_vs_global_returns_true_after_global_edit():
+    """is_outdated_vs_global flips to True when global is updated after fork."""
+    import uuid
+    import time
+    from sqlalchemy import text
+
+    src_code = f"TEST-DRIFT-{uuid.uuid4().hex[:8].upper()}"
+    target_tenant = "t-drift"
+    forked_id_holder: dict[str, str] = {}
+    src_id_holder: dict[str, str] = {}
+
+    async def _setup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload, TaxonomyUpdatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        src = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(
+                tenant_id=None, tuic_code=src_code, name="drift-src",
+            ),
+        )
+        await session.commit()
+        forked = await uc.fork_to_tenant(
+            actor=actor, global_taxonomy_id=src.id, target_tenant_id=target_tenant,
+        )
+        await session.commit()
+        src_id_holder["id"] = src.id
+        forked_id_holder["id"] = forked.id
+
+    async def _check_not_outdated(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        uc = SecurityTaxonomyUseCases(db=session)
+        forked = await uc.get_taxonomy_by_id(forked_id_holder["id"])
+        return await uc.is_outdated_vs_global(forked)
+
+    async def _edit_global_and_recheck(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyUpdatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        await uc.update_taxonomy(
+            actor=actor, taxonomy_id=src_id_holder["id"],
+            updates=TaxonomyUpdatePayload(name="new-global-name"),
+        )
+        await session.commit()
+        forked = await uc.get_taxonomy_by_id(forked_id_holder["id"])
+        return await uc.is_outdated_vs_global(forked)
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :code"
+        ), {"code": src_code})
+        await session.commit()
+
+    try:
+        _run_db_query(_setup)
+        # Need a tiny pause so updated_at can differ
+        time.sleep(0.05)
+        assert _run_db_query(_check_not_outdated) is False
+        time.sleep(0.05)
+        assert _run_db_query(_edit_global_and_recheck) is True
+    finally:
+        _run_db_query(_cleanup)
+
+
 def test_create_taxonomy_global_emits_audit():
     """Platform admin creates global taxonomy → row + audit log entry."""
     import uuid
