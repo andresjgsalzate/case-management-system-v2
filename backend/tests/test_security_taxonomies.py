@@ -63,6 +63,170 @@ def _build_manager_actor():
     return actor
 
 
+def test_add_notification_uniqueness():
+    """Adding 2 notifications with same (taxonomy_id, team_id, notify_phase) → 2nd rejected."""
+    import uuid
+    from sqlalchemy import text
+    from backend.src.core.exceptions import ValidationError
+
+    tuic = f"TEST-NOTIF-UNIQ-{uuid.uuid4().hex[:8].upper()}"
+    holder: dict[str, str] = {}
+
+    async def _setup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload, NotificationCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        tax = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(tenant_id=None, tuic_code=tuic, name="x"),
+        )
+        await session.commit()
+        team_row = (await session.execute(text(
+            "SELECT id FROM teams WHERE tenant_id IS NULL AND name = 'Incidentes - SOC' LIMIT 1"
+        ))).first()
+        team_id = team_row[0]
+        await uc.add_notification(
+            actor=actor, taxonomy_id=tax.id,
+            payload=NotificationCreatePayload(
+                team_id=team_id, notify_phase="created", notify_channel="email",
+            ),
+        )
+        await session.commit()
+        holder["tax_id"] = tax.id
+        holder["team_id"] = team_id
+
+    async def _try_dup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            NotificationCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        try:
+            await uc.add_notification(
+                actor=actor, taxonomy_id=holder["tax_id"],
+                payload=NotificationCreatePayload(
+                    team_id=holder["team_id"], notify_phase="created", notify_channel="email",
+                ),
+            )
+            return False
+        except ValidationError:
+            return True
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :c"
+        ), {"c": tuic})
+        await session.commit()
+
+    try:
+        _run_db_query(_setup)
+        assert _run_db_query(_try_dup) is True
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_set_default_catalog_mapping_unsets_previous():
+    """Setting one mapping as default unsets any previous default for that taxonomy."""
+    import uuid
+    from sqlalchemy import text
+
+    tuic = f"TEST-MAP-DEF-{uuid.uuid4().hex[:8].upper()}"
+    holder: dict[str, str] = {}
+
+    async def _setup(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from backend.src.modules.security_taxonomies.application.dtos import (
+            TaxonomyCreatePayload, CatalogMappingCreatePayload,
+        )
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        tax = await uc.create_taxonomy(
+            actor=actor,
+            payload=TaxonomyCreatePayload(tenant_id=None, tuic_code=tuic, name="x"),
+        )
+        await session.commit()
+        # Need 2 service_catalog_items
+        cat_id = str(uuid.uuid4())
+        item_a = str(uuid.uuid4())
+        item_b = str(uuid.uuid4())
+        await session.execute(text(
+            "INSERT INTO service_catalog_categories "
+            "(id, tenant_id, name, slug, is_active, sort_order, created_at, updated_at) "
+            "VALUES (:id, NULL, 'tc-mapdef', 'tc-mapdef', true, 0, NOW(), NOW())"
+        ), {"id": cat_id})
+        for iid, iname in [(item_a, "ti-a"), (item_b, "ti-b")]:
+            await session.execute(text(
+                "INSERT INTO service_catalog_items "
+                "(id, tenant_id, category_id, name, slug, default_level, is_active, "
+                " sort_order, created_at, updated_at) "
+                "VALUES (:id, NULL, :cid, :n, :n, 1, true, 0, NOW(), NOW())"
+            ), {"id": iid, "cid": cat_id, "n": iname})
+        await session.commit()
+        # First mapping → is_default=True
+        m1 = await uc.add_catalog_mapping(
+            actor=actor, taxonomy_id=tax.id,
+            payload=CatalogMappingCreatePayload(
+                service_catalog_item_id=item_a, is_default=True, priority_order=0,
+            ),
+        )
+        await session.commit()
+        # Second mapping → is_default=False initially
+        m2 = await uc.add_catalog_mapping(
+            actor=actor, taxonomy_id=tax.id,
+            payload=CatalogMappingCreatePayload(
+                service_catalog_item_id=item_b, is_default=False, priority_order=1,
+            ),
+        )
+        await session.commit()
+        holder["tax_id"] = tax.id
+        holder["m1"] = m1.id
+        holder["m2"] = m2.id
+
+    async def _promote(session):
+        from backend.src.modules.security_taxonomies.application.use_cases import (
+            SecurityTaxonomyUseCases,
+        )
+        from sqlalchemy import text
+        actor = _build_admin_actor()
+        actor._role_id = await _actor_role_id(session, actor)
+        uc = SecurityTaxonomyUseCases(db=session)
+        await uc.set_default_catalog_mapping(actor=actor, mapping_id=holder["m2"])
+        await session.commit()
+        # Verify exactly 1 default and it's m2
+        rows = (await session.execute(text(
+            "SELECT id, is_default FROM taxonomy_catalog_mappings "
+            "WHERE taxonomy_id = :tid ORDER BY priority_order"
+        ), {"tid": holder["tax_id"]})).all()
+        return {r[0]: r[1] for r in rows}
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE tuic_code = :c"
+        ), {"c": tuic})
+        await session.commit()
+
+    try:
+        _run_db_query(_setup)
+        defaults = _run_db_query(_promote)
+        assert defaults[holder["m1"]] is False, "Previous default not unset"
+        assert defaults[holder["m2"]] is True, "New default not set"
+    finally:
+        _run_db_query(_cleanup)
+
+
 def test_fork_creates_independent_copy_with_notifications_and_mappings():
     """fork_to_tenant copies all fields + notifications + catalog mappings."""
     import uuid

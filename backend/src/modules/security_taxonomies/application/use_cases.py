@@ -32,12 +32,16 @@ from backend.src.core.exceptions import (
 )
 from backend.src.core.middleware.permission_checker import has_permission
 from backend.src.modules.security_taxonomies.application.dtos import (
+    CatalogMappingCreatePayload,
+    NotificationCreatePayload,
     TaxonomyCreatePayload,
     TaxonomyUpdatePayload,
 )
 from backend.src.modules.security_taxonomies.infrastructure.models import (
     SecurityTaxonomyAuditLogModel,
     SecurityTaxonomyModel,
+    TaxonomyCatalogMappingModel,
+    TaxonomyNotificationModel,
 )
 
 
@@ -437,6 +441,149 @@ class SecurityTaxonomyUseCases:
         if taxonomy.forked_from_global_at is None:
             return True
         return source.updated_at > taxonomy.forked_from_global_at
+
+    # ── WRITE: notifications + catalog mappings sub-ops ──────────────────
+
+    async def add_notification(
+        self, *, actor, taxonomy_id: str, payload: NotificationCreatePayload
+    ) -> TaxonomyNotificationModel:
+        taxonomy = await self._load_for_update(taxonomy_id)
+        if taxonomy is None:
+            raise NotFoundError(f"Taxonomy {taxonomy_id} not found")
+        await self._require_write_permission(
+            actor=actor, target_tenant_id=taxonomy.tenant_id, action="update"
+        )
+        # Uniqueness check (also enforced by DB constraint, but raise
+        # ValidationError instead of IntegrityError for cleaner API).
+        existing = (await self.db.execute(
+            select(TaxonomyNotificationModel.id).where(
+                TaxonomyNotificationModel.taxonomy_id == taxonomy_id,
+                TaxonomyNotificationModel.team_id == payload.team_id,
+                TaxonomyNotificationModel.notify_phase == payload.notify_phase,
+            )
+        )).scalar_one_or_none()
+        if existing:
+            raise ValidationError(
+                f"Notification already exists for taxonomy {taxonomy_id}, "
+                f"team {payload.team_id}, phase '{payload.notify_phase}'"
+            )
+        notif = TaxonomyNotificationModel(
+            id=str(uuid.uuid4()),
+            taxonomy_id=taxonomy_id,
+            team_id=payload.team_id,
+            notify_phase=payload.notify_phase,
+            notify_channel=payload.notify_channel,
+            escalation_minutes=payload.escalation_minutes,
+        )
+        self.db.add(notif)
+        await self.db.flush()
+        return notif
+
+    async def remove_notification(
+        self, *, actor, notification_id: str
+    ) -> None:
+        notif = await self.db.get(TaxonomyNotificationModel, notification_id)
+        if notif is None:
+            raise NotFoundError(f"Notification {notification_id} not found")
+        taxonomy = await self.get_taxonomy_by_id(notif.taxonomy_id)
+        if taxonomy is None:
+            # Defensive: should never happen due to FK, but guard anyway.
+            raise NotFoundError("Parent taxonomy not found")
+        await self._require_write_permission(
+            actor=actor, target_tenant_id=taxonomy.tenant_id, action="update"
+        )
+        await self.db.delete(notif)
+        await self.db.flush()
+
+    async def add_catalog_mapping(
+        self, *, actor, taxonomy_id: str, payload: CatalogMappingCreatePayload
+    ) -> TaxonomyCatalogMappingModel:
+        taxonomy = await self._load_for_update(taxonomy_id)
+        if taxonomy is None:
+            raise NotFoundError(f"Taxonomy {taxonomy_id} not found")
+        await self._require_write_permission(
+            actor=actor, target_tenant_id=taxonomy.tenant_id, action="update"
+        )
+        existing = (await self.db.execute(
+            select(TaxonomyCatalogMappingModel.id).where(
+                TaxonomyCatalogMappingModel.taxonomy_id == taxonomy_id,
+                TaxonomyCatalogMappingModel.service_catalog_item_id
+                == payload.service_catalog_item_id,
+            )
+        )).scalar_one_or_none()
+        if existing:
+            raise ValidationError(
+                f"Mapping already exists for taxonomy {taxonomy_id} and "
+                f"service item {payload.service_catalog_item_id}"
+            )
+        # If marking as default, unset any previous default for this taxonomy
+        if payload.is_default:
+            await self._unset_default_mappings(taxonomy_id, exclude_mapping_id=None)
+        mapping = TaxonomyCatalogMappingModel(
+            id=str(uuid.uuid4()),
+            taxonomy_id=taxonomy_id,
+            service_catalog_item_id=payload.service_catalog_item_id,
+            is_default=payload.is_default,
+            priority_order=payload.priority_order,
+        )
+        self.db.add(mapping)
+        await self.db.flush()
+        return mapping
+
+    async def set_default_catalog_mapping(
+        self, *, actor, mapping_id: str
+    ) -> TaxonomyCatalogMappingModel:
+        mapping = await self.db.get(TaxonomyCatalogMappingModel, mapping_id)
+        if mapping is None:
+            raise NotFoundError(f"Mapping {mapping_id} not found")
+        taxonomy = await self._load_for_update(mapping.taxonomy_id)
+        if taxonomy is None:
+            raise NotFoundError("Parent taxonomy not found")
+        await self._require_write_permission(
+            actor=actor, target_tenant_id=taxonomy.tenant_id, action="update"
+        )
+        # Atomic: unset others, set this one — DB partial unique index on
+        # (taxonomy_id WHERE is_default=true) enforces invariant, but unset
+        # FIRST to avoid transient violation during UPDATE.
+        await self._unset_default_mappings(
+            mapping.taxonomy_id, exclude_mapping_id=mapping_id,
+        )
+        mapping.is_default = True
+        await self.db.flush()
+        return mapping
+
+    async def remove_catalog_mapping(
+        self, *, actor, mapping_id: str
+    ) -> None:
+        mapping = await self.db.get(TaxonomyCatalogMappingModel, mapping_id)
+        if mapping is None:
+            raise NotFoundError(f"Mapping {mapping_id} not found")
+        taxonomy = await self.get_taxonomy_by_id(mapping.taxonomy_id)
+        if taxonomy is None:
+            raise NotFoundError("Parent taxonomy not found")
+        await self._require_write_permission(
+            actor=actor, target_tenant_id=taxonomy.tenant_id, action="update"
+        )
+        await self.db.delete(mapping)
+        await self.db.flush()
+
+    async def _unset_default_mappings(
+        self, taxonomy_id: str, *, exclude_mapping_id: str | None
+    ) -> None:
+        from sqlalchemy import update as _update
+        stmt = (
+            _update(TaxonomyCatalogMappingModel)
+            .where(
+                TaxonomyCatalogMappingModel.taxonomy_id == taxonomy_id,
+                TaxonomyCatalogMappingModel.is_default.is_(True),
+            )
+            .values(is_default=False)
+        )
+        if exclude_mapping_id is not None:
+            stmt = stmt.where(
+                TaxonomyCatalogMappingModel.id != exclude_mapping_id
+            )
+        await self.db.execute(stmt)
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
