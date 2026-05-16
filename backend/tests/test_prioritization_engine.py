@@ -24,6 +24,59 @@ def _run_db_query(async_query):
     return asyncio.run(_go())
 
 
+def _compute_with_inputs(values_by_code: dict[str, int | None], weights: dict[str, float]):
+    """Helper for missing-strategy unit tests: simulate a formula evaluation
+    using PrioritizationUseCases' internal weighted_sum logic.
+
+    Returns (weighted_sum, skipped_codes, kept_codes_with_normalized_weights).
+    """
+    from decimal import Decimal
+
+    kept: list[tuple[str, Decimal, int]] = []
+    skipped: list[str] = []
+    for code, value in values_by_code.items():
+        if value is None:
+            skipped.append(code)
+            continue
+        kept.append((code, Decimal(str(weights[code])), value))
+
+    if not kept:
+        return None, skipped, []
+
+    total_weight = sum(w for _, w, _ in kept)
+    normalized = [(c, w / total_weight, v) for c, w, v in kept]
+    weighted_sum = sum(Decimal(v) * w for _, w, v in normalized)
+    return weighted_sum, skipped, normalized
+
+
+def test_skip_strategy_renormalizes_remaining_weights():
+    """When asset_criticality (weight=0.2) is skipped, severity (0.5) and impact (0.3)
+    renormalize to 0.625 and 0.375 — so 5 * 0.625 + 3 * 0.375 = 4.25, not 5*0.5+3*0.3=3.4."""
+    from decimal import Decimal
+
+    weighted_sum, skipped, normalized = _compute_with_inputs(
+        values_by_code={"severity": 5, "impact": 3, "asset_criticality": None},
+        weights={"severity": 0.5, "impact": 0.3, "asset_criticality": 0.2},
+    )
+    assert skipped == ["asset_criticality"]
+    # Normalized weights should sum to 1
+    total = sum(w for _, w, _ in normalized)
+    assert abs(float(total) - 1.0) < 0.001, f"normalized total = {total}"
+    # weighted_sum: 5*(0.5/0.8) + 3*(0.3/0.8) = 3.125 + 1.125 = 4.25
+    assert abs(float(weighted_sum) - 4.25) < 0.01, f"got {weighted_sum}"
+
+
+def test_all_skipped_returns_none():
+    """When every criterion is skipped, helper returns None (caller raises)."""
+    weighted_sum, skipped, kept = _compute_with_inputs(
+        values_by_code={"a": None, "b": None},
+        weights={"a": 0.5, "b": 0.5},
+    )
+    assert weighted_sum is None
+    assert set(skipped) == {"a", "b"}
+    assert kept == []
+
+
 def _make_test_case(session, *, case_number_suffix: str, taxonomy_tuic: str | None = None):
     """Helper: insert a minimal case row + return its id.
 
@@ -128,6 +181,62 @@ def test_calculate_priority_persists_calculation_and_updates_case():
         # (soc-default uses severity, impact, asset_criticality)
         assert "severity" in inputs or "impact" in inputs, (
             f"Expected criteria in inputs, got keys: {list(inputs.keys())}"
+        )
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_calculate_priority_renormalizes_when_criterion_skipped():
+    """soc-default has 3 criteria; asset_criticality always skips (no asset).
+    With renormalize, severity (default=3) and impact (default=3) carry full
+    weight: 3*(0.5/0.8) + 3*(0.3/0.8) = 3.0 — NOT 3*0.5+3*0.3=2.4."""
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    suffix = _uuid.uuid4().hex[:8].upper()
+
+    async def _setup(session):
+        make = _make_test_case(session, case_number_suffix=suffix,
+                               taxonomy_tuic="RANSOM-LOCKBIT")
+        return await make()
+
+    async def _calc(session, case_id):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        uc = PrioritizationUseCases(db=session)
+        calc = await uc.calculate_priority(
+            case_id=case_id, triggered_by="manual_recalculation",
+        )
+        await session.commit()
+        return float(calc.weighted_sum), dict(calc.inputs)
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM case_priority_calculations "
+            "WHERE case_id IN (SELECT id FROM cases WHERE case_number = :n)"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.execute(text(
+            "DELETE FROM cases WHERE case_number = :n"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.commit()
+
+    try:
+        case_id, _tax = _run_db_query(_setup)
+        weighted, inputs = _run_db_query(lambda s: _calc(s, case_id))
+        # Without renormalize: 1.5 + 0.9 = 2.4 (asset dropped silently)
+        # With renormalize:    3.0 (severity+impact carry full normalized weight)
+        assert abs(weighted - 3.0) < 0.05, (
+            f"Expected ~3.0 (renormalized), got {weighted}. "
+            f"Likely skip is dropping without renormalize."
+        )
+        # asset_criticality should be marked skipped
+        assert inputs.get("asset_criticality", {}).get("skipped") is True, (
+            f"asset_criticality should be skipped, got {inputs.get('asset_criticality')}"
+        )
+        # severity & impact should have weight_normalized field populated
+        assert "weight_normalized" in inputs.get("severity", {}), (
+            "severity should have weight_normalized after Task 6"
         )
     finally:
         _run_db_query(_cleanup)

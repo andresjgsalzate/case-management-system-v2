@@ -204,11 +204,12 @@ class PrioritizationUseCases:
         )
         rows = (await self.db.execute(fc_stmt)).all()
 
+        # Pass 1: resolve every criterion and apply missing-data strategy.
+        # Defer weight aggregation to Pass 2 so we can renormalize after any skip.
         inputs: dict[str, dict] = {}
-        weighted_sum = Decimal("0")
+        kept: list[tuple[str, Decimal, int]] = []  # (code, raw_weight, value)
         for fc, criterion in rows:
             value, label, source = await self._resolve_criterion_value(case, criterion)
-
             entry: dict = {
                 "value": value, "label": label,
                 "weight": float(fc.weight),
@@ -228,14 +229,27 @@ class PrioritizationUseCases:
                         criterion.id, value,
                     ) if value is not None else None
                     entry["source"] = f"default({source})"
-                else:  # 'skip'
+                else:  # 'skip' — drop and renormalize at end
                     entry["skipped"] = True
                     entry["reason"] = source
                     inputs[criterion.code] = entry
                     continue
 
             inputs[criterion.code] = entry
-            weighted_sum += Decimal(str(value)) * fc.weight
+            kept.append((criterion.code, fc.weight, value))
+
+        if not kept:
+            raise ValidationError(
+                "Cannot calculate priority — all criteria are missing/skipped"
+            )
+
+        # Pass 2: renormalize remaining weights to sum 1.00, then compute weighted_sum.
+        total_weight = sum(w for _, w, _ in kept)
+        weighted_sum = Decimal("0")
+        for code, raw_w, value in kept:
+            normalized = raw_w / total_weight
+            inputs[code]["weight_normalized"] = float(normalized)
+            weighted_sum += Decimal(str(value)) * normalized
 
         # Find threshold matching weighted_sum
         priority = await self._find_priority_by_threshold(formula.id, weighted_sum)
