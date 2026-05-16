@@ -392,6 +392,206 @@ def test_trigger_workflow_n8n_unreachable_marks_failed():
     assert "ConnectError" in row[1]
 
 
+# ── Task 5: Callback dispatcher ────────────────────────────────────────
+
+
+async def _seed_playbook_run(session, case_id, tenant_id):
+    """Insert a triggered playbook_run row and return its id."""
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    run_id = str(_uuid.uuid4())
+    await session.execute(_t(
+        "INSERT INTO playbook_runs "
+        "(id, tenant_id, case_id, workflow_url, triggered_at, triggered_by, "
+        "status, callback_count, trigger_payload) "
+        "VALUES (:id, :tid, :cid, 'https://n8n.test/wf', NOW(), 'manual', "
+        "'triggered', 0, CAST('{}' AS json))"
+    ), {"id": run_id, "tid": tenant_id, "cid": case_id})
+    await session.commit()
+    return run_id
+
+
+def _hmac_header(body, secret):
+    import hashlib
+    import hmac as _hmac
+    return "sha256=" + _hmac.new(
+        secret.encode(), body, hashlib.sha256,
+    ).hexdigest()
+
+
+def test_callback_unknown_playbook_run_raises_not_found():
+    """playbook_run_id that doesn't exist → NotFoundError."""
+    import asyncio as _aio
+    from backend.src.core.exceptions import NotFoundError
+    from backend.src.modules.n8n_bridge.application.use_cases import (
+        N8nBridgeUseCases,
+    )
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                uc = N8nBridgeUseCases(db=session)
+                with pytest.raises(NotFoundError):
+                    await uc.handle_callback(
+                        action="add_note", payload={},
+                        playbook_run_id="00000000-0000-0000-0000-000000000000",
+                        request_body=b'{}', request_headers={},
+                    )
+        finally:
+            await engine.dispose()
+
+    _aio.run(_go())
+
+
+def test_callback_hmac_validation_rejects_wrong_signature():
+    """Invalid HMAC header → UnauthorizedError + no state change."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    from backend.src.core.exceptions import UnauthorizedError
+    from backend.src.modules.n8n_bridge.application.use_cases import (
+        N8nBridgeUseCases,
+    )
+
+    tenant_id = f"t-cb-bad-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "real-secret")
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                uc = N8nBridgeUseCases(db=session)
+                with pytest.raises(UnauthorizedError):
+                    await uc.handle_callback(
+                        action="add_note", payload={"text": "x"},
+                        playbook_run_id=run_id,
+                        request_body=b'{"action":"add_note"}',
+                        request_headers={
+                            "x-cms-signature": "sha256=DEADBEEF",
+                        },
+                    )
+                # Run state must NOT have advanced
+                row = (await session.execute(_t(
+                    "SELECT callback_count, status FROM playbook_runs "
+                    "WHERE id = :id"
+                ), {"id": run_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return row
+        finally:
+            await engine.dispose()
+
+    row = _aio.run(_go())
+    assert row[0] == 0
+    assert row[1] == "triggered"
+
+
+def test_callback_unknown_action_logged_and_400():
+    """Unknown action → ValidationError + callback row recorded with success=False."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.n8n_bridge.application.use_cases import (
+        N8nBridgeUseCases,
+    )
+
+    tenant_id = f"t-cb-bad-action-{_uuid.uuid4().hex[:8]}"
+    secret = "unknown-action-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                body = b'{"action":"wat"}'
+                headers = {"x-cms-signature": _hmac_header(body, secret)}
+
+                uc = N8nBridgeUseCases(db=session)
+                with pytest.raises(ValidationError):
+                    await uc.handle_callback(
+                        action="wat", payload={"action": "wat"},
+                        playbook_run_id=run_id,
+                        request_body=body, request_headers=headers,
+                    )
+                cb_row = (await session.execute(_t(
+                    "SELECT action, success, error FROM playbook_run_callbacks "
+                    "WHERE playbook_run_id = :id"
+                ), {"id": run_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return cb_row
+        finally:
+            await engine.dispose()
+
+    cb = _aio.run(_go())
+    assert cb[0] == "wat"
+    assert cb[1] is False
+    assert "unknown action" in (cb[2] or "").lower()
+
+
+def test_callback_valid_transitions_triggered_to_running():
+    """First valid callback transitions status triggered → running."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    from backend.src.modules.n8n_bridge.application.use_cases import (
+        N8nBridgeUseCases,
+    )
+
+    tenant_id = f"t-cb-ok-{_uuid.uuid4().hex[:8]}"
+    secret = "ok-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                body = b'{"action":"add_note","text":"hello"}'
+                headers = {"x-cms-signature": _hmac_header(body, secret)}
+
+                uc = N8nBridgeUseCases(db=session)
+                response = await uc.handle_callback(
+                    action="add_note", payload={"text": "hello"},
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                row = (await session.execute(_t(
+                    "SELECT status, callback_count, last_callback_at "
+                    "FROM playbook_runs WHERE id = :id"
+                ), {"id": run_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, row
+        finally:
+            await engine.dispose()
+
+    response, row = _aio.run(_go())
+    assert response.get("ok") is True
+    assert row[0] == "running"
+    assert row[1] == 1
+    assert row[2] is not None
+
+
 def test_models_import_smoke():
     """All 3 n8n_bridge models import without errors."""
     from backend.src.modules.n8n_bridge.infrastructure.models import (

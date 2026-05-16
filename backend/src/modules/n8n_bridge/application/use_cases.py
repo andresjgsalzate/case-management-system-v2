@@ -6,13 +6,19 @@ flow land in Tasks 5-12.
 import hashlib
 import hmac
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.src.core.exceptions import BusinessRuleError, NotFoundError
+from backend.src.core.exceptions import (
+    BusinessRuleError,
+    NotFoundError,
+    UnauthorizedError,
+    ValidationError,
+)
 from backend.src.modules.cases.infrastructure.models import CaseModel
 from backend.src.modules.integrations.application.crypto import decrypt_secret
 from backend.src.modules.integrations.infrastructure.models import (
@@ -20,8 +26,10 @@ from backend.src.modules.integrations.infrastructure.models import (
 )
 from backend.src.modules.n8n_bridge.application.jwt_helper import (
     issue_callback_jwt,
+    validate_callback_jwt,
 )
 from backend.src.modules.n8n_bridge.infrastructure.models import (
+    PlaybookRunCallbackModel,
     PlaybookRunModel,
 )
 
@@ -117,6 +125,145 @@ class N8nBridgeUseCases:
         await self.db.commit()
         await self.db.refresh(run)
         return run
+
+    # ── handle_callback (Task 5) ─────────────────────────────────────
+
+    async def handle_callback(
+        self,
+        *,
+        action: str,
+        payload: dict,
+        playbook_run_id: str,
+        request_body: bytes,
+        request_headers: dict,
+    ) -> dict:
+        """Inbound dispatcher for n8n → CMS callbacks.
+
+        Auth: HMAC of body verified with tenant's n8n source secret; if
+        x-cms-callback-jwt header present, also validates the JWT against
+        the run's case_id. Returns the handler's response dict.
+
+        Action stubs return {"ok": True, "todo": "<task>"} until Task 6-9
+        replace them with real handlers.
+        """
+        run = await self._load_playbook_run_for_update(playbook_run_id)
+        if run is None:
+            raise NotFoundError(
+                f"playbook_run {playbook_run_id} not found",
+            )
+        case = await self._load_case(run.case_id)
+
+        # HMAC verification with the tenant's n8n source secret
+        source = await self._get_n8n_source(case.tenant_id)
+        secret = decrypt_secret(source.auth_secret_encrypted)
+        self._validate_hmac(secret, request_body, request_headers)
+
+        # Optional second factor: JWT bound to case_id
+        jwt_header = request_headers.get("x-cms-callback-jwt")
+        if jwt_header:
+            validate_callback_jwt(jwt_header, expected_case_id=case.id)
+
+        # State transitions on every callback
+        run.last_callback_at = datetime.now(timezone.utc)
+        run.callback_count += 1
+        if run.status == "triggered":
+            run.status = "running"
+
+        handler = self._action_handlers().get(action)
+        if handler is None:
+            await self._log_callback(
+                run.id, action, payload,
+                success=False, error="unknown action",
+            )
+            await self.db.commit()
+            raise ValidationError(f"Unknown callback action: {action}")
+
+        try:
+            response = await handler(case=case, run=run, payload=payload)
+            await self._log_callback(
+                run.id, action, payload,
+                success=True, response=response,
+            )
+            await self.db.commit()
+            return response
+        except Exception as e:
+            await self._log_callback(
+                run.id, action, payload,
+                success=False, error=f"{type(e).__name__}: {str(e)[:500]}",
+            )
+            await self.db.commit()
+            raise
+
+    def _action_handlers(self):
+        """Map action name → handler. Task 6-9 will replace stubs."""
+        return {
+            "update_case_field": self._stub_action,
+            "update_priority": self._stub_action,
+            "update_taxonomy": self._stub_action,
+            "add_note": self._stub_action,
+            "request_approval": self._stub_action,
+            "record_decision": self._stub_action,
+            "attach_artifact": self._stub_action,
+            "set_pending_triage_complete": self._stub_action,
+        }
+
+    async def _stub_action(self, *, case, run, payload) -> dict:
+        """Placeholder for action handlers — Task 6-9 replace these."""
+        return {"ok": True, "todo": "real handler lands in Task 6-9"}
+
+    # ── Auth + persistence helpers ───────────────────────────────────
+
+    def _validate_hmac(
+        self, secret: str, request_body: bytes, request_headers: dict,
+    ) -> None:
+        """Case-insensitive header lookup; mirrors Sub-spec 04 auth.validate_auth."""
+        provided = (
+            request_headers.get("x-cms-signature")
+            or request_headers.get("X-CMS-Signature")
+        )
+        if not provided:
+            raise UnauthorizedError("Missing X-CMS-Signature header")
+        if not provided.startswith("sha256="):
+            raise UnauthorizedError("HMAC signature format invalid")
+        expected_hex = provided[len("sha256="):]
+        computed = hmac.new(
+            secret.encode("utf-8"), request_body, hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(computed, expected_hex):
+            raise UnauthorizedError("HMAC signature mismatch")
+
+    async def _load_playbook_run_for_update(
+        self, run_id: str,
+    ) -> PlaybookRunModel | None:
+        """SELECT FOR UPDATE so concurrent callbacks for the same run serialize
+        cleanly (callback_count increments atomically)."""
+        stmt = (
+            select(PlaybookRunModel)
+            .where(PlaybookRunModel.id == run_id)
+            .with_for_update()
+        )
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def _log_callback(
+        self,
+        run_id: str,
+        action: str,
+        payload: dict,
+        *,
+        success: bool,
+        error: str | None = None,
+        response: dict | None = None,
+    ) -> None:
+        cb = PlaybookRunCallbackModel(
+            playbook_run_id=run_id,
+            action=action,
+            payload=payload,
+            success=success,
+            error=error,
+            response_payload=response,
+        )
+        self.db.add(cb)
+        await self.db.flush()
 
     # ── Helpers ──────────────────────────────────────────────────────
 
