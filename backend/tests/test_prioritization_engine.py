@@ -977,3 +977,210 @@ def test_router_unauthenticated_returns_401():
 
     status = asyncio.run(_go())
     assert status == 401, f"Expected 401, got {status}"
+
+
+# ───────────────────────────────────────────────────────────────────────
+# E2E integration tests (Task 12) — cooked JWT + real DB
+# ───────────────────────────────────────────────────────────────────────
+
+
+def _e2e_setup():
+    """Returns (client, cleanup, make_jwt). Mirrors Spec 02 pattern."""
+    from httpx import AsyncClient, ASGITransport
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from dotenv import dotenv_values
+    from backend.src.main import app
+    from backend.src.core.database import get_db
+
+    env = dotenv_values("backend/.env")
+    real_url = env.get("DATABASE_URL")
+    if not real_url:
+        raise RuntimeError("DATABASE_URL missing from backend/.env")
+
+    engine = create_async_engine(real_url)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _override():
+        async with Session() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://test")
+
+    async def cleanup():
+        await client.aclose()
+        if get_db in app.dependency_overrides:
+            del app.dependency_overrides[get_db]
+        await engine.dispose()
+
+    async def make_jwt(role_name, user_id="ec35a91e-5778-4210-a631-c5ed673c679d",
+                       tenant_id="test-tenant-e2e"):
+        from sqlalchemy import text
+        from backend.src.core.security import create_access_token
+        async with Session() as session:
+            row = (await session.execute(text(
+                "SELECT id, level FROM roles "
+                "WHERE name = :n AND tenant_id IS NULL LIMIT 1"
+            ), {"n": role_name})).first()
+        if not row:
+            raise RuntimeError(f"Role '{role_name}' not found")
+        return create_access_token(
+            subject=user_id,
+            extra_claims={
+                "role_id": row[0], "role_level": int(row[1]),
+                "tenant_id": tenant_id, "email": "test-e2e@example.com",
+            },
+        )
+
+    return client, cleanup, make_jwt
+
+
+def test_e2e_list_criteria_with_admin_token():
+    """GET /api/v1/prioritization/criteria with Admin JWT → 200 + seeded criteria."""
+    import asyncio
+
+    async def _go():
+        client, cleanup, make_jwt = _e2e_setup()
+        try:
+            token = await make_jwt("Admin")
+            r = await client.get(
+                "/api/v1/prioritization/criteria",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            return r.status_code, r.json()
+        finally:
+            await cleanup()
+
+    status, body = asyncio.run(_go())
+    assert status == 200, f"Got {status}: {body}"
+    codes = {item["code"] for item in body["data"]}
+    expected = {"severity", "impact", "asset_criticality",
+                "data_sensitivity", "user_visibility"}
+    assert expected.issubset(codes), f"Missing criteria: {expected - codes}"
+
+
+def test_e2e_get_active_formula_by_key():
+    """GET /formulas/by-key/soc-default/active → 200 + seeded v1."""
+    import asyncio
+
+    async def _go():
+        client, cleanup, make_jwt = _e2e_setup()
+        try:
+            token = await make_jwt("Admin")
+            r = await client.get(
+                "/api/v1/prioritization/formulas/by-key/soc-default/active",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            return r.status_code, r.json()
+        finally:
+            await cleanup()
+
+    status, body = asyncio.run(_go())
+    assert status == 200, f"Got {status}: {body}"
+    assert body["data"]["logical_key"] == "soc-default"
+    assert body["data"]["version"] == 1
+    assert body["data"]["is_active"] is True
+
+
+def test_e2e_403_when_reporter_creates_formula():
+    """Reporter lacks manage_formulas — POST → 403."""
+    import asyncio
+
+    async def _go():
+        client, cleanup, make_jwt = _e2e_setup()
+        try:
+            token = await make_jwt("Reporter")
+            r = await client.post(
+                "/api/v1/prioritization/formulas",
+                json={
+                    "tenant_id": None,
+                    "logical_key": "ignored",
+                    "name": "should not reach use case",
+                    "criteria_weights": [{"code": "severity", "weight": "1.0"}],
+                    "thresholds": [
+                        {"min_value": "0", "max_value": "5", "priority_name": "Baja"},
+                    ],
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            return r.status_code
+        finally:
+            await cleanup()
+
+    status = asyncio.run(_go())
+    assert status == 403, f"Expected 403, got {status}"
+
+
+def test_e2e_create_formula_v1_roundtrip():
+    """Super Admin POST new global formula → 201 → GET → 200 → cleanup."""
+    import asyncio
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    logical_key = f"e2e-test-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        client, cleanup, make_jwt = _e2e_setup()
+        try:
+            token = await make_jwt("Super Admin")
+            headers = {"Authorization": f"Bearer {token}"}
+
+            create_resp = await client.post(
+                "/api/v1/prioritization/formulas",
+                json={
+                    "tenant_id": None,
+                    "logical_key": logical_key,
+                    "name": "E2E roundtrip formula",
+                    "description": "created by test_e2e_create_formula_v1_roundtrip",
+                    "criteria_weights": [
+                        {"code": "severity", "weight": "0.50"},
+                        {"code": "impact", "weight": "0.30"},
+                        {"code": "asset_criticality", "weight": "0.20"},
+                    ],
+                    "thresholds": [
+                        {"min_value": "0.00", "max_value": "2.49", "priority_name": "Baja"},
+                        {"min_value": "2.50", "max_value": "3.49", "priority_name": "Media"},
+                        {"min_value": "3.50", "max_value": "4.49", "priority_name": "Alta"},
+                        {"min_value": "4.50", "max_value": "5.00", "priority_name": "Critica"},
+                    ],
+                },
+                headers=headers,
+            )
+            if create_resp.status_code != 201:
+                return create_resp.status_code, create_resp.json(), None, None
+
+            created_id = create_resp.json()["data"]["id"]
+            get_resp = await client.get(
+                f"/api/v1/prioritization/formulas/{created_id}", headers=headers,
+            )
+            return (create_resp.status_code, create_resp.json(),
+                    get_resp.status_code, get_resp.json())
+        finally:
+            await cleanup()
+
+    c_status, c_body, g_status, g_body = asyncio.run(_go())
+    try:
+        assert c_status == 201, f"Create failed: {c_status} {c_body}"
+        assert g_status == 200, f"Get failed: {g_status} {g_body}"
+        assert c_body["data"]["logical_key"] == logical_key
+        assert c_body["data"]["version"] == 1
+        assert c_body["data"]["is_active"] is True
+        assert g_body["data"]["logical_key"] == logical_key
+    finally:
+        async def _del():
+            from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+            from dotenv import dotenv_values
+            env = dotenv_values("backend/.env")
+            engine = create_async_engine(env["DATABASE_URL"])
+            try:
+                async with AsyncSession(engine) as s:
+                    # FK cascades from prioritization_formulas → criteria/thresholds
+                    await s.execute(text(
+                        "DELETE FROM prioritization_formulas "
+                        "WHERE logical_key = :k AND tenant_id IS NULL"
+                    ), {"k": logical_key})
+                    await s.commit()
+            finally:
+                await engine.dispose()
+        asyncio.run(_del())
