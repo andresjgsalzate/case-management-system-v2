@@ -72,3 +72,6 @@ coverage.xml
 
 # Added by code-review-graph
 .code-review-graph/
+
+# Velociraptor config (contains mTLS certs/secrets — generate locally, don't commit)
+velo-config/

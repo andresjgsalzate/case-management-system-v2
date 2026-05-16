@@ -1,5 +1,21 @@
 version: "3.9"
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Case Management System — local dev stack
+#
+# Always-on services (no profile): postgres, redis, n8n
+# Opt-in profiles (heavier or specialized):
+#   --profile wazuh         → wazuh-manager + wazuh-indexer + wazuh-dashboard
+#                             (~5-6 GB RAM, needs SSL certs — see WARNING below)
+#   --profile velociraptor  → velociraptor server (needs api.config.yaml — see WARNING)
+#   --profile soc-full      → enables both wazuh + velociraptor profiles
+#
+# Examples:
+#   docker-compose up -d                              # postgres + redis + n8n
+#   docker-compose --profile wazuh up -d              # + Wazuh stack
+#   docker-compose --profile soc-full up -d           # everything
+# ──────────────────────────────────────────────────────────────────────────────
+
 services:
   postgres:
     image: postgres:15-alpine
@@ -9,7 +25,7 @@ services:
       POSTGRES_USER: cms_user
       POSTGRES_PASSWORD: cms_password
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -29,5 +45,155 @@ services:
       timeout: 3s
       retries: 10
 
+  # ─── n8n: workflow orchestrator (Sub-spec 05) ─────────────────────────────
+  # ~200 MB RAM. Web UI: http://localhost:5678 (admin / cms_n8n_dev).
+  # SQLite for dev simplicity; switch to postgres env vars below for prod-like setup.
+  n8n:
+    image: n8nio/n8n:1.65.0
+    container_name: cms_n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=cms_n8n_dev
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=America/Bogota
+      - DB_TYPE=sqlite
+      # For postgres-backed n8n (prod-like), uncomment:
+      # - DB_TYPE=postgresdb
+      # - DB_POSTGRESDB_HOST=postgres
+      # - DB_POSTGRESDB_PORT=5432
+      # - DB_POSTGRESDB_DATABASE=n8n
+      # - DB_POSTGRESDB_USER=cms_user
+      # - DB_POSTGRESDB_PASSWORD=cms_password
+    volumes:
+      - n8n_data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ─── Wazuh stack (Sub-spec 04) — profile 'wazuh' ──────────────────────────
+  # WARNING: this is a minimal dev setup. Production deployments should follow
+  # the official wazuh-docker repo (https://github.com/wazuh/wazuh-docker) which
+  # includes a cert-generation script for inter-service mTLS. Here we run with
+  # demo SSL plugins disabled to make it boot without manual cert wrangling.
+  #
+  # API: https://localhost:55000  (user: wazuh-wui  / pass: MyS3cr37P450r.*-)
+  # Dashboard: http://localhost:5601
+  # Agent enrollment port: 1515  |  Agent log collection: 1514/udp
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.7.5
+    container_name: cms_wazuh_manager
+    profiles: ["wazuh", "soc-full"]
+    hostname: wazuh.manager
+    restart: unless-stopped
+    ports:
+      - "1514:1514/udp"
+      - "1515:1515"
+      - "55000:55000"
+    environment:
+      - INDEXER_URL=https://wazuh-indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=SecretPassword
+      - API_USERNAME=wazuh-wui
+      - API_PASSWORD=MyS3cr37P450r.*-
+    volumes:
+      - wazuh_api_configuration:/var/ossec/api/configuration
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+      - wazuh_queue:/var/ossec/queue
+      - wazuh_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_integrations:/var/ossec/integrations
+      - wazuh_active_response:/var/ossec/active-response/bin
+      - wazuh_agentless:/var/ossec/agentless
+      - wazuh_wodles:/var/ossec/wodles
+      - filebeat_etc:/etc/filebeat
+      - filebeat_var:/var/lib/filebeat
+    depends_on:
+      - wazuh-indexer
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.7.5
+    container_name: cms_wazuh_indexer
+    profiles: ["wazuh", "soc-full"]
+    hostname: wazuh.indexer
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - "DISABLE_INSTALL_DEMO_CONFIG=true"
+      - "DISABLE_SECURITY_PLUGIN=true"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - wazuh_indexer_data:/var/lib/wazuh-indexer
+
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:4.7.5
+    container_name: cms_wazuh_dashboard
+    profiles: ["wazuh", "soc-full"]
+    hostname: wazuh.dashboard
+    restart: unless-stopped
+    ports:
+      - "5601:5601"
+    environment:
+      - OPENSEARCH_HOSTS=https://wazuh-indexer:9200
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    depends_on:
+      - wazuh-indexer
+
+  # ─── Velociraptor (Sub-spec 07) — profile 'velociraptor' ──────────────────
+  # WARNING: requires server.config.yaml + api.config.yaml generated BEFORE
+  # first boot. Generate with:
+  #   mkdir -p velo-config
+  #   docker run --rm -it -v "$PWD/velo-config:/configs" \
+  #     wlambert/velociraptor:0.74 \
+  #     velociraptor --config /configs/server.config.yaml config generate -i
+  # Then add the generated client + api configs to velo-config/ before bringing
+  # the service up.
+  #
+  # GUI: https://localhost:8889
+  # API (gRPC mTLS): localhost:8001  — configure CMS via VELOCIRAPTOR_ENDPOINT
+  # Agent frontend: 8000
+  velociraptor:
+    image: wlambert/velociraptor:0.74
+    container_name: cms_velociraptor
+    profiles: ["velociraptor", "soc-full"]
+    restart: unless-stopped
+    ports:
+      - "8889:8889"
+      - "8001:8001"
+      - "8000:8000"
+    volumes:
+      - velociraptor_data:/velociraptor
+      - ./velo-config:/configs:ro
+
 volumes:
   postgres_data:
+  n8n_data:
+  # Wazuh persistent volumes (only mounted when profile 'wazuh' active)
+  wazuh_api_configuration:
+  wazuh_etc:
+  wazuh_logs:
+  wazuh_queue:
+  wazuh_var_multigroups:
+  wazuh_integrations:
+  wazuh_active_response:
+  wazuh_agentless:
+  wazuh_wodles:
+  filebeat_etc:
+  filebeat_var:
+  wazuh_indexer_data:
+  # Velociraptor
+  velociraptor_data:
