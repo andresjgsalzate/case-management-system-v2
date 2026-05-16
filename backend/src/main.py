@@ -45,6 +45,14 @@ from backend.src.modules.prioritization.router import (
     router as prioritization_router,
     case_router as prioritization_case_router,
 )
+from backend.src.modules.integrations.router import (
+    webhook_router as integrations_webhook_router,
+    admin_router as integrations_admin_router,
+)
+from backend.src.modules.integrations.application.jobs import (
+    start_inbound_jobs,
+    stop_inbound_jobs,
+)
 
 
 @asynccontextmanager
@@ -57,12 +65,14 @@ async def lifespan(app: FastAPI):
     start_sla_scheduler(interval_minutes=settings.SLA_CHECK_INTERVAL_MINUTES)
     from backend.src.modules.automation.application.jobs import start_scheduled_automations
     start_scheduled_automations(interval_hours=24)
+    start_inbound_jobs(interval_seconds=5)
     yield
     # Shutdown
     from backend.src.modules.sla.application.jobs import stop_sla_scheduler
     stop_sla_scheduler()
     from backend.src.modules.automation.application.jobs import stop_scheduled_automations
     stop_scheduled_automations()
+    stop_inbound_jobs()
     await close_redis()
     await engine.dispose()
 
@@ -144,6 +154,8 @@ def create_app() -> FastAPI:
     app.include_router(security_taxonomies_router)
     app.include_router(prioritization_router)
     app.include_router(prioritization_case_router)
+    app.include_router(integrations_webhook_router)
+    app.include_router(integrations_admin_router)
 
     return app
 

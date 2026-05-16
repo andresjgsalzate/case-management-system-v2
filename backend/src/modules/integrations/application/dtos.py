@@ -81,6 +81,16 @@ class ProcessEventResult(BaseModel):
     reason: str | None = None  # populated for skip/not_found
 
 
+class ReceiveEventResult(BaseModel):
+    """Returned by IntegrationsUseCases.receive_event (webhook handler)."""
+    model_config = ConfigDict(extra="forbid")
+
+    inbound_event_id: str
+    case_id: str | None = None
+    status: str  # 'pending' | 'duplicate'
+    duplicate: bool = False
+
+
 class InboundEventResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

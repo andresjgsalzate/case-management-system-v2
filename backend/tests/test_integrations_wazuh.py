@@ -1768,6 +1768,83 @@ def test_process_event_retries_on_failure_does_not_mark_failed_prematurely():
     assert row[2] == 1
 
 
+# ── Task 13: Router smoke tests ────────────────────────────────────────
+
+
+def test_router_endpoints_registered():
+    """Smoke: integrations routers mounted with expected paths."""
+    from backend.src.main import app
+
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+    expected = {
+        "/api/v1/integrations/sources/{source_id}/events",
+        "/api/v1/integration-sources",
+        "/api/v1/integration-sources/{source_id}",
+        "/api/v1/integration-sources/{source_id}/rotate-secret",
+        "/api/v1/inbound-events",
+        "/api/v1/inbound-events/{event_id}",
+        "/api/v1/inbound-events/{event_id}/replay",
+    }
+    missing = expected - paths
+    assert not missing, f"Missing routes: {missing}"
+
+
+def test_admin_endpoint_401_without_auth():
+    """GET /integration-sources without JWT → 401."""
+    import asyncio as _aio
+    from httpx import AsyncClient, ASGITransport
+    from backend.src.main import app
+
+    async def _go():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/integration-sources")
+            return r.status_code
+
+    assert _aio.run(_go()) == 401
+
+
+def test_webhook_404_unknown_source():
+    """POST to unknown source_id → 404. Requires real DB binding (conftest's
+    fake URL refuses connections), so we override get_db with the .env URL."""
+    import asyncio as _aio
+    from httpx import AsyncClient, ASGITransport
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from dotenv import dotenv_values
+    from backend.src.main import app
+    from backend.src.core.database import get_db
+
+    env = dotenv_values("backend/.env")
+    real_url = env.get("DATABASE_URL")
+    if not real_url:
+        _pytest.skip("DATABASE_URL not in backend/.env")
+
+    engine = create_async_engine(real_url)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _override():
+        async with Session() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override
+    try:
+        async def _go():
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.post(
+                    "/api/v1/integrations/sources/"
+                    "00000000-0000-0000-0000-000000000000/events",
+                    json={"test": True},
+                )
+                return r.status_code
+        status = _aio.run(_go())
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        _aio.run(engine.dispose())
+
+    assert status == 404
+
+
 # ── Task 12: APScheduler retry job ─────────────────────────────────────
 
 

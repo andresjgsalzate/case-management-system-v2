@@ -23,6 +23,7 @@ from backend.src.modules.integrations.application.dtos import (
     CreateSourcePayload,
     CreateSourceResponse,
     ProcessEventResult,
+    ReceiveEventResult,
     RotateSecretResponse,
     SourceResponse,
     UpdateSourcePayload,
@@ -330,6 +331,94 @@ class IntegrationsUseCases:
                 events_bus=self.events_bus,
             )
             raise
+
+    # ── receive_event (Task 13 — public webhook handler) ─────────────
+
+    async def receive_event(
+        self,
+        *,
+        source_id: str,
+        request_body: bytes,
+        request_headers: dict,
+    ) -> ReceiveEventResult:
+        """Webhook entry point. Validates auth, computes idempotency key,
+        persists the raw payload for the background worker, returns fast.
+
+        Raises NotFoundError when source_id is unknown, ForbiddenError when
+        source is inactive, UnauthorizedError when auth fails, ValidationError
+        on JSON parse error, RateLimitExceededError on quota breach.
+        """
+        import json as _json
+        from backend.src.core.exceptions import (
+            ForbiddenError, UnauthorizedError,
+        )
+        from backend.src.modules.integrations.application.auth import (
+            validate_auth,
+        )
+        from backend.src.modules.integrations.application.crypto import (
+            decrypt_secret,
+        )
+        from backend.src.modules.integrations.application.idempotency import (
+            calculate_idempotency_key, check_rate_limit,
+        )
+
+        source = await self.db.get(IntegrationSourceModel, source_id)
+        if source is None:
+            raise NotFoundError(f"integration_source {source_id} not found")
+        if not source.is_active:
+            raise ForbiddenError("integration source is inactive")
+
+        if source.rate_limit_per_minute:
+            # Lets the rate-limit module raise; router maps to HTTP 429
+            check_rate_limit(source.id, source.rate_limit_per_minute)
+
+        # Normalize header names to lowercase for auth.py's case-insensitive lookup
+        lower_headers = {k.lower(): v for k, v in request_headers.items()}
+        secret_plain = decrypt_secret(source.auth_secret_encrypted)
+        try:
+            validate_auth(source, request_body, lower_headers, secret=secret_plain)
+        except UnauthorizedError:
+            raise
+
+        try:
+            payload = _json.loads(request_body) if request_body else {}
+        except _json.JSONDecodeError as e:
+            raise ValidationError(f"Invalid JSON body: {e}")
+
+        idempotency_key = calculate_idempotency_key(source, payload)
+
+        existing = (await self.db.execute(
+            select(InboundEventModel)
+            .where(InboundEventModel.idempotency_key == idempotency_key),
+        )).scalar_one_or_none()
+        if existing is not None:
+            return ReceiveEventResult(
+                inbound_event_id=existing.id,
+                case_id=existing.case_id,
+                status="duplicate",
+                duplicate=True,
+            )
+
+        inbound = InboundEventModel(
+            source_id=source.id,
+            tenant_id=source.tenant_id,
+            idempotency_key=idempotency_key,
+            raw_payload=payload,
+            status="pending",
+        )
+        self.db.add(inbound)
+        source.last_event_received_at = datetime.now(timezone.utc)
+        source.total_events_received += 1
+
+        await self.db.commit()
+        await self.db.refresh(inbound)
+
+        return ReceiveEventResult(
+            inbound_event_id=inbound.id,
+            case_id=None,
+            status="pending",
+            duplicate=False,
+        )
 
     # ── Manual replay (Task 11) ──────────────────────────────────────
 
