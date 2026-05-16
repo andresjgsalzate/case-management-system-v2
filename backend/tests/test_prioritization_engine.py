@@ -94,7 +94,7 @@ def _make_test_case(session, *, case_number_suffix: str, taxonomy_tuic: str | No
             "ORDER BY u.created_at ASC LIMIT 1"
         ))).first()
         status_row = (await session.execute(text(
-            "SELECT id FROM case_statuses LIMIT 1"
+            "SELECT id FROM case_statuses WHERE is_final = false LIMIT 1"
         ))).first()
         priority_row = (await session.execute(text(
             "SELECT id FROM case_priorities WHERE name = 'Baja' LIMIT 1"
@@ -182,6 +182,73 @@ def test_calculate_priority_persists_calculation_and_updates_case():
         assert "severity" in inputs or "impact" in inputs, (
             f"Expected criteria in inputs, got keys: {list(inputs.keys())}"
         )
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_process_taxonomy_update_skips_non_priority_fields():
+    """When changed_fields don't intersect PRIORITY_AFFECTING — returns 0, no recalc."""
+    async def _run(session):
+        from backend.src.modules.prioritization.application.recalculation_handlers import (
+            process_taxonomy_update,
+        )
+        n = await process_taxonomy_update(
+            session,
+            taxonomy_id="any-uuid-ignored",
+            changed_fields={"name", "description", "mitre_techniques"},
+        )
+        return n
+
+    assert _run_db_query(_run) == 0
+
+
+def test_process_taxonomy_update_recalcs_open_cases():
+    """Changing prioritization_formula_id triggers recalc for open cases linked."""
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    suffix = _uuid.uuid4().hex[:8].upper()
+
+    async def _setup(session):
+        # Reuse seeded RANSOM-LOCKBIT global taxonomy + create 1 open case linked
+        make = _make_test_case(session, case_number_suffix=suffix,
+                               taxonomy_tuic="RANSOM-LOCKBIT")
+        case_id, tax_id = await make()
+        return case_id, tax_id
+
+    async def _trigger(session, taxonomy_id):
+        from backend.src.modules.prioritization.application.recalculation_handlers import (
+            process_taxonomy_update,
+        )
+        n = await process_taxonomy_update(
+            session,
+            taxonomy_id=taxonomy_id,
+            changed_fields={"prioritization_formula_id"},
+        )
+        await session.commit()
+        # Confirm calculation row inserted with triggered_by='taxonomy_changed'
+        calc_row = (await session.execute(text(
+            "SELECT triggered_by FROM case_priority_calculations "
+            "WHERE case_id IN (SELECT id FROM cases WHERE case_number = :n) "
+            "ORDER BY calculated_at DESC LIMIT 1"
+        ), {"n": f"TEST-PRIO-{suffix}"})).scalar()
+        return n, calc_row
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM case_priority_calculations "
+            "WHERE case_id IN (SELECT id FROM cases WHERE case_number = :n)"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.execute(text(
+            "DELETE FROM cases WHERE case_number = :n"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.commit()
+
+    try:
+        case_id, tax_id = _run_db_query(_setup)
+        n, triggered_by = _run_db_query(lambda s: _trigger(s, tax_id))
+        assert n == 1, f"Expected 1 case recalculated, got {n}"
+        assert triggered_by == "taxonomy_changed"
     finally:
         _run_db_query(_cleanup)
 

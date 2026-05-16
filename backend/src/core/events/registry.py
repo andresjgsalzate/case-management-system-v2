@@ -30,3 +30,9 @@ def register_all_handlers() -> None:
         register_handlers as notification_handlers,
     )
     notification_handlers(bus)
+
+    # SOC Sub-spec 03 — prioritization recalculation
+    from backend.src.modules.prioritization.application.recalculation_handlers import (
+        register_handlers as prioritization_handlers,
+    )
+    prioritization_handlers(bus)
