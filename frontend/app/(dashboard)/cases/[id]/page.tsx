@@ -26,6 +26,7 @@ import { CaseNotes } from "@/components/organisms/CaseNotes";
 import { CaseTimeTracker } from "@/components/organisms/CaseTimeTracker";
 import { CaseClassification } from "@/components/organisms/CaseClassification";
 import { CaseActivity } from "@/components/organisms/CaseActivity";
+import { PriorityCalculationBreakdown } from "@/components/organisms/PriorityCalculationBreakdown";
 import { CaseAttachments } from "@/components/organisms/CaseAttachments";
 import { RelatedKBArticlesSection } from "@/components/organisms/RelatedKBArticlesSection";
 import { CaseCustomValuesCard } from "@/components/organisms/ServiceCatalog/CaseCustomValuesCard";
@@ -39,7 +40,7 @@ import { getCurrentUserId } from "@/lib/apiClient";
 import { formatDate, formatRelative, parseSolution, serializeSolution, type SolutionData } from "@/lib/utils";
 import type { CaseStatus } from "@/lib/types";
 
-type Tab = "details" | "notes" | "chat" | "tiempo" | "clasificacion" | "actividad";
+type Tab = "details" | "notes" | "chat" | "tiempo" | "clasificacion" | "priorizacion" | "actividad";
 
 export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const confirm = useConfirm();
@@ -71,6 +72,7 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const canAssign       = useHasPermission("cases", "assign");
   const canArchive      = useHasPermission("cases", "archive");
   const canViewSLA      = useHasPermission("sla",   "read");
+  const canViewPriorityCalcs = useHasPermission("prioritization", "read_calculations");
   const canPromoteEvent = useHasPermission("cases", "promote:event_to_incident");
   const caseActions     = useCasePermissions(c);
   const canTransition   = caseActions.canTransition;
@@ -83,6 +85,7 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
     { key: "chat",          label: "Chat" },
     ...(canViewTimer  ? [{ key: "tiempo"       as Tab, label: "Tiempo" }]        : []),
     ...(canClassify   ? [{ key: "clasificacion" as Tab, label: "Clasificación" }] : []),
+    ...(canViewPriorityCalcs ? [{ key: "priorizacion" as Tab, label: "Priorización" }] : []),
     { key: "actividad", label: "Actividad" },
   ];
 
@@ -94,7 +97,7 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   useEffect(() => {
     const validKeys = visibleTabs.map((t) => t.key);
     if (!validKeys.includes(tab)) setTab("details");
-  }, [canViewTimer, canClassify]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canViewTimer, canClassify, canViewPriorityCalcs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (isLoading) {
     return (
@@ -453,6 +456,11 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
         {tab === "clasificacion" && canClassify && (
           <div className="flex-1 overflow-y-auto min-h-0">
             <CaseClassification caseId={params.id} />
+          </div>
+        )}
+        {tab === "priorizacion" && canViewPriorityCalcs && (
+          <div className="flex-1 overflow-y-auto min-h-0">
+            <PriorityCalculationBreakdown caseId={params.id} />
           </div>
         )}
         {tab === "actividad" && (
