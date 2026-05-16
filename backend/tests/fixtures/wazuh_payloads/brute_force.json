@@ -1,0 +1,23 @@
+{
+  "id": "1700000456.789012",
+  "timestamp": "2026-05-16T10:05:00.000+0000",
+  "rule": {
+    "id": 5712,
+    "level": 10,
+    "groups": ["authentication_failures", "ssh", "brute_force"],
+    "description": "SSH brute force attempt from external IP",
+    "firedtimes": 12
+  },
+  "agent": {
+    "id": "002",
+    "name": "linux-bastion-01",
+    "ip": "10.0.0.20"
+  },
+  "data": {
+    "srcip": "203.0.113.45",
+    "srcuser": "root",
+    "process": "sshd"
+  },
+  "full_log": "May 16 10:05:00 linux-bastion-01 sshd[5678]: Failed password for root from 203.0.113.45 port 51234 ssh2",
+  "location": "/var/log/auth.log"
+}
