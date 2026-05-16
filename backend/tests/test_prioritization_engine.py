@@ -24,6 +24,136 @@ def _run_db_query(async_query):
     return asyncio.run(_go())
 
 
+def test_resolve_taxonomy_field_tlp_default():
+    """Criterion with data_source=taxonomy_field, source_field_key=tlp_default → numeric mapping."""
+    from sqlalchemy import text
+
+    async def _q(session):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        from backend.src.modules.prioritization.infrastructure.models import (
+            PrioritizationCriterionModel,
+        )
+        # Use seeded data_sensitivity criterion (taxonomy_field → tlp_default)
+        criterion = (await session.execute(
+            text(
+                "SELECT id, code, data_source, source_field_key, "
+                "missing_data_strategy, default_value "
+                "FROM prioritization_criteria "
+                "WHERE code = 'data_sensitivity' AND tenant_id IS NULL"
+            )
+        )).first()
+        crit_obj = PrioritizationCriterionModel(
+            id=criterion[0], code=criterion[1], name="",
+            data_source=criterion[2], source_field_key=criterion[3],
+            missing_data_strategy=criterion[4], default_value=criterion[5],
+        )
+        # Use seeded RANSOM-LOCKBIT taxonomy (tlp_default='red')
+        tax_row = (await session.execute(text(
+            "SELECT id FROM security_taxonomies "
+            "WHERE tuic_code = 'RANSOM-LOCKBIT' AND tenant_id IS NULL"
+        ))).first()
+
+        class _FakeCase:
+            id = "test-case-1"
+            tenant_id = "test-tenant"
+            taxonomy_id = tax_row[0]
+
+        uc = PrioritizationUseCases(db=session)
+        return await uc._resolve_criterion_value(_FakeCase(), crit_obj)
+
+    value, label, source = _run_db_query(_q)
+    assert value == 5, f"Expected 5 for TLP red, got {value}"
+    assert label == "red"
+    assert source == "taxonomy.tlp_default"
+
+
+def test_resolve_taxonomy_field_returns_none_for_missing_taxonomy():
+    """case.taxonomy_id=None → (None, None, 'no_taxonomy')."""
+    async def _q(session):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        from backend.src.modules.prioritization.infrastructure.models import (
+            PrioritizationCriterionModel,
+        )
+        crit_obj = PrioritizationCriterionModel(
+            id="x", code="data_sensitivity", name="",
+            data_source="taxonomy_field", source_field_key="tlp_default",
+            missing_data_strategy="use_default", default_value=3,
+        )
+
+        class _FakeCase:
+            id = "test-case-2"
+            tenant_id = "test-tenant"
+            taxonomy_id = None
+
+        uc = PrioritizationUseCases(db=session)
+        return await uc._resolve_criterion_value(_FakeCase(), crit_obj)
+
+    value, label, source = _run_db_query(_q)
+    assert value is None
+    assert label is None
+    assert source == "no_taxonomy"
+
+
+def test_resolve_derived_repetition_count_handler():
+    """data_source='derived' → DERIVED_HANDLERS dispatch by source_field_key."""
+    async def _q(session):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        from backend.src.modules.prioritization.infrastructure.models import (
+            PrioritizationCriterionModel,
+        )
+        crit_obj = PrioritizationCriterionModel(
+            id="x", code="repetition_count", name="",
+            data_source="derived", source_field_key="repetition_count_handler",
+            missing_data_strategy="use_default", default_value=1,
+        )
+
+        class _FakeCase:
+            id = "test-case-3"
+            tenant_id = "test-tenant-no-cases"
+            taxonomy_id = None  # handler returns "Aislado" when no taxonomy
+
+        uc = PrioritizationUseCases(db=session)
+        return await uc._resolve_criterion_value(_FakeCase(), crit_obj)
+
+    value, label, source = _run_db_query(_q)
+    assert value == 1
+    assert label == "Aislado"
+    assert source == "derived.repetition_count_handler"
+
+
+def test_resolve_derived_unknown_handler_returns_none():
+    """data_source='derived' with unregistered source_field_key → (None, None, 'no_handler')."""
+    async def _q(session):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        from backend.src.modules.prioritization.infrastructure.models import (
+            PrioritizationCriterionModel,
+        )
+        crit_obj = PrioritizationCriterionModel(
+            id="x", code="custom_derived", name="",
+            data_source="derived", source_field_key="nonexistent_handler",
+            missing_data_strategy="use_default", default_value=1,
+        )
+
+        class _FakeCase:
+            id = "x"
+            tenant_id = "x"
+            taxonomy_id = None
+
+        uc = PrioritizationUseCases(db=session)
+        return await uc._resolve_criterion_value(_FakeCase(), crit_obj)
+
+    _value, _label, source = _run_db_query(_q)
+    assert source == "no_handler"
+
+
 def test_prioritization_permissions_seeded():
     """6 prioritization permissions present across the 5 existing roles."""
     from sqlalchemy import text
