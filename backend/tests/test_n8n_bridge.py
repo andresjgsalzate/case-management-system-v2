@@ -1416,6 +1416,306 @@ def test_action_set_pending_triage_complete_noop_on_other_status():
     assert current == original
 
 
+# ── Task 10: approve_or_reject + resume_url POST ──────────────────────
+
+
+async def _seed_pending_approval(
+    session, *, case_id, run_id, tenant_id, resume_url,
+    resume_secret_plaintext=None,
+):
+    """Insert an approval_requests row in 'pending' state. Returns its id."""
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text as _t
+    from backend.src.modules.integrations.application.crypto import encrypt_secret
+
+    approval_id = str(_uuid.uuid4())
+    encrypted = encrypt_secret(resume_secret_plaintext) if resume_secret_plaintext else None
+    await session.execute(_t(
+        "INSERT INTO approval_requests "
+        "(id, tenant_id, case_id, playbook_run_id, requested_action, "
+        "action_category, context_payload, requested_by_workflow, resume_url, "
+        "resume_hmac_secret_encrypted, status, timeout_at, resume_succeeded, "
+        "created_at) "
+        "VALUES (:id, :tid, :cid, :rid, 'Approve me', 'custom', "
+        "CAST('{}' AS json), 'https://n8n.test/wf', :ru, :sec, 'pending', "
+        ":to_at, false, NOW())"
+    ), {
+        "id": approval_id, "tid": tenant_id, "cid": case_id, "rid": run_id,
+        "ru": resume_url, "sec": encrypted,
+        "to_at": datetime.now(timezone.utc) + timedelta(hours=1),
+    })
+    await session.commit()
+    return approval_id
+
+
+def test_approve_posts_to_resume_url_with_decision_payload():
+    import asyncio as _aio
+    import uuid as _uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-appr-ok-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "x")
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+                approval_id = await _seed_pending_approval(
+                    session, case_id=case_id, run_id=run_id,
+                    tenant_id=tenant_id,
+                    resume_url="https://n8n.test/webhook-waiting/resume-abc",
+                )
+
+                captured = {}
+
+                async def _capturing_post(url, **kwargs):
+                    captured["url"] = url
+                    captured["body"] = kwargs.get("content")
+                    captured["headers"] = kwargs.get("headers")
+                    resp = MagicMock()
+                    resp.status_code = 200
+                    resp.content = b'{"ok":true}'
+                    resp.json = MagicMock(return_value={"ok": True})
+                    resp.raise_for_status = MagicMock(return_value=None)
+                    return resp
+
+                fake_client = MagicMock()
+                fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+                fake_client.__aexit__ = AsyncMock(return_value=None)
+                fake_client.post = AsyncMock(side_effect=_capturing_post)
+
+                with patch("httpx.AsyncClient", return_value=fake_client):
+                    uc = _make_uc(session)
+                    response = await uc.approve_or_reject(
+                        approval_id=approval_id,
+                        decision="approved",
+                        approver_user_id=ADMIN_USER_ID,
+                        approver_name="Test Operator",
+                    )
+                row = (await session.execute(_t(
+                    "SELECT status, approver_user_id, decided_at, "
+                    "resume_succeeded FROM approval_requests WHERE id = :id"
+                ), {"id": approval_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, row, captured
+        finally:
+            await engine.dispose()
+
+    response, row, captured = _aio.run(_go())
+    import json as _j
+    assert response["ok"] is True
+    assert row[0] == "approved"
+    assert row[1] == ADMIN_USER_ID
+    assert row[2] is not None
+    assert row[3] is True
+    assert captured["url"] == "https://n8n.test/webhook-waiting/resume-abc"
+    payload = _j.loads(captured["body"])
+    assert payload["decision"] == "approved"
+    assert payload["approver_user_id"] == ADMIN_USER_ID
+
+
+def test_reject_requires_reason():
+    import asyncio as _aio
+    import uuid as _uuid
+    from backend.src.core.exceptions import ValidationError
+
+    tenant_id = f"t-appr-noreason-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "x")
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+                approval_id = await _seed_pending_approval(
+                    session, case_id=case_id, run_id=run_id,
+                    tenant_id=tenant_id, resume_url="https://n8n.test/r",
+                )
+                uc = _make_uc(session)
+                with pytest.raises(ValidationError):
+                    await uc.approve_or_reject(
+                        approval_id=approval_id, decision="rejected",
+                        approver_user_id=ADMIN_USER_ID,
+                        approver_name="Test", reason=None,
+                    )
+                await _cleanup_n8n_tenant(session, tenant_id)
+        finally:
+            await engine.dispose()
+
+    _aio.run(_go())
+
+
+def test_approve_signs_resume_when_secret_stored():
+    """If approval has resume_hmac_secret, POST body is HMAC-signed."""
+    import asyncio as _aio
+    import hashlib
+    import hmac as _hmac
+    import uuid as _uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    tenant_id = f"t-appr-sig-{_uuid.uuid4().hex[:8]}"
+    resume_secret = "resume-shared-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "x")
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+                approval_id = await _seed_pending_approval(
+                    session, case_id=case_id, run_id=run_id,
+                    tenant_id=tenant_id,
+                    resume_url="https://n8n.test/resume-sig",
+                    resume_secret_plaintext=resume_secret,
+                )
+
+                captured = {}
+                async def _post(url, **kwargs):
+                    captured["body"] = kwargs.get("content")
+                    captured["headers"] = kwargs.get("headers")
+                    resp = MagicMock()
+                    resp.status_code = 200
+                    resp.content = b"{}"
+                    resp.json = MagicMock(return_value={})
+                    resp.raise_for_status = MagicMock(return_value=None)
+                    return resp
+                fake = MagicMock()
+                fake.__aenter__ = AsyncMock(return_value=fake)
+                fake.__aexit__ = AsyncMock(return_value=None)
+                fake.post = AsyncMock(side_effect=_post)
+                with patch("httpx.AsyncClient", return_value=fake):
+                    uc = _make_uc(session)
+                    await uc.approve_or_reject(
+                        approval_id=approval_id, decision="approved",
+                        approver_user_id=ADMIN_USER_ID, approver_name="Op",
+                    )
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return captured
+        finally:
+            await engine.dispose()
+
+    captured = _aio.run(_go())
+    sig_header = captured["headers"].get("X-CMS-Signature")
+    assert sig_header and sig_header.startswith("sha256=")
+    expected = _hmac.new(
+        resume_secret.encode(), captured["body"], hashlib.sha256,
+    ).hexdigest()
+    assert sig_header == f"sha256={expected}"
+
+
+def test_approve_marks_resume_failed_when_n8n_unreachable():
+    """httpx error during resume → status='approved' persists, resume_succeeded=False."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import httpx as _httpx
+    from sqlalchemy import text as _t
+    from backend.src.core.exceptions import BusinessRuleError
+
+    tenant_id = f"t-appr-fail-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "x")
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+                approval_id = await _seed_pending_approval(
+                    session, case_id=case_id, run_id=run_id,
+                    tenant_id=tenant_id, resume_url="https://n8n.dead/wait",
+                )
+
+                async def _boom(*a, **kw):
+                    raise _httpx.ConnectError("n8n unreachable")
+                fake = MagicMock()
+                fake.__aenter__ = AsyncMock(return_value=fake)
+                fake.__aexit__ = AsyncMock(return_value=None)
+                fake.post = AsyncMock(side_effect=_boom)
+                with patch("httpx.AsyncClient", return_value=fake):
+                    uc = _make_uc(session)
+                    with pytest.raises(BusinessRuleError):
+                        await uc.approve_or_reject(
+                            approval_id=approval_id, decision="approved",
+                            approver_user_id=ADMIN_USER_ID, approver_name="Op",
+                        )
+                row = (await session.execute(_t(
+                    "SELECT status, resume_succeeded, resume_error "
+                    "FROM approval_requests WHERE id = :id"
+                ), {"id": approval_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return row
+        finally:
+            await engine.dispose()
+
+    row = _aio.run(_go())
+    assert row[0] == "approved"  # decision persisted even though resume failed
+    assert row[1] is False
+    assert "ConnectError" in row[2]
+
+
+def test_approve_rejects_non_pending_status():
+    """approve_or_reject on already-decided approval → ValidationError."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    from backend.src.core.exceptions import ValidationError
+
+    tenant_id = f"t-appr-twice-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "x")
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+                approval_id = await _seed_pending_approval(
+                    session, case_id=case_id, run_id=run_id,
+                    tenant_id=tenant_id, resume_url="https://n8n.test/r",
+                )
+                # Manually mark as already approved
+                await session.execute(_t(
+                    "UPDATE approval_requests SET status = 'approved', "
+                    "decided_at = NOW() WHERE id = :id"
+                ), {"id": approval_id})
+                await session.commit()
+
+                uc = _make_uc(session)
+                with pytest.raises(ValidationError):
+                    await uc.approve_or_reject(
+                        approval_id=approval_id, decision="rejected",
+                        approver_user_id=ADMIN_USER_ID,
+                        approver_name="Op", reason="too late",
+                    )
+                await _cleanup_n8n_tenant(session, tenant_id)
+        finally:
+            await engine.dispose()
+
+    _aio.run(_go())
+
+
 def test_models_import_smoke():
     """All 3 n8n_bridge models import without errors."""
     from backend.src.modules.n8n_bridge.infrastructure.models import (

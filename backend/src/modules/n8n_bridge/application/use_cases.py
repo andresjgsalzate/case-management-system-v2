@@ -134,6 +134,109 @@ class N8nBridgeUseCases:
         await self.db.refresh(run)
         return run
 
+    # ── approve_or_reject (Task 10) ──────────────────────────────────
+
+    _RESUME_HTTP_TIMEOUT = 10.0
+    _ALLOWED_DECISIONS_APPROVAL = frozenset({"approved", "rejected"})
+
+    async def approve_or_reject(
+        self,
+        *,
+        approval_id: str,
+        decision: str,
+        approver_user_id: str,
+        approver_name: str | None = None,
+        reason: str | None = None,
+    ) -> dict:
+        """Operator decides on a pending approval; CMS POSTs to n8n's resume_url.
+
+        Decision is persisted FIRST (atomic with state transition), then the
+        POST to resume_url is attempted. If httpx fails, the decision still
+        sticks but resume_succeeded=false + resume_error is stamped, and
+        BusinessRuleError is raised so the UI can show a "n8n unreachable,
+        retry resume" banner.
+        """
+        if decision not in self._ALLOWED_DECISIONS_APPROVAL:
+            raise ValidationError(
+                f"decision must be 'approved' or 'rejected', got {decision!r}",
+            )
+        if decision == "rejected" and not reason:
+            raise ValidationError("rejection requires a reason")
+
+        approval = await self._load_approval_for_update(approval_id)
+        if approval is None:
+            raise NotFoundError(f"approval_request {approval_id} not found")
+        if approval.status != "pending":
+            raise ValidationError(
+                f"approval already decided (status={approval.status!r})",
+            )
+
+        # Mutate decision state and commit BEFORE attempting the resume POST,
+        # so an httpx failure doesn't leave the approval in 'pending' limbo.
+        now = datetime.now(timezone.utc)
+        approval.status = decision
+        approval.approver_user_id = approver_user_id
+        approval.decided_reason = reason
+        approval.decided_at = now
+        await self.db.commit()
+        await self.db.refresh(approval)
+
+        # Build resume payload
+        resume_payload = {
+            "decision": decision,
+            "approval_request_id": approval.id,
+            "case_id": approval.case_id,
+            "playbook_run_id": approval.playbook_run_id,
+            "approver_user_id": approver_user_id,
+            "approver_name": approver_name,
+            "decided_at": now.isoformat(),
+            "reason": reason,
+        }
+        body = json.dumps(
+            resume_payload, separators=(",", ":"), default=str,
+        ).encode("utf-8")
+
+        headers = {"Content-Type": "application/json"}
+        if approval.resume_hmac_secret_encrypted:
+            resume_secret = decrypt_secret(approval.resume_hmac_secret_encrypted)
+            sig = hmac.new(
+                resume_secret.encode(), body, hashlib.sha256,
+            ).hexdigest()
+            headers["X-CMS-Signature"] = f"sha256={sig}"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self._RESUME_HTTP_TIMEOUT),
+            ) as client:
+                r = await client.post(
+                    approval.resume_url, content=body, headers=headers,
+                )
+                r.raise_for_status()
+        except httpx.HTTPError as e:
+            approval.resume_attempted_at = datetime.now(timezone.utc)
+            approval.resume_succeeded = False
+            approval.resume_error = f"{type(e).__name__}: {str(e)[:500]}"
+            await self.db.commit()
+            raise BusinessRuleError(
+                f"Failed to POST resume_url for approval {approval.id}: {e}",
+            ) from e
+
+        approval.resume_attempted_at = datetime.now(timezone.utc)
+        approval.resume_succeeded = True
+        approval.resume_error = None
+        await self.db.commit()
+        return {"ok": True, "approval_id": approval.id, "decision": decision}
+
+    async def _load_approval_for_update(
+        self, approval_id: str,
+    ) -> ApprovalRequestModel | None:
+        stmt = (
+            select(ApprovalRequestModel)
+            .where(ApprovalRequestModel.id == approval_id)
+            .with_for_update()
+        )
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
     # ── handle_callback (Task 5) ─────────────────────────────────────
 
     async def handle_callback(
