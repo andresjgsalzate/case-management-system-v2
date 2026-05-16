@@ -277,10 +277,43 @@ class PrioritizationUseCases:
         return calc
 
     async def _resolve_formula_for_case(self, case) -> PrioritizationFormulaModel | None:
-        """Task 5: hardcoded — pick 'soc-default' global. Task 7 perfects with
-        taxonomy.prioritization_formula_id → tenant default → global fallback.
+        """Multi-tenant formula resolution chain:
+
+        1. If case.taxonomy.prioritization_formula_id is set → load that formula.
+        2. Else: 'soc-default' active for case.tenant_id.
+        3. Else: 'soc-default' global (tenant_id IS NULL).
+        4. Else: None (caller raises OperationalError).
         """
-        stmt = (
+        # 1. Explicit assignment via case.taxonomy
+        if case.taxonomy_id:
+            from backend.src.modules.security_taxonomies.infrastructure.models import (
+                SecurityTaxonomyModel,
+            )
+            taxonomy = await self.db.get(SecurityTaxonomyModel, case.taxonomy_id)
+            if taxonomy and taxonomy.prioritization_formula_id:
+                explicit = await self.db.get(
+                    PrioritizationFormulaModel, taxonomy.prioritization_formula_id,
+                )
+                if explicit and explicit.is_active:
+                    return explicit
+
+        # 2. Tenant default
+        if case.tenant_id:
+            tenant_stmt = (
+                select(PrioritizationFormulaModel)
+                .where(
+                    PrioritizationFormulaModel.logical_key == "soc-default",
+                    PrioritizationFormulaModel.is_active.is_(True),
+                    PrioritizationFormulaModel.tenant_id == case.tenant_id,
+                )
+                .limit(1)
+            )
+            tenant_formula = (await self.db.execute(tenant_stmt)).scalar_one_or_none()
+            if tenant_formula:
+                return tenant_formula
+
+        # 3. Global default
+        global_stmt = (
             select(PrioritizationFormulaModel)
             .where(
                 PrioritizationFormulaModel.logical_key == "soc-default",
@@ -289,7 +322,7 @@ class PrioritizationUseCases:
             )
             .limit(1)
         )
-        return (await self.db.execute(stmt)).scalar_one_or_none()
+        return (await self.db.execute(global_stmt)).scalar_one_or_none()
 
     async def _find_priority_by_threshold(
         self, formula_id: str, weighted_sum: Decimal,

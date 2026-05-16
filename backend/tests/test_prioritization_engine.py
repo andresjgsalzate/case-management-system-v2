@@ -186,6 +186,75 @@ def test_calculate_priority_persists_calculation_and_updates_case():
         _run_db_query(_cleanup)
 
 
+def test_formula_resolution_via_taxonomy_wins_over_default():
+    """When case.taxonomy.prioritization_formula_id is set, that formula is used
+    instead of the tenant/global 'soc-default'."""
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    suffix = _uuid.uuid4().hex[:8].upper()
+
+    async def _setup(session):
+        # Point RANSOM-LOCKBIT taxonomy at the compliance-focused formula
+        tax_row = (await session.execute(text(
+            "SELECT id FROM security_taxonomies "
+            "WHERE tuic_code = 'RANSOM-LOCKBIT' AND tenant_id IS NULL"
+        ))).first()
+        compliance_row = (await session.execute(text(
+            "SELECT id FROM prioritization_formulas "
+            "WHERE logical_key = 'compliance-focused' AND tenant_id IS NULL "
+            "AND is_active = true"
+        ))).first()
+        original_formula_id = (await session.execute(text(
+            "SELECT prioritization_formula_id FROM security_taxonomies WHERE id = :id"
+        ), {"id": tax_row[0]})).scalar()
+        await session.execute(text(
+            "UPDATE security_taxonomies SET prioritization_formula_id = :fid "
+            "WHERE id = :tid"
+        ), {"fid": compliance_row[0], "tid": tax_row[0]})
+        await session.commit()
+        # Create case using that taxonomy
+        make = _make_test_case(session, case_number_suffix=suffix,
+                               taxonomy_tuic="RANSOM-LOCKBIT")
+        case_id, _ = await make()
+        return case_id, compliance_row[0], tax_row[0], original_formula_id
+
+    async def _calc(session, case_id):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        uc = PrioritizationUseCases(db=session)
+        calc = await uc.calculate_priority(
+            case_id=case_id, triggered_by="manual_recalculation",
+        )
+        await session.commit()
+        return calc.formula_id
+
+    async def _cleanup(session, tax_id, original_formula_id):
+        await session.execute(text(
+            "DELETE FROM case_priority_calculations "
+            "WHERE case_id IN (SELECT id FROM cases WHERE case_number = :n)"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.execute(text(
+            "DELETE FROM cases WHERE case_number = :n"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.execute(text(
+            "UPDATE security_taxonomies SET prioritization_formula_id = :fid "
+            "WHERE id = :tid"
+        ), {"fid": original_formula_id, "tid": tax_id})
+        await session.commit()
+
+    case_id, expected_formula_id, tax_id, original_formula_id = _run_db_query(_setup)
+    try:
+        used_formula_id = _run_db_query(lambda s: _calc(s, case_id))
+        assert used_formula_id == expected_formula_id, (
+            f"Expected compliance-focused {expected_formula_id}, "
+            f"engine picked {used_formula_id}"
+        )
+    finally:
+        _run_db_query(lambda s: _cleanup(s, tax_id, original_formula_id))
+
+
 def test_calculate_priority_renormalizes_when_criterion_skipped():
     """soc-default has 3 criteria; asset_criticality always skips (no asset).
     With renormalize, severity (default=3) and impact (default=3) carry full
