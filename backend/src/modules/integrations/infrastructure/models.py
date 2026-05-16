@@ -88,7 +88,7 @@ class IntegrationSourceModel(Base):
     __table_args__ = (
         CheckConstraint(
             "source_type IN ('wazuh', 'splunk', 'sentinel', 'crowdstrike', "
-            "'qradar', 'wazuh_velociraptor', 'custom')",
+            "'qradar', 'wazuh_velociraptor', 'n8n', 'custom')",
             name="ck_source_type",
         ),
         CheckConstraint(
