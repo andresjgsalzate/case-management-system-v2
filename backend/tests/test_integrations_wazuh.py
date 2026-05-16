@@ -63,3 +63,102 @@ def test_generate_secret_length_and_charset():
     assert len(s) >= 32  # urlsafe_token returns ~4/3 the byte length
     # urlsafe charset: A-Z, a-z, 0-9, -, _
     assert all(c.isalnum() or c in "-_" for c in s)
+
+
+# ── Task 3: Auth validation ────────────────────────────────────────────
+
+
+class _FakeSource:
+    """Lightweight stand-in for IntegrationSourceModel used in auth tests."""
+    def __init__(self, auth_method, auth_header_name=None):
+        self.auth_method = auth_method
+        self.auth_header_name = auth_header_name
+
+
+def test_auth_none_method_skips_validation():
+    """auth_method='none' returns without raising even with no headers."""
+    from backend.src.modules.integrations.application.auth import validate_auth
+    source = _FakeSource(auth_method="none")
+    validate_auth(source, b'{}', {}, secret="ignored")  # no raise
+
+
+def test_auth_missing_header_raises():
+    from backend.src.modules.integrations.application.auth import validate_auth
+    from backend.src.core.exceptions import UnauthorizedError
+    source = _FakeSource(auth_method="api_key")
+    with pytest.raises(UnauthorizedError):
+        validate_auth(source, b'{}', {}, secret="abc")
+
+
+def test_hmac_validation_correct_signature():
+    import hashlib
+    import hmac as _hmac
+    from backend.src.modules.integrations.application.auth import validate_auth
+
+    body = b'{"test": true}'
+    secret = "test-secret"
+    sig = _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    headers = {"x-cms-signature": f"sha256={sig}"}
+    source = _FakeSource(auth_method="hmac", auth_header_name="X-CMS-Signature")
+    validate_auth(source, body, headers, secret=secret)  # no raise
+
+
+def test_hmac_validation_wrong_signature():
+    from backend.src.modules.integrations.application.auth import validate_auth
+    from backend.src.core.exceptions import UnauthorizedError
+    headers = {"x-cms-signature": "sha256=DEADBEEF"}
+    source = _FakeSource(auth_method="hmac", auth_header_name="X-CMS-Signature")
+    with pytest.raises(UnauthorizedError):
+        validate_auth(source, b'{}', headers, secret="real-secret")
+
+
+def test_hmac_validation_missing_sha256_prefix():
+    from backend.src.modules.integrations.application.auth import validate_auth
+    from backend.src.core.exceptions import UnauthorizedError
+    headers = {"x-cms-signature": "abcdef"}  # missing "sha256=" prefix
+    source = _FakeSource(auth_method="hmac", auth_header_name="X-CMS-Signature")
+    with pytest.raises(UnauthorizedError):
+        validate_auth(source, b'{}', headers, secret="x")
+
+
+def test_api_key_validation_match():
+    from backend.src.modules.integrations.application.auth import validate_auth
+    source = _FakeSource(auth_method="api_key", auth_header_name="X-API-Key")
+    validate_auth(source, b'{}', {"x-api-key": "the-key"}, secret="the-key")  # no raise
+
+
+def test_api_key_validation_mismatch():
+    from backend.src.modules.integrations.application.auth import validate_auth
+    from backend.src.core.exceptions import UnauthorizedError
+    source = _FakeSource(auth_method="api_key", auth_header_name="X-API-Key")
+    with pytest.raises(UnauthorizedError):
+        validate_auth(source, b'{}', {"x-api-key": "wrong"}, secret="the-key")
+
+
+def test_bearer_validation_match():
+    from backend.src.modules.integrations.application.auth import validate_auth
+    source = _FakeSource(auth_method="bearer")  # default header: Authorization
+    validate_auth(
+        source, b'{}',
+        {"authorization": "Bearer my-token"},
+        secret="my-token",
+    )  # no raise
+
+
+def test_bearer_validation_mismatch():
+    from backend.src.modules.integrations.application.auth import validate_auth
+    from backend.src.core.exceptions import UnauthorizedError
+    source = _FakeSource(auth_method="bearer")
+    with pytest.raises(UnauthorizedError):
+        validate_auth(
+            source, b'{}',
+            {"authorization": "Bearer wrong-token"},
+            secret="my-token",
+        )
+
+
+def test_default_header_names_used_when_source_field_is_null():
+    """If source.auth_header_name is None, defaults from _DEFAULT_HEADERS kick in."""
+    from backend.src.modules.integrations.application.auth import validate_auth
+    source = _FakeSource(auth_method="api_key", auth_header_name=None)
+    validate_auth(source, b'{}', {"x-api-key": "k"}, secret="k")  # default 'X-API-Key'
