@@ -22,3 +22,4 @@ python-dotenv==1.0.1
 apscheduler==3.10.4
 cryptography>=42.0
 jsonpath-ng>=1.6
+pyjwt[crypto]>=2.8

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # Generate via: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     INTEGRATIONS_ENCRYPTION_KEY: str | None = None
 
+    # n8n Bridge (Sub-spec 05) — short-lived JWT signing for n8n→CMS callbacks.
+    # Falls back to SECRET_KEY when unset.
+    N8N_CALLBACK_JWT_SECRET: str | None = None
+
     # Email (optional)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587

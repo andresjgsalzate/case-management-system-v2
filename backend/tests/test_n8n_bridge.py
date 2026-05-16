@@ -47,6 +47,64 @@ def test_n8n_bridge_permissions_seeded():
     }, f"Unexpected seeded pairs: {pairs}"
 
 
+# ── Task 3: JWT helper for callback auth ───────────────────────────────
+
+
+def test_callback_jwt_issue_and_validate_roundtrip():
+    from backend.src.modules.n8n_bridge.application.jwt_helper import (
+        issue_callback_jwt,
+        validate_callback_jwt,
+    )
+    token = issue_callback_jwt(case_id="case-1", ttl_seconds=3600)
+    claims = validate_callback_jwt(token, expected_case_id="case-1")
+    assert claims["case_id"] == "case-1"
+    assert claims["sub"] == "n8n"
+
+
+def test_callback_jwt_case_id_mismatch_rejected():
+    from backend.src.core.exceptions import UnauthorizedError
+    from backend.src.modules.n8n_bridge.application.jwt_helper import (
+        issue_callback_jwt,
+        validate_callback_jwt,
+    )
+    token = issue_callback_jwt(case_id="case-A", ttl_seconds=3600)
+    with pytest.raises(UnauthorizedError):
+        validate_callback_jwt(token, expected_case_id="case-B")
+
+
+def test_callback_jwt_validation_skips_check_when_no_expected_case_id():
+    """Validation without expected_case_id returns claims for inspection (used by
+    callback dispatch when case_id comes from URL path)."""
+    from backend.src.modules.n8n_bridge.application.jwt_helper import (
+        issue_callback_jwt,
+        validate_callback_jwt,
+    )
+    token = issue_callback_jwt(case_id="case-X", ttl_seconds=3600)
+    claims = validate_callback_jwt(token, expected_case_id=None)
+    assert claims["case_id"] == "case-X"
+
+
+def test_callback_jwt_expired_rejected():
+    """Token issued with ttl=-1s is already expired → UnauthorizedError."""
+    from backend.src.core.exceptions import UnauthorizedError
+    from backend.src.modules.n8n_bridge.application.jwt_helper import (
+        issue_callback_jwt,
+        validate_callback_jwt,
+    )
+    token = issue_callback_jwt(case_id="case-1", ttl_seconds=-1)
+    with pytest.raises(UnauthorizedError):
+        validate_callback_jwt(token, expected_case_id="case-1")
+
+
+def test_callback_jwt_garbage_token_rejected():
+    from backend.src.core.exceptions import UnauthorizedError
+    from backend.src.modules.n8n_bridge.application.jwt_helper import (
+        validate_callback_jwt,
+    )
+    with pytest.raises(UnauthorizedError):
+        validate_callback_jwt("not.a.jwt", expected_case_id=None)
+
+
 def test_models_import_smoke():
     """All 3 n8n_bridge models import without errors."""
     from backend.src.modules.n8n_bridge.infrastructure.models import (
