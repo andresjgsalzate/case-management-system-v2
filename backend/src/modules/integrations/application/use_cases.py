@@ -5,12 +5,15 @@ process_event land in Tasks 9-10. Permission gates:
 - create/update/delete/rotate → integrations:manage
 - list/get                    → integrations:read
 """
-from sqlalchemy import or_, select
+from datetime import datetime, timezone
+
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.src.core.exceptions import (
     NotFoundError,
     PermissionDeniedError,
+    ValidationError,
 )
 from backend.src.modules.integrations.application.crypto import (
     encrypt_secret,
@@ -19,11 +22,14 @@ from backend.src.modules.integrations.application.crypto import (
 from backend.src.modules.integrations.application.dtos import (
     CreateSourcePayload,
     CreateSourceResponse,
+    ProcessEventResult,
     RotateSecretResponse,
     SourceResponse,
     UpdateSourcePayload,
 )
 from backend.src.modules.integrations.infrastructure.models import (
+    InboundEventModel,
+    IntegrationMappingModel,
     IntegrationSourceModel,
     WazuhRuleTaxonomyMapModel,
 )
@@ -193,6 +199,188 @@ class IntegrationsUseCases:
         if not source:
             raise NotFoundError(f"integration_source {source_id} not found")
         return source
+
+    # ── process_event orchestrator (Task 9) ──────────────────────────
+
+    async def process_event(
+        self,
+        inbound_event_id: str,
+        *,
+        system_user_id: str,
+    ) -> ProcessEventResult:
+        """Worker entry point: parse → resolve → create case → calculate priority
+        → delegate to n8n if needed. Atomic per inbound row.
+
+        Caller must ensure `cases_uc` (and `taxonomies_uc` for Wazuh sources)
+        are injected. `prioritization_uc` and `n8n_bridge_uc` are optional —
+        missing UCs cause the corresponding step to be skipped.
+        """
+        inbound = await self._load_inbound_for_processing(inbound_event_id)
+        if inbound is None:
+            return ProcessEventResult(status="not_found")
+        if inbound.status != "pending":
+            return ProcessEventResult(
+                status="skip", reason=f"status is {inbound.status}",
+            )
+
+        inbound.status = "processing"
+        inbound.last_attempted_at = datetime.now(timezone.utc)
+        inbound.attempt_count += 1
+        await self.db.flush()
+
+        try:
+            source = await self._load_source(inbound.source_id)
+
+            # 1. Parse
+            normalized = await self._parse_payload(inbound.raw_payload, source)
+
+            # 2. Resolve taxonomy
+            taxonomy = await self._resolve_taxonomy(
+                normalized=normalized, source=source, tenant_id=inbound.tenant_id,
+            )
+
+            # 3. Resolve service_catalog_item
+            service_item_id = await self._resolve_service_item_id(taxonomy, source)
+            if not service_item_id:
+                raise ValidationError(
+                    "Cannot resolve service_item_id (no taxonomy mapping "
+                    "and source has no default_service_item_id)",
+                )
+
+            # 4. Determine case_type + initial status
+            case_type = taxonomy.default_case_type if taxonomy else "event"
+            initial_status_slug = (
+                "pending_triage"
+                if (taxonomy and taxonomy.triage_mode == "delegate_to_n8n")
+                else None
+            )
+
+            # 5. Create case
+            if not self.cases_uc:
+                raise RuntimeError("cases_uc not injected")
+            from backend.src.modules.cases.application.dtos import CreateCaseDTO
+            case_dto = CreateCaseDTO(
+                case_type=case_type,
+                title=normalized.title,
+                description=normalized.description or None,
+                service_item_id=service_item_id,
+                initial_status_slug=initial_status_slug,
+                priority_id=source.default_priority_id,
+                custom_values=[],
+            )
+            case = await self.cases_uc.create_case(
+                case_dto, actor_id=system_user_id, tenant_id=inbound.tenant_id,
+            )
+
+            # 6. Calculate priority (best effort)
+            if taxonomy and self.prioritization_uc:
+                try:
+                    await self.prioritization_uc.calculate_priority(
+                        case_id=case.id, triggered_by="case_created",
+                        triggered_by_user=system_user_id,
+                    )
+                except Exception:
+                    # Priority calc failures shouldn't block case creation —
+                    # operator can recalc manually from the case detail panel.
+                    pass
+
+            # 7. Delegate to n8n if requested
+            if (
+                taxonomy
+                and taxonomy.triage_mode == "delegate_to_n8n"
+                and self.n8n_bridge_uc
+                and getattr(taxonomy, "delegated_workflow_id", None)
+            ):
+                await self.n8n_bridge_uc.trigger_workflow(
+                    case_id=case.id,
+                    workflow_id=taxonomy.delegated_workflow_id,
+                    triggered_by="auto_triage",
+                )
+
+            # 8. Run automation rules (existing automation module)
+            if self.automation_uc:
+                try:
+                    await self.automation_uc.evaluate_rules(
+                        trigger_event="case_created", case=case,
+                    )
+                except Exception:
+                    pass
+
+            # 9. Link case to inbound
+            inbound.case_id = case.id
+            inbound.status = "processed"
+            inbound.processed_at = datetime.now(timezone.utc)
+            inbound.next_retry_at = None
+            source.last_event_processed_at = datetime.now(timezone.utc)
+
+            await self.db.commit()
+            return ProcessEventResult(status="processed", case_id=case.id)
+
+        except Exception as e:
+            inbound.last_error = f"{type(e).__name__}: {str(e)[:1000]}"
+            inbound.status = "failed"  # Task 10 will replace with smart retry
+            await self.db.commit()
+            raise
+
+    # ── Helpers for process_event ────────────────────────────────────
+
+    async def _load_inbound_for_processing(
+        self, inbound_event_id: str,
+    ) -> InboundEventModel | None:
+        """SELECT FOR UPDATE SKIP LOCKED so concurrent workers don't double-process."""
+        stmt = (
+            select(InboundEventModel)
+            .where(InboundEventModel.id == inbound_event_id)
+            .with_for_update(skip_locked=True)
+        )
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def _parse_payload(self, payload: dict, source):
+        if source.source_type == "wazuh":
+            from backend.src.modules.integrations.application.parsers.wazuh import (
+                parse_wazuh,
+            )
+            return parse_wazuh(payload, source)
+        # Generic: load this source's mappings
+        from backend.src.modules.integrations.application.parsers.generic import (
+            parse_via_mappings,
+        )
+        mappings = (await self.db.execute(
+            select(IntegrationMappingModel)
+            .where(IntegrationMappingModel.source_id == source.id)
+            .order_by(IntegrationMappingModel.sort_order),
+        )).scalars().all()
+        return await parse_via_mappings(payload, list(mappings))
+
+    async def _resolve_taxonomy(self, *, normalized, source, tenant_id: str | None):
+        if source.source_type == "wazuh":
+            return await self._resolve_wazuh_taxonomy(
+                wazuh_rule_id=normalized.wazuh_rule_id,
+                wazuh_rule_groups=normalized.wazuh_rule_groups,
+                wazuh_level=normalized.wazuh_level,
+                source_id=source.id,
+                tenant_id=tenant_id,
+            )
+        # Generic: the JSONPath mapping is expected to expose target_field='taxonomy_code'
+        code = normalized.custom_values.get("taxonomy_code")
+        if not code or not self.taxonomies_uc:
+            return None
+        return await self.taxonomies_uc.get_taxonomy(
+            tuic_code=code, tenant_id=tenant_id,
+        )
+
+    async def _resolve_service_item_id(
+        self, taxonomy, source,
+    ) -> str | None:
+        """Use taxonomy's default catalog mapping, falling back to source.default_service_item_id."""
+        if taxonomy:
+            row = (await self.db.execute(text(
+                "SELECT service_catalog_item_id FROM taxonomy_catalog_mappings "
+                "WHERE taxonomy_id = :t AND is_default = true LIMIT 1"
+            ), {"t": taxonomy.id})).first()
+            if row:
+                return row[0]
+        return source.default_service_item_id
 
     # ── Wazuh taxonomy resolver ──────────────────────────────────────
 

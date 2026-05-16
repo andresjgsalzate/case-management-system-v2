@@ -1177,3 +1177,402 @@ def test_resolver_returns_none_when_no_mapping_matches():
         )
 
     assert _run_db_query(_go) is None
+
+
+# ── Task 9: process_event orchestrator ─────────────────────────────────
+
+
+class _MockN8nBridge:
+    """Records trigger_workflow calls for assertions."""
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    async def trigger_workflow(self, *, case_id, workflow_id, triggered_by):
+        self.calls.append({
+            "case_id": case_id, "workflow_id": workflow_id,
+            "triggered_by": triggered_by,
+        })
+
+
+async def _ensure_number_ranges(session, tenant_id, prefixes=("INC", "EVT", "REQ")):
+    """Pre-seed a case_number_range row per prefix for the tenant if missing."""
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    for prefix in prefixes:
+        exists = (await session.execute(_t(
+            "SELECT 1 FROM case_number_ranges "
+            "WHERE tenant_id = :t AND prefix = :p LIMIT 1"
+        ), {"t": tenant_id, "p": prefix})).first()
+        if exists:
+            continue
+        await session.execute(_t(
+            "INSERT INTO case_number_ranges "
+            "(id, tenant_id, prefix, range_start, range_end, current_number, created_at) "
+            "VALUES (:id, :t, :p, 1, 999999, 0, NOW())"
+        ), {"id": str(_uuid.uuid4()), "t": tenant_id, "p": prefix})
+    await session.commit()
+
+
+async def _cleanup_number_ranges(session, tenant_id):
+    from sqlalchemy import text as _t
+    await session.execute(_t(
+        "DELETE FROM case_number_ranges WHERE tenant_id = :t"
+    ), {"t": tenant_id})
+    await session.commit()
+
+
+async def _seed_inbound_event(
+    session, *, source_id, tenant_id, payload, status="pending",
+):
+    """Insert one inbound_events row and return its id."""
+    import json
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    inbound_id = str(_uuid.uuid4())
+    # Idempotency key must be unique — use the inbound_id itself
+    await session.execute(_t(
+        "INSERT INTO inbound_events "
+        "(id, source_id, tenant_id, idempotency_key, raw_payload, "
+        "status, attempt_count, max_attempts, received_at) "
+        "VALUES (:id, :sid, :tid, :ik, CAST(:p AS json), :s, 0, 3, NOW())"
+    ), {
+        "id": inbound_id, "sid": source_id, "tid": tenant_id,
+        "ik": f"test-key-{inbound_id}", "p": json.dumps(payload), "s": status,
+    })
+    await session.commit()
+    return inbound_id
+
+
+async def _seed_source(
+    session, *, source_type, tenant_id, default_service_item_id,
+    created_by, default_priority_id=None,
+):
+    """Insert one integration_sources row with a fake encrypted secret and return its id."""
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    from backend.src.modules.integrations.application.crypto import encrypt_secret
+    source_id = str(_uuid.uuid4())
+    await session.execute(_t(
+        "INSERT INTO integration_sources "
+        "(id, tenant_id, name, source_type, auth_method, auth_secret_encrypted, "
+        "default_service_item_id, default_priority_id, is_active, "
+        "total_events_received, total_events_failed, "
+        "created_at, updated_at, created_by) "
+        "VALUES (:id, :tid, :name, :st, 'hmac', :secret, :svc, :pri, true, "
+        "0, 0, NOW(), NOW(), :cb)"
+    ), {
+        "id": source_id, "tid": tenant_id, "name": f"test-{source_id[:8]}",
+        "st": source_type, "secret": encrypt_secret("test-secret"),
+        "svc": default_service_item_id, "pri": default_priority_id,
+        "cb": created_by,
+    })
+    await session.commit()
+    return source_id
+
+
+async def _first_priority_id(session):
+    from sqlalchemy import text as _t
+    row = (await session.execute(_t(
+        "SELECT id FROM case_priorities LIMIT 1"
+    ))).first()
+    return row[0] if row else None
+
+
+async def _first_service_item_id(session):
+    """Pick any existing service_catalog_item to attach as default."""
+    from sqlalchemy import text as _t
+    row = (await session.execute(_t(
+        "SELECT id FROM service_catalog_items LIMIT 1"
+    ))).first()
+    return row[0] if row else None
+
+
+async def _cleanup_inbound_and_case(session, inbound_id, case_id):
+    from sqlalchemy import text as _t
+    if inbound_id:
+        await session.execute(_t(
+            "DELETE FROM inbound_events WHERE id = :id"
+        ), {"id": inbound_id})
+    if case_id:
+        await session.execute(_t(
+            "DELETE FROM cases WHERE id = :id"
+        ), {"id": case_id})
+    await session.commit()
+
+
+async def _cleanup_source(session, source_id):
+    from sqlalchemy import text as _t
+    await session.execute(_t(
+        "DELETE FROM integration_sources WHERE id = :id"
+    ), {"id": source_id})
+    await session.commit()
+
+
+def test_process_event_no_taxonomy_uses_default_service_item():
+    """No matching taxonomy → case uses source.default_service_item_id directly."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+    from backend.src.modules.security_taxonomies.application.use_cases import (
+        SecurityTaxonomyUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+    import uuid as _uuid
+    tenant_id = f"t-proc-notax-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        svc_id = await _first_service_item_id(session)
+        prio_id = await _first_priority_id(session)
+        await _ensure_number_ranges(session, tenant_id)
+        source_id = await _seed_source(
+            session, source_type="wazuh", tenant_id=tenant_id,
+            default_service_item_id=svc_id,
+            default_priority_id=prio_id, created_by=actor.id,
+        )
+        # Wazuh payload with a rule_id no mapping covers (so resolver returns None)
+        inbound_id = await _seed_inbound_event(
+            session, source_id=source_id, tenant_id=tenant_id,
+            payload={
+                "id": "ev-1", "timestamp": "2026-05-16T10:00:00Z",
+                "rule": {"id": 99999, "level": 3, "groups": ["zzz-unmapped"],
+                         "description": "Unmapped test alert"},
+                "agent": {"id": "001", "name": "test-host"},
+                "data": {"srcip": "1.2.3.4"},
+            },
+        )
+        uc = IntegrationsUseCases(
+            db=session,
+            taxonomies_uc=SecurityTaxonomyUseCases(db=session),
+            cases_uc=CaseUseCases(db=session),
+        )
+        result = await uc.process_event(
+            inbound_id, system_user_id=actor.id,
+        )
+        # Inspect persisted inbound row for assertions
+        from sqlalchemy import text as _t
+        row = (await session.execute(_t(
+            "SELECT status, case_id FROM inbound_events WHERE id = :id"
+        ), {"id": inbound_id})).first()
+        await _cleanup_inbound_and_case(session, inbound_id, result.case_id)
+        await _cleanup_source(session, source_id)
+        return result, row
+
+    result, row = _run_db_query(_go)
+    assert result.status == "processed"
+    assert result.case_id is not None
+    assert row[0] == "processed"
+    assert row[1] == result.case_id
+
+
+def test_process_event_with_wazuh_mapping_assigns_taxonomy_service_item():
+    """Taxonomy with default catalog mapping wins over source.default_service_item_id."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+    from backend.src.modules.security_taxonomies.application.use_cases import (
+        SecurityTaxonomyUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+    import uuid as _uuid
+    tenant_id = f"t-proc-tax-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        from sqlalchemy import text as _t
+
+        # Fallback service item (on the source) vs taxonomy mapping service item
+        fallback_svc = await _first_service_item_id(session)
+        # Pick a second distinct item for taxonomy mapping
+        rows = (await session.execute(_t(
+            "SELECT id FROM service_catalog_items WHERE id != :ex LIMIT 1"
+        ), {"ex": fallback_svc})).first()
+        taxonomy_svc = rows[0] if rows else fallback_svc
+
+        prio_id = await _first_priority_id(session)
+        await _ensure_number_ranges(session, tenant_id)
+        source_id = await _seed_source(
+            session, source_type="wazuh", tenant_id=tenant_id,
+            default_service_item_id=fallback_svc,
+            default_priority_id=prio_id, created_by=actor.id,
+        )
+        tax_id = await _seed_taxonomy(
+            session, name="MappedTax",
+            tuic_code=f"TEST-MAPPED-{_uuid.uuid4().hex[:6]}",
+            tenant_id=tenant_id, created_by=actor.id,
+        )
+        # Insert default catalog mapping
+        await session.execute(_t(
+            "INSERT INTO taxonomy_catalog_mappings "
+            "(id, taxonomy_id, service_catalog_item_id, is_default, priority_order) "
+            "VALUES (:id, :tax, :svc, true, 0)"
+        ), {
+            "id": str(_uuid.uuid4()), "tax": tax_id, "svc": taxonomy_svc,
+        })
+        # Wazuh rule_id mapping → tax
+        map_id = await _create_wazuh_mapping(
+            session, strategy="rule_id", value={"value": 70001},
+            taxonomy_id=tax_id, priority=1000, tenant_id=tenant_id,
+            created_by=actor.id,
+        )
+        inbound_id = await _seed_inbound_event(
+            session, source_id=source_id, tenant_id=tenant_id,
+            payload={
+                "id": "ev-2", "timestamp": "2026-05-16T10:01:00Z",
+                "rule": {"id": 70001, "level": 8, "groups": ["malware"],
+                         "description": "Mapped test"},
+                "agent": {"id": "001", "name": "test-host"},
+                "data": {},
+            },
+        )
+        uc = IntegrationsUseCases(
+            db=session,
+            taxonomies_uc=SecurityTaxonomyUseCases(db=session),
+            cases_uc=CaseUseCases(db=session),
+        )
+        result = await uc.process_event(
+            inbound_id, system_user_id=actor.id,
+        )
+        # Verify case got the taxonomy's service_item_id, not the source's fallback
+        case_row = (await session.execute(_t(
+            "SELECT service_item_id FROM cases WHERE id = :id"
+        ), {"id": result.case_id})).first()
+        await _cleanup_inbound_and_case(session, inbound_id, result.case_id)
+        await _cleanup_wazuh_maps(session, [map_id])
+        await session.execute(_t(
+            "DELETE FROM taxonomy_catalog_mappings WHERE taxonomy_id = :t"
+        ), {"t": tax_id})
+        await _cleanup_taxonomies(session, [tax_id])
+        await _cleanup_source(session, source_id)
+        return result, case_row, taxonomy_svc, fallback_svc
+
+    result, case_row, expected_svc, fallback_svc = _run_db_query(_go)
+    assert result.status == "processed"
+    assert case_row[0] == expected_svc
+    assert case_row[0] != fallback_svc
+
+
+def test_process_event_delegate_to_n8n_calls_bridge():
+    """taxonomy.triage_mode='delegate_to_n8n' → n8n_uc.trigger_workflow called once."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+    from backend.src.modules.security_taxonomies.application.use_cases import (
+        SecurityTaxonomyUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+    import uuid as _uuid
+    tenant_id = f"t-proc-n8n-{_uuid.uuid4().hex[:8]}"
+    n8n = _MockN8nBridge()
+
+    async def _go(session):
+        from sqlalchemy import text as _t
+        svc_id = await _first_service_item_id(session)
+        prio_id = await _first_priority_id(session)
+        await _ensure_number_ranges(session, tenant_id)
+        source_id = await _seed_source(
+            session, source_type="wazuh", tenant_id=tenant_id,
+            default_service_item_id=svc_id,
+            default_priority_id=prio_id, created_by=actor.id,
+        )
+        # Insert taxonomy with delegate_to_n8n + a stub workflow id
+        tax_id = str(_uuid.uuid4())
+        await session.execute(_t(
+            "INSERT INTO security_taxonomies "
+            "(id, tenant_id, tuic_code, name, default_case_type, requires_ticket, "
+            "triage_mode, delegated_workflow_id, tlp_default, is_active, "
+            "created_at, updated_at, created_by, mitre_techniques) "
+            "VALUES (:id, :tid, :code, :n, 'event', false, 'delegate_to_n8n', "
+            ":wf, 'amber', true, NOW(), NOW(), :cb, CAST('[]' AS json))"
+        ), {
+            "id": tax_id, "tid": tenant_id,
+            "code": f"TEST-N8N-{_uuid.uuid4().hex[:6]}", "n": "n8n delegate test",
+            "wf": "workflow-stub-id", "cb": actor.id,
+        })
+        await session.commit()
+        map_id = await _create_wazuh_mapping(
+            session, strategy="rule_id", value={"value": 70002},
+            taxonomy_id=tax_id, priority=1000, tenant_id=tenant_id,
+            created_by=actor.id,
+        )
+        inbound_id = await _seed_inbound_event(
+            session, source_id=source_id, tenant_id=tenant_id,
+            payload={
+                "id": "ev-3", "timestamp": "2026-05-16T10:02:00Z",
+                "rule": {"id": 70002, "level": 9, "groups": ["malware"],
+                         "description": "Delegate me"},
+                "agent": {"id": "001", "name": "test-host"},
+                "data": {},
+            },
+        )
+        uc = IntegrationsUseCases(
+            db=session,
+            taxonomies_uc=SecurityTaxonomyUseCases(db=session),
+            cases_uc=CaseUseCases(db=session),
+            n8n_bridge_uc=n8n,
+        )
+        result = await uc.process_event(
+            inbound_id, system_user_id=actor.id,
+        )
+        # Verify case status is pending_triage
+        case_row = (await session.execute(_t(
+            "SELECT cs.slug FROM cases c "
+            "JOIN case_statuses cs ON cs.id = c.status_id "
+            "WHERE c.id = :id"
+        ), {"id": result.case_id})).first()
+        await _cleanup_inbound_and_case(session, inbound_id, result.case_id)
+        await _cleanup_wazuh_maps(session, [map_id])
+        await _cleanup_taxonomies(session, [tax_id])
+        await _cleanup_source(session, source_id)
+        return result, case_row
+
+    result, case_row = _run_db_query(_go)
+    assert result.status == "processed"
+    assert case_row[0] == "pending_triage"
+    assert len(n8n.calls) == 1
+    assert n8n.calls[0]["workflow_id"] == "workflow-stub-id"
+    assert n8n.calls[0]["triggered_by"] == "auto_triage"
+    assert n8n.calls[0]["case_id"] == result.case_id
+
+
+def test_process_event_skip_when_already_processed():
+    """Non-pending status → status='skip' without side effects."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+    import uuid as _uuid
+    tenant_id = f"t-proc-skip-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        svc_id = await _first_service_item_id(session)
+        prio_id = await _first_priority_id(session)
+        await _ensure_number_ranges(session, tenant_id)
+        source_id = await _seed_source(
+            session, source_type="wazuh", tenant_id=tenant_id,
+            default_service_item_id=svc_id,
+            default_priority_id=prio_id, created_by=actor.id,
+        )
+        inbound_id = await _seed_inbound_event(
+            session, source_id=source_id, tenant_id=tenant_id,
+            payload={"id": "ev-x"}, status="processed",
+        )
+        uc = IntegrationsUseCases(
+            db=session, cases_uc=CaseUseCases(db=session),
+        )
+        result = await uc.process_event(
+            inbound_id, system_user_id=actor.id,
+        )
+        await _cleanup_inbound_and_case(session, inbound_id, None)
+        await _cleanup_source(session, source_id)
+        return result
+
+    result = _run_db_query(_go)
+    assert result.status == "skip"
+    assert "processed" in (result.reason or "")

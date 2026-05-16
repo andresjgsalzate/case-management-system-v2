@@ -72,6 +72,15 @@ class RotateSecretResponse(BaseModel):
 # ── Inbound events (read-side) ──────────────────────────────────────────
 
 
+class ProcessEventResult(BaseModel):
+    """Returned by IntegrationsUseCases.process_event."""
+    model_config = ConfigDict(extra="forbid")
+
+    status: str  # 'processed' | 'skip' | 'not_found' | 'failed'
+    case_id: str | None = None
+    reason: str | None = None  # populated for skip/not_found
+
+
 class InboundEventResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
