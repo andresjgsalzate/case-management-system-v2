@@ -186,6 +186,138 @@ def test_calculate_priority_persists_calculation_and_updates_case():
         _run_db_query(_cleanup)
 
 
+def test_manual_recalculation_requires_recalculate_permission():
+    """Actor with role 'End User' (no permission) → PermissionDeniedError."""
+    from backend.src.core.exceptions import PermissionDeniedError
+
+    async def _run(session):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        # Build actor with a role that lacks prioritization:recalculate.
+        # 'Reporter' has only read_calculations per the Task 3 seed.
+        from sqlalchemy import text
+        role_row = (await session.execute(text(
+            "SELECT id FROM roles WHERE name = 'Reporter' AND tenant_id IS NULL LIMIT 1"
+        ))).first()
+
+        class _A:
+            user_id = "ec35a91e-5778-4210-a631-c5ed673c679d"
+            role_id = role_row[0] if role_row else None
+            tenant_id = "t"
+
+        uc = PrioritizationUseCases(db=session)
+        try:
+            await uc.manual_recalculation(actor=_A(), case_id="any")
+            return False
+        except PermissionDeniedError:
+            return True
+
+    assert _run_db_query(_run) is True
+
+
+def test_list_calculations_returns_chronological_desc():
+    """list_calculations returns rows newest-first."""
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    suffix = _uuid.uuid4().hex[:8].upper()
+
+    async def _setup(session):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        make = _make_test_case(session, case_number_suffix=suffix,
+                               taxonomy_tuic="RANSOM-LOCKBIT")
+        case_id, _ = await make()
+        uc = PrioritizationUseCases(db=session)
+        # Trigger 2 calculations via manual_recalculation
+        actor = _FakeActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d",
+                           role_name="Super Admin")
+        actor.role_id = await _resolve_actor_role_id(session, actor)
+        await uc.manual_recalculation(actor=actor, case_id=case_id)
+        await session.commit()
+        await uc.manual_recalculation(actor=actor, case_id=case_id)
+        await session.commit()
+        return case_id
+
+    async def _list(session, case_id):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        uc = PrioritizationUseCases(db=session)
+        rows = await uc.list_calculations(case_id=case_id, limit=10)
+        return [r.calculated_at for r in rows]
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM case_priority_calculations "
+            "WHERE case_id IN (SELECT id FROM cases WHERE case_number = :n)"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.execute(text(
+            "DELETE FROM cases WHERE case_number = :n"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.commit()
+
+    try:
+        case_id = _run_db_query(_setup)
+        timestamps = _run_db_query(lambda s: _list(s, case_id))
+        assert len(timestamps) >= 2, f"Expected ≥2 calculations, got {len(timestamps)}"
+        # Verify DESC order: every consecutive pair newer-first
+        for prev, nxt in zip(timestamps, timestamps[1:]):
+            assert prev >= nxt, (
+                f"Expected DESC order, got prev={prev} < next={nxt}"
+            )
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_promote_case_to_new_formula_version_uses_correct_triggered_by():
+    """promote_case_to_new_formula_version → triggered_by='formula_promoted'."""
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    suffix = _uuid.uuid4().hex[:8].upper()
+
+    async def _setup(session):
+        make = _make_test_case(session, case_number_suffix=suffix,
+                               taxonomy_tuic="RANSOM-LOCKBIT")
+        case_id, _ = await make()
+        return case_id
+
+    async def _promote(session, case_id):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        actor = _FakeActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d",
+                           role_name="Super Admin")
+        actor.role_id = await _resolve_actor_role_id(session, actor)
+        uc = PrioritizationUseCases(db=session)
+        calc = await uc.promote_case_to_new_formula_version(
+            actor=actor, case_id=case_id,
+        )
+        await session.commit()
+        return calc.triggered_by, calc.triggered_by_user
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM case_priority_calculations "
+            "WHERE case_id IN (SELECT id FROM cases WHERE case_number = :n)"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.execute(text(
+            "DELETE FROM cases WHERE case_number = :n"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.commit()
+
+    try:
+        case_id = _run_db_query(_setup)
+        triggered_by, user_id = _run_db_query(lambda s: _promote(s, case_id))
+        assert triggered_by == "formula_promoted"
+        assert user_id == "ec35a91e-5778-4210-a631-c5ed673c679d"
+    finally:
+        _run_db_query(_cleanup)
+
+
 def test_process_taxonomy_update_skips_non_priority_fields():
     """When changed_fields don't intersect PRIORITY_AFFECTING — returns 0, no recalc."""
     async def _run(session):

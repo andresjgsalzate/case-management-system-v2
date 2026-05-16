@@ -537,6 +537,64 @@ class PrioritizationUseCases:
         )
         return (await self.db.execute(stmt, {"n": name, "tid": tenant_id})).scalar_one_or_none()
 
+    # ── Manual operations + history ──────────────────────────────────────
+
+    async def manual_recalculation(
+        self, *, actor, case_id: str,
+    ) -> CasePriorityCalculationModel:
+        """Operator-initiated recalculation. Requires prioritization:recalculate."""
+        from backend.src.core.middleware.permission_checker import has_permission
+        from backend.src.core.exceptions import PermissionDeniedError
+        if not getattr(actor, "role_id", None):
+            raise PermissionDeniedError("actor missing role_id")
+        ok = await has_permission(
+            self.db, actor.role_id, "prioritization", "recalculate",
+        )
+        if not ok:
+            raise PermissionDeniedError("prioritization:recalculate required")
+        return await self.calculate_priority(
+            case_id=case_id,
+            triggered_by="manual_recalculation",
+            triggered_by_user=actor.user_id,
+        )
+
+    async def promote_case_to_new_formula_version(
+        self, *, actor, case_id: str,
+    ) -> CasePriorityCalculationModel:
+        """Migrate a case to the currently-active formula version.
+
+        Practical use: after admin creates v2 of a formula, operator decides
+        per-case to migrate. Re-runs calculate_priority with the same resolution
+        chain (now picks the new active version). triggered_by='formula_promoted'
+        differentiates the audit entry from automatic recalcs.
+        """
+        from backend.src.core.middleware.permission_checker import has_permission
+        from backend.src.core.exceptions import PermissionDeniedError
+        if not getattr(actor, "role_id", None):
+            raise PermissionDeniedError("actor missing role_id")
+        ok = await has_permission(
+            self.db, actor.role_id, "prioritization", "recalculate",
+        )
+        if not ok:
+            raise PermissionDeniedError("prioritization:recalculate required")
+        return await self.calculate_priority(
+            case_id=case_id,
+            triggered_by="formula_promoted",
+            triggered_by_user=actor.user_id,
+        )
+
+    async def list_calculations(
+        self, *, case_id: str, limit: int = 50,
+    ) -> list[CasePriorityCalculationModel]:
+        """Audit trail for a case — newest first."""
+        stmt = (
+            select(CasePriorityCalculationModel)
+            .where(CasePriorityCalculationModel.case_id == case_id)
+            .order_by(CasePriorityCalculationModel.calculated_at.desc())
+            .limit(limit)
+        )
+        return list((await self.db.execute(stmt)).scalars().all())
+
     async def _find_priority_by_threshold(
         self, formula_id: str, weighted_sum: Decimal,
     ) -> str | None:
