@@ -597,3 +597,92 @@ export interface CreateCatalogMappingPayload {
   is_default?: boolean;
   priority_order?: number;
 }
+
+// ── Sub-spec 03 — Prioritization Engine ──────────────────────────────────────
+
+export type PrioritizationDataSource =
+  | "taxonomy_field"
+  | "case_custom_value"
+  | "asset_field"
+  | "derived";
+
+export type MissingDataStrategy = "use_default" | "skip";
+
+export interface PrioritizationCriterion {
+  id: string;
+  tenant_id: string | null;
+  code: string;
+  name: string;
+  description: string | null;
+  data_source: PrioritizationDataSource;
+  source_field_key: string | null;
+  missing_data_strategy: MissingDataStrategy;
+  default_value: number | null;
+  is_active: boolean;
+  sort_order: number;
+}
+
+export interface PrioritizationScale {
+  id: string;
+  criterion_id: string;
+  label: string;
+  numeric_value: number;
+  color: string | null;
+  sort_order: number;
+}
+
+export interface PrioritizationFormula {
+  id: string;
+  tenant_id: string | null;
+  logical_key: string;
+  version: number;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  effective_from: string;
+  effective_to: string | null;
+  superseded_by_id: string | null;
+  created_at: string;
+  created_by: string;
+}
+
+export interface FormulaCriterionWeight {
+  code: string;
+  weight: string; // Decimal serialized as string for precision
+}
+
+export interface FormulaThresholdEntry {
+  min_value: string;
+  max_value: string;
+  priority_name: string; // Baja | Media | Alta | Critica
+}
+
+export interface CreateFormulaVersionPayload {
+  tenant_id?: string | null;
+  logical_key: string;
+  base_version_id?: string | null;
+  name: string;
+  description?: string | null;
+  criteria_weights: FormulaCriterionWeight[];
+  thresholds: FormulaThresholdEntry[];
+}
+
+export type CalculationTriggeredBy =
+  | "case_created"
+  | "case_updated"
+  | "manual"
+  | "formula_promoted"
+  | "scheduled";
+
+export interface PriorityCalculation {
+  id: string;
+  case_id: string;
+  formula_id: string;
+  formula_version: number;
+  inputs: Record<string, unknown>;
+  weighted_sum: string; // Decimal as string
+  resulting_priority_id: string;
+  calculated_at: string;
+  triggered_by: CalculationTriggeredBy;
+  triggered_by_user: string | null;
+}
