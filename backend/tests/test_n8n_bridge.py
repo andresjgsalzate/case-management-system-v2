@@ -192,9 +192,16 @@ async def _seed_minimal_case(session, tenant_id):
 
 async def _cleanup_n8n_tenant(session, tenant_id):
     from sqlalchemy import text as _t
+    # case_notes lives outside the n8n_bridge module but our add_note /
+    # attach_artifact handlers populate it; delete first so the cases row
+    # delete below doesn't fail an FK check.
+    await session.execute(_t(
+        "DELETE FROM case_notes WHERE case_id IN "
+        "(SELECT id FROM cases WHERE tenant_id = :t)"
+    ), {"t": tenant_id})
     for tbl in ("playbook_run_callbacks", "approval_requests",
                 "playbook_runs", "cases", "integration_sources",
-                "case_number_ranges"):
+                "case_number_ranges", "security_taxonomies"):
         await session.execute(_t(
             f"DELETE FROM {tbl} WHERE "
             f"{'playbook_run_id' if tbl == 'playbook_run_callbacks' else 'tenant_id'} "
@@ -567,14 +574,16 @@ def test_callback_valid_transitions_triggered_to_running():
                 case_id = await _seed_minimal_case(session, tenant_id)
                 run_id = await _seed_playbook_run(session, case_id, tenant_id)
 
-                # Use a still-stubbed action (attach_artifact) so the test
-                # only exercises the dispatcher path, not Task 6/7/8 handlers.
-                body = b'{"action":"attach_artifact"}'
+                # Use add_note with a valid payload so the test only verifies
+                # the dispatcher path (state transition + counter + log).
+                # Real action handlers are exercised in their own tests.
+                payload = {"content": "dispatcher smoke"}
+                body = _json.dumps({"action": "add_note", **payload}).encode()
                 headers = {"x-cms-signature": _hmac_header(body, secret)}
 
-                uc = N8nBridgeUseCases(db=session)
+                uc = _make_uc(session)
                 response = await uc.handle_callback(
-                    action="attach_artifact", payload={},
+                    action="add_note", payload=payload,
                     playbook_run_id=run_id,
                     request_body=body, request_headers=headers,
                 )
@@ -1244,6 +1253,167 @@ def test_record_decision_idempotent_when_run_already_completed():
     assert second.get("noop") is True
     # Both callbacks counted (audit trail intact), but case state only mutated once
     assert cb_count == 2
+
+
+# ── Task 9: attach_artifact + set_pending_triage_complete ──────────────
+
+
+def test_action_attach_artifact_creates_note_marker():
+    """attach_artifact stub records a note describing the artifact reference."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-art-{_uuid.uuid4().hex[:8]}"
+    secret = "art-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {
+                    "artifact_type": "velociraptor_collection",
+                    "artifact_ref": "vc-flow-abc-123",
+                    "summary": "Memory dump from PC-FIN-04",
+                }
+                body, headers = _hmac_callback(session, secret, "attach_artifact", payload)
+
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="attach_artifact", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                note = (await session.execute(_t(
+                    "SELECT content FROM case_notes WHERE case_id = :id "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ), {"id": case_id})).first()
+                await session.execute(_t(
+                    "DELETE FROM case_notes WHERE case_id = :id"
+                ), {"id": case_id})
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, note
+        finally:
+            await engine.dispose()
+
+    response, note = _aio.run(_go())
+    assert response["ok"] is True
+    assert response.get("artifact_type") == "velociraptor_collection"
+    assert response.get("artifact_ref") == "vc-flow-abc-123"
+    assert "[n8n run" in note[0]
+    assert "velociraptor_collection" in note[0]
+    assert "vc-flow-abc-123" in note[0]
+
+
+def test_action_set_pending_triage_complete_transitions_to_logged():
+    """case in pending_triage → set_pending_triage_complete → status='logged'."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-trg-{_uuid.uuid4().hex[:8]}"
+    secret = "trg-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                # Force case into pending_triage status
+                pt_status = (await session.execute(_t(
+                    "SELECT id FROM case_statuses WHERE slug = 'pending_triage'"
+                ))).first()[0]
+                await session.execute(_t(
+                    "UPDATE cases SET status_id = :s, "
+                    "pending_triage_until = NOW() + INTERVAL '10 minutes' "
+                    "WHERE id = :id"
+                ), {"s": pt_status, "id": case_id})
+                await session.commit()
+
+                body, headers = _hmac_callback(
+                    session, secret, "set_pending_triage_complete", {},
+                )
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="set_pending_triage_complete", payload={},
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                row = (await session.execute(_t(
+                    "SELECT cs.slug, c.pending_triage_until FROM cases c "
+                    "JOIN case_statuses cs ON cs.id = c.status_id "
+                    "WHERE c.id = :id"
+                ), {"id": case_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, row
+        finally:
+            await engine.dispose()
+
+    response, row = _aio.run(_go())
+    assert response["ok"] is True
+    assert response.get("transitioned") is True
+    assert row[0] == "logged"
+    assert row[1] is None
+
+
+def test_action_set_pending_triage_complete_noop_on_other_status():
+    """If case status != 'pending_triage', the action is a noop."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-trg-noop-{_uuid.uuid4().hex[:8]}"
+    secret = "trg-noop-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                original_status = (await session.execute(_t(
+                    "SELECT status_id FROM cases WHERE id = :id"
+                ), {"id": case_id})).first()[0]
+
+                body, headers = _hmac_callback(
+                    session, secret, "set_pending_triage_complete", {},
+                )
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="set_pending_triage_complete", payload={},
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                current_status = (await session.execute(_t(
+                    "SELECT status_id FROM cases WHERE id = :id"
+                ), {"id": case_id})).first()[0]
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, current_status, original_status
+        finally:
+            await engine.dispose()
+
+    response, current, original = _aio.run(_go())
+    assert response["ok"] is True
+    assert response.get("noop") is True
+    assert current == original
 
 
 def test_models_import_smoke():

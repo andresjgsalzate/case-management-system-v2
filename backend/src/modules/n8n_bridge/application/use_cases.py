@@ -211,8 +211,8 @@ class N8nBridgeUseCases:
             "add_note": self._action_add_note,
             "request_approval": self._action_request_approval,
             "record_decision": self._action_record_decision,
-            "attach_artifact": self._stub_action,
-            "set_pending_triage_complete": self._stub_action,
+            "attach_artifact": self._action_attach_artifact,
+            "set_pending_triage_complete": self._action_set_pending_triage_complete,
         }
 
     async def _stub_action(self, *, case, run, payload) -> dict:
@@ -338,6 +338,65 @@ class N8nBridgeUseCases:
                 f"case_status with slug '{slug}' not found",
             )
         case.status_id = row[0]
+
+    async def _action_attach_artifact(
+        self, *, case: CaseModel, run: PlaybookRunModel, payload: dict,
+    ) -> dict:
+        """Phase 1 stub: record the artifact reference as a case note.
+
+        Sub-spec 07 (Velociraptor forensics) will replace this with a real
+        forensic_artifacts row + a download link. For now operators see the
+        reference in the case timeline.
+        """
+        artifact_type = payload.get("artifact_type") or "unknown"
+        artifact_ref = payload.get("artifact_ref") or ""
+        summary = payload.get("summary") or ""
+        if not self.system_user_id:
+            raise BusinessRuleError(
+                "system_user_id not configured for n8n_bridge.attach_artifact",
+            )
+
+        import uuid as _uuid
+        from sqlalchemy import text as _t
+        note_id = str(_uuid.uuid4())
+        short_marker = (run.id or "")[:8]
+        content = (
+            f"[n8n run {short_marker}] Artifact attached: "
+            f"type={artifact_type}, ref={artifact_ref}"
+            + (f" — {summary}" if summary else "")
+        )
+        await self.db.execute(_t(
+            "INSERT INTO case_notes "
+            "(id, case_id, user_id, tenant_id, content, is_deleted, "
+            "created_at, updated_at) "
+            "VALUES (:id, :cid, :uid, :tid, :content, false, NOW(), NOW())"
+        ), {
+            "id": note_id, "cid": case.id, "uid": self.system_user_id,
+            "tid": case.tenant_id, "content": content,
+        })
+        await self.db.flush()
+        return {
+            "ok": True, "note_id": note_id,
+            "artifact_type": artifact_type, "artifact_ref": artifact_ref,
+        }
+
+    async def _action_set_pending_triage_complete(
+        self, *, case: CaseModel, run: PlaybookRunModel, payload: dict,
+    ) -> dict:
+        """Transition a `pending_triage` case to `logged` and clear the timer.
+        No-op on any other status (defense against double-call from n8n)."""
+        from sqlalchemy import text as _t
+        current = (await self.db.execute(_t(
+            "SELECT slug FROM case_statuses WHERE id = :id"
+        ), {"id": case.status_id})).first()
+        if not current or current[0] != "pending_triage":
+            return {"ok": True, "noop": True, "current_status": current[0] if current else None}
+
+        await self._set_case_status_by_slug(case, "logged")
+        case.pending_triage_until = None
+        case.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        return {"ok": True, "transitioned": True, "new_status": "logged"}
 
     async def _action_request_approval(
         self, *, case: CaseModel, run: PlaybookRunModel, payload: dict,
