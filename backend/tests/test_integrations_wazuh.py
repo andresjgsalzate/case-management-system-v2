@@ -1739,6 +1739,159 @@ def test_process_event_retries_on_failure_does_not_mark_failed_prematurely():
     assert row[2] == 1
 
 
+# ── Task 11: Manual replay ────────────────────────────────────────────
+
+
+def test_manual_replay_resets_counters_and_reprocesses():
+    """failed event with bad config → fix source → manual_replay → processed."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+    from backend.src.modules.security_taxonomies.application.use_cases import (
+        SecurityTaxonomyUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+    import uuid as _uuid
+    tenant_id = f"t-replay-ok-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        from sqlalchemy import text as _t
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id, action="replay_events")
+        svc_id = await _first_service_item_id(session)
+        prio_id = await _first_priority_id(session)
+        await _ensure_number_ranges(session, tenant_id)
+        source_id = await _seed_source(
+            session, source_type="wazuh", tenant_id=tenant_id,
+            default_service_item_id=svc_id,
+            default_priority_id=prio_id, created_by=actor.id,
+        )
+        # Seed a failed inbound directly
+        inbound_id = await _seed_inbound_event(
+            session, source_id=source_id, tenant_id=tenant_id,
+            payload={
+                "id": "ev-replay-1", "timestamp": "2026-05-16T12:00:00Z",
+                "rule": {"id": 77777, "level": 3, "groups": [],
+                         "description": "Replay test"},
+                "agent": {"id": "001", "name": "h"},
+                "data": {},
+            }, status="failed",
+        )
+        await session.execute(_t(
+            "UPDATE inbound_events SET attempt_count = 3, "
+            "last_error = 'previous failure' WHERE id = :id"
+        ), {"id": inbound_id})
+        await session.commit()
+
+        uc = IntegrationsUseCases(
+            db=session,
+            taxonomies_uc=SecurityTaxonomyUseCases(db=session),
+            cases_uc=CaseUseCases(db=session),
+        )
+        result = await uc.manual_replay(
+            actor=actor, inbound_event_id=inbound_id,
+        )
+        row = (await session.execute(_t(
+            "SELECT status, attempt_count, last_error "
+            "FROM inbound_events WHERE id = :id"
+        ), {"id": inbound_id})).first()
+        await _cleanup_inbound_and_case(session, inbound_id, result.case_id)
+        await _cleanup_source(session, source_id)
+        return result, row
+
+    result, row = _run_db_query(_go)
+    assert result.status == "processed"
+    assert row[0] == "processed"
+    # attempt_count incremented from 0 by process_event → 1
+    assert row[1] == 1
+    # last_error cleared by manual_replay (process_event success doesn't touch it)
+    assert row[2] is None
+
+
+def test_manual_replay_rejects_non_failed_status():
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+    import uuid as _uuid
+    tenant_id = f"t-replay-rej-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id, action="replay_events")
+        svc_id = await _first_service_item_id(session)
+        source_id = await _seed_source(
+            session, source_type="wazuh", tenant_id=tenant_id,
+            default_service_item_id=svc_id, created_by=actor.id,
+        )
+        inbound_id = await _seed_inbound_event(
+            session, source_id=source_id, tenant_id=tenant_id,
+            payload={"id": "ev-rej"}, status="processed",
+        )
+        uc = IntegrationsUseCases(db=session)
+        with _pytest.raises(ValidationError):
+            await uc.manual_replay(actor=actor, inbound_event_id=inbound_id)
+        await _cleanup_inbound_and_case(session, inbound_id, None)
+        await _cleanup_source(session, source_id)
+
+    _run_db_query(_go)
+
+
+def test_manual_replay_not_found_raises():
+    from backend.src.core.exceptions import NotFoundError
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+
+    async def _go(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id, action="replay_events")
+        uc = IntegrationsUseCases(db=session)
+        with _pytest.raises(NotFoundError):
+            await uc.manual_replay(
+                actor=actor,
+                inbound_event_id="00000000-0000-0000-0000-000000000000",
+            )
+
+    _run_db_query(_go)
+
+
+def test_manual_replay_requires_permission():
+    from backend.src.core.exceptions import PermissionDeniedError
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    # Reporter role: no integrations:replay_events
+    actor = _IntActor(
+        user_id="ec35a91e-5778-4210-a631-c5ed673c679d",
+        role_name="Reporter",
+    )
+
+    async def _go(session):
+        from sqlalchemy import text as _t
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await session.execute(_t(
+            "DELETE FROM permissions WHERE role_id = :r "
+            "AND module = 'integrations' AND action = 'replay_events'"
+        ), {"r": actor.role_id})
+        await session.commit()
+        uc = IntegrationsUseCases(db=session)
+        with _pytest.raises(PermissionDeniedError):
+            await uc.manual_replay(
+                actor=actor,
+                inbound_event_id="00000000-0000-0000-0000-000000000000",
+            )
+
+    _run_db_query(_go)
+
+
 def test_process_event_skip_when_already_processed():
     """Non-pending status → status='skip' without side effects."""
     from backend.src.modules.cases.application.use_cases import CaseUseCases

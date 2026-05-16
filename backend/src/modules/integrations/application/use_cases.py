@@ -331,6 +331,41 @@ class IntegrationsUseCases:
             )
             raise
 
+    # ── Manual replay (Task 11) ──────────────────────────────────────
+
+    async def manual_replay(
+        self, *, actor, inbound_event_id: str,
+    ) -> ProcessEventResult:
+        """Operator-initiated replay of a failed event.
+
+        Only allows status='failed' — the worker handles 'pending' rows on its
+        own, and replaying a 'processed' event would create a duplicate case.
+        Resets attempt_count/last_error/next_retry_at so the event re-enters
+        the pipeline as if it had just arrived.
+        """
+        await self._require(actor, "replay_events")
+
+        inbound = await self.db.get(InboundEventModel, inbound_event_id)
+        if inbound is None:
+            raise NotFoundError(
+                f"inbound_event {inbound_event_id} not found",
+            )
+        if inbound.status != "failed":
+            raise ValidationError(
+                f"Cannot replay event with status '{inbound.status}' "
+                "(only 'failed' is eligible)",
+            )
+
+        inbound.status = "pending"
+        inbound.attempt_count = 0
+        inbound.last_error = None
+        inbound.next_retry_at = None
+        await self.db.commit()
+
+        return await self.process_event(
+            inbound.id, system_user_id=actor.id,
+        )
+
     # ── Helpers for process_event ────────────────────────────────────
 
     async def _load_inbound_for_processing(
