@@ -267,3 +267,349 @@ def test_rate_limit_per_source_isolation():
     for _ in range(2):
         check_rate_limit("rl-iso-a", limit_per_minute=2)
     check_rate_limit("rl-iso-b", limit_per_minute=2)  # B still has full budget
+
+
+# ── Task 5: Source CRUD + secret rotation ──────────────────────────────
+
+
+import asyncio  # noqa: E402
+
+import pytest as _pytest  # noqa: E402
+
+
+def _run_db_query(async_query):
+    """Run an async DB callable inline using the real DATABASE_URL.
+    Mirrors the helper used in test_prioritization_engine.py."""
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from dotenv import dotenv_values
+
+    env = dotenv_values("backend/.env")
+    real_url = env.get("DATABASE_URL")
+    if not real_url:
+        _pytest.skip("DATABASE_URL not in backend/.env")
+
+    async def _go():
+        engine = create_async_engine(real_url)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                return await async_query(session)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_go())
+
+
+class _IntActor:
+    """Stand-in for CurrentUser used in integrations use-case tests."""
+    def __init__(self, user_id, role_name="Super Admin", tenant_id="t-int-test"):
+        self.user_id = user_id
+        # use_cases expect `.id` (created_by) AND `.role_id` / `.tenant_id`
+        self.id = user_id
+        self.role_name = role_name
+        self.tenant_id = tenant_id
+        self.role_id: str | None = None
+
+
+async def _resolve_role_id(session, role_name):
+    from sqlalchemy import text
+    row = (await session.execute(text(
+        "SELECT id FROM roles WHERE name = :n AND tenant_id IS NULL LIMIT 1"
+    ), {"n": role_name})).first()
+    return row[0] if row else None
+
+
+async def _ensure_integrations_permission(session, role_id, action="manage"):
+    """Idempotent INSERT of permissions row used until Task 14 seed lands."""
+    from sqlalchemy import text
+    import uuid as _uuid
+    exists = (await session.execute(text(
+        "SELECT 1 FROM permissions "
+        "WHERE role_id = :r AND module = 'integrations' AND action = :a LIMIT 1"
+    ), {"r": role_id, "a": action})).first()
+    if exists:
+        return
+    await session.execute(text(
+        "INSERT INTO permissions (id, role_id, module, action, scope) "
+        "VALUES (:id, :r, 'integrations', :a, 'all')"
+    ), {"id": str(_uuid.uuid4()), "r": role_id, "a": action})
+    await session.commit()
+
+
+def test_create_source_returns_plaintext_secret_distinct_from_db_value():
+    from backend.src.modules.integrations.application.dtos import CreateSourcePayload
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+
+    async def _setup_and_create(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id)
+        uc = IntegrationsUseCases(db=session)
+        result = await uc.create_source(
+            actor=actor,
+            payload=CreateSourcePayload(
+                tenant_id=actor.tenant_id,
+                name="Wazuh test source",
+                source_type="wazuh",
+                auth_method="hmac",
+            ),
+        )
+        # Cleanup
+        from sqlalchemy import text
+        await session.execute(text(
+            "DELETE FROM integration_sources WHERE id = :id"
+        ), {"id": result.source.id})
+        await session.commit()
+        return result
+
+    result = _run_db_query(_setup_and_create)
+    assert result.plaintext_secret  # non-empty
+    # Source response must NOT echo the encrypted secret either
+    assert not hasattr(result.source, "auth_secret_encrypted")
+    assert result.source.source_type == "wazuh"
+    assert result.source.auth_method == "hmac"
+
+
+def test_create_source_default_secret_decrypts_back_to_plaintext():
+    """The encrypted value persisted in DB roundtrips through decrypt_secret."""
+    from sqlalchemy import text
+    from backend.src.modules.integrations.application.crypto import decrypt_secret
+    from backend.src.modules.integrations.application.dtos import CreateSourcePayload
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+
+    async def _go(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id)
+        uc = IntegrationsUseCases(db=session)
+        result = await uc.create_source(
+            actor=actor,
+            payload=CreateSourcePayload(
+                tenant_id=actor.tenant_id, name="rt", source_type="custom",
+                auth_method="api_key",
+            ),
+        )
+        row = (await session.execute(text(
+            "SELECT auth_secret_encrypted FROM integration_sources WHERE id = :id"
+        ), {"id": result.source.id})).first()
+        encrypted = row[0]
+        plaintext = decrypt_secret(encrypted)
+        # Cleanup
+        await session.execute(text(
+            "DELETE FROM integration_sources WHERE id = :id"
+        ), {"id": result.source.id})
+        await session.commit()
+        return result.plaintext_secret, plaintext
+
+    returned, decrypted = _run_db_query(_go)
+    assert returned == decrypted
+
+
+def test_rotate_secret_returns_new_and_invalidates_old():
+    from sqlalchemy import text
+    from backend.src.modules.integrations.application.crypto import decrypt_secret
+    from backend.src.modules.integrations.application.dtos import CreateSourcePayload
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+
+    async def _go(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id)
+        uc = IntegrationsUseCases(db=session)
+        created = await uc.create_source(
+            actor=actor,
+            payload=CreateSourcePayload(
+                tenant_id=actor.tenant_id, name="rot",
+                source_type="wazuh", auth_method="hmac",
+            ),
+        )
+        old_plaintext = created.plaintext_secret
+        rotated = await uc.rotate_secret(actor=actor, source_id=created.source.id)
+        # DB now holds the new secret
+        row = (await session.execute(text(
+            "SELECT auth_secret_encrypted FROM integration_sources WHERE id = :id"
+        ), {"id": created.source.id})).first()
+        new_plaintext_in_db = decrypt_secret(row[0])
+        await session.execute(text(
+            "DELETE FROM integration_sources WHERE id = :id"
+        ), {"id": created.source.id})
+        await session.commit()
+        return old_plaintext, rotated.plaintext_secret, new_plaintext_in_db
+
+    old, returned_new, db_new = _run_db_query(_go)
+    assert old != returned_new
+    assert returned_new == db_new
+
+
+def test_create_source_denied_when_actor_lacks_permission():
+    """Actor with role missing integrations:manage → PermissionDeniedError."""
+    from backend.src.core.exceptions import PermissionDeniedError
+    from backend.src.modules.integrations.application.dtos import CreateSourcePayload
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    # 'Reporter' role exists in seed but has no integrations:manage
+    actor = _IntActor(
+        user_id="ec35a91e-5778-4210-a631-c5ed673c679d",
+        role_name="Reporter",
+    )
+
+    async def _go(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        # Defensive: drop any integrations:manage row that test runs may have inserted
+        from sqlalchemy import text
+        await session.execute(text(
+            "DELETE FROM permissions "
+            "WHERE role_id = :r AND module = 'integrations' AND action = 'manage'"
+        ), {"r": actor.role_id})
+        await session.commit()
+        uc = IntegrationsUseCases(db=session)
+        with _pytest.raises(PermissionDeniedError):
+            await uc.create_source(
+                actor=actor,
+                payload=CreateSourcePayload(
+                    tenant_id=actor.tenant_id, name="denied",
+                    source_type="wazuh", auth_method="hmac",
+                ),
+            )
+
+    _run_db_query(_go)
+
+
+def test_update_source_changes_name_keeps_secret():
+    from sqlalchemy import text
+    from backend.src.modules.integrations.application.dtos import (
+        CreateSourcePayload, UpdateSourcePayload,
+    )
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+
+    async def _go(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id)
+        uc = IntegrationsUseCases(db=session)
+        created = await uc.create_source(
+            actor=actor,
+            payload=CreateSourcePayload(
+                tenant_id=actor.tenant_id, name="old name",
+                source_type="custom", auth_method="api_key",
+            ),
+        )
+        original_encrypted = (await session.execute(text(
+            "SELECT auth_secret_encrypted FROM integration_sources WHERE id = :id"
+        ), {"id": created.source.id})).first()[0]
+
+        updated = await uc.update_source(
+            actor=actor, source_id=created.source.id,
+            payload=UpdateSourcePayload(name="new name", is_active=False),
+        )
+        after_encrypted = (await session.execute(text(
+            "SELECT auth_secret_encrypted FROM integration_sources WHERE id = :id"
+        ), {"id": created.source.id})).first()[0]
+
+        await session.execute(text(
+            "DELETE FROM integration_sources WHERE id = :id"
+        ), {"id": created.source.id})
+        await session.commit()
+        return updated, original_encrypted, after_encrypted
+
+    updated, before, after = _run_db_query(_go)
+    assert updated.name == "new name"
+    assert updated.is_active is False
+    assert before == after  # secret preserved
+
+
+def test_list_sources_returns_tenant_scoped():
+    from sqlalchemy import text
+    from backend.src.modules.integrations.application.dtos import CreateSourcePayload
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(
+        user_id="ec35a91e-5778-4210-a631-c5ed673c679d",
+        tenant_id="t-list-test",
+    )
+
+    async def _go(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id)
+        await _ensure_integrations_permission(session, actor.role_id, action="read")
+        uc = IntegrationsUseCases(db=session)
+        created = await uc.create_source(
+            actor=actor,
+            payload=CreateSourcePayload(
+                tenant_id=actor.tenant_id, name="listed",
+                source_type="wazuh", auth_method="hmac",
+            ),
+        )
+        sources = await uc.list_sources(actor=actor)
+        ids = {s.id for s in sources}
+        await session.execute(text(
+            "DELETE FROM integration_sources WHERE id = :id"
+        ), {"id": created.source.id})
+        await session.commit()
+        return created.source.id, ids
+
+    created_id, listed_ids = _run_db_query(_go)
+    assert created_id in listed_ids
+
+
+def test_get_source_not_found_raises():
+    from backend.src.core.exceptions import NotFoundError
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+
+    async def _go(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id, action="read")
+        uc = IntegrationsUseCases(db=session)
+        with _pytest.raises(NotFoundError):
+            await uc.get_source(actor=actor, source_id="00000000-0000-0000-0000-000000000000")
+
+    _run_db_query(_go)
+
+
+def test_delete_source_removes_when_no_events():
+    from sqlalchemy import text
+    from backend.src.modules.integrations.application.dtos import CreateSourcePayload
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+
+    async def _go(session):
+        actor.role_id = await _resolve_role_id(session, actor.role_name)
+        await _ensure_integrations_permission(session, actor.role_id)
+        uc = IntegrationsUseCases(db=session)
+        created = await uc.create_source(
+            actor=actor,
+            payload=CreateSourcePayload(
+                tenant_id=actor.tenant_id, name="todel",
+                source_type="custom", auth_method="api_key",
+            ),
+        )
+        await uc.delete_source(actor=actor, source_id=created.source.id)
+        row = (await session.execute(text(
+            "SELECT 1 FROM integration_sources WHERE id = :id"
+        ), {"id": created.source.id})).first()
+        return row
+
+    row = _run_db_query(_go)
+    assert row is None
