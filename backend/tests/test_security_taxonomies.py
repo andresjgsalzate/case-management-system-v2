@@ -62,6 +62,168 @@ def _build_manager_actor():
     return actor
 
 
+def _e2e_setup():
+    """Returns (client, _cleanup_coro, _make_jwt_coro) for E2E tests.
+
+    Overrides get_db dependency in the FastAPI app to use a real DB session
+    bound to backend/.env DATABASE_URL (the conftest sandbox uses a fake URL
+    which the unit tests don't need but E2E does).
+    """
+    from httpx import AsyncClient, ASGITransport
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from dotenv import dotenv_values
+    from backend.src.main import app
+    from backend.src.core.database import get_db
+
+    env = dotenv_values("backend/.env")
+    real_url = env.get("DATABASE_URL")
+    if not real_url:
+        raise RuntimeError("DATABASE_URL missing from backend/.env")
+
+    engine = create_async_engine(real_url)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _override():
+        async with Session() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://test")
+
+    async def cleanup():
+        await client.aclose()
+        if get_db in app.dependency_overrides:
+            del app.dependency_overrides[get_db]
+        await engine.dispose()
+
+    async def make_jwt(role_name: str, user_id: str = "ec35a91e-5778-4210-a631-c5ed673c679d",
+                       tenant_id: str = "test-tenant-e2e"):
+        from sqlalchemy import text
+        from backend.src.core.security import create_access_token
+        async with Session() as session:
+            row = (await session.execute(text(
+                "SELECT id, level FROM roles "
+                "WHERE name = :n AND tenant_id IS NULL LIMIT 1"
+            ), {"n": role_name})).first()
+        if not row:
+            raise RuntimeError(f"Role '{role_name}' not found")
+        return create_access_token(
+            subject=user_id,
+            extra_claims={
+                "role_id": row[0], "role_level": int(row[1]),
+                "tenant_id": tenant_id, "email": "test-e2e@example.com",
+            },
+        )
+
+    return client, cleanup, make_jwt
+
+
+def test_e2e_list_endpoint_with_admin_token():
+    """GET /api/v1/security-taxonomies with Admin JWT → 200 + seeded globals visible."""
+    import asyncio
+
+    async def _go():
+        client, cleanup, make_jwt = _e2e_setup()
+        try:
+            token = await make_jwt("Admin")
+            r = await client.get(
+                "/api/v1/security-taxonomies",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            return r.status_code, r.json()
+        finally:
+            await cleanup()
+
+    status, body = asyncio.run(_go())
+    assert status == 200, f"Got {status}: {body}"
+    codes = {item["tuic_code"] for item in body["data"]}
+    assert "RANSOM-LOCKBIT" in codes, f"Expected RANSOM-LOCKBIT in response, got {codes}"
+
+
+def test_e2e_403_when_role_lacks_audit_permission():
+    """Reporter has only 'read' — calling /audit-log → 403."""
+    import asyncio
+
+    async def _go():
+        client, cleanup, make_jwt = _e2e_setup()
+        try:
+            token = await make_jwt("Reporter")
+            r = await client.get(
+                # any uuid is fine — permission gate runs before lookup
+                "/api/v1/security-taxonomies/00000000-0000-0000-0000-000000000000/audit-log",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            return r.status_code
+        finally:
+            await cleanup()
+
+    status = asyncio.run(_go())
+    assert status == 403, f"Expected 403, got {status}"
+
+
+def test_e2e_post_create_roundtrip():
+    """POST create → GET detail → DELETE cleanup → all under real auth + DB."""
+    import asyncio
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    tuic = f"TEST-E2E-{_uuid.uuid4().hex[:8].upper()}"
+
+    async def _go():
+        client, cleanup, make_jwt = _e2e_setup()
+        try:
+            token = await make_jwt("Super Admin")  # needs manage_global for global create
+            headers = {"Authorization": f"Bearer {token}"}
+
+            create_resp = await client.post(
+                "/api/v1/security-taxonomies",
+                json={
+                    "tenant_id": None, "tuic_code": tuic, "name": "e2e test",
+                    "default_case_type": "event", "requires_ticket": False,
+                    "triage_mode": "auto", "tlp_default": "amber",
+                    "mitre_techniques": [],
+                },
+                headers=headers,
+            )
+            if create_resp.status_code != 201:
+                return create_resp.status_code, create_resp.json(), None, None
+
+            created_id = create_resp.json()["data"]["id"]
+            get_resp = await client.get(
+                f"/api/v1/security-taxonomies/{created_id}", headers=headers,
+            )
+            return (create_resp.status_code, create_resp.json(),
+                    get_resp.status_code, get_resp.json())
+        finally:
+            await cleanup()
+
+    create_status, create_body, get_status, get_body = asyncio.run(_go())
+    try:
+        assert create_status == 201, f"Create failed: {create_status} {create_body}"
+        assert get_status == 200, f"Get failed: {get_status} {get_body}"
+        assert create_body["data"]["tuic_code"] == tuic
+        assert get_body["data"]["tuic_code"] == tuic
+        assert get_body["data"]["tenant_id"] is None
+    finally:
+        # SQL cleanup — independent connection
+        async def _del():
+            from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+            from dotenv import dotenv_values
+            env = dotenv_values("backend/.env")
+            engine = create_async_engine(env["DATABASE_URL"])
+            try:
+                async with AsyncSession(engine) as s:
+                    await s.execute(text(
+                        "DELETE FROM security_taxonomies "
+                        "WHERE tuic_code = :c AND tenant_id IS NULL"
+                    ), {"c": tuic})
+                    await s.commit()
+            finally:
+                await engine.dispose()
+        asyncio.run(_del())
+
+
 def test_router_endpoints_registered():
     """Smoke: security_taxonomies router mounted with expected paths."""
     from backend.src.main import app
