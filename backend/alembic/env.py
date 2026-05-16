@@ -62,6 +62,11 @@ from backend.src.modules.prioritization.infrastructure.models import (
     PrioritizationFormulaModel, PrioritizationFormulaCriterionModel,
     PrioritizationThresholdModel, CasePriorityCalculationModel,
 )
+# SOC Sub-spec 04
+from backend.src.modules.integrations.infrastructure.models import (
+    IntegrationSourceModel, IntegrationMappingModel,
+    InboundEventModel, WazuhRuleTaxonomyMapModel,
+)
 
 # Alembic Config object
 config = context.config
