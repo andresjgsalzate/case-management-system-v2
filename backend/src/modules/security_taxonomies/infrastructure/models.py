@@ -85,9 +85,11 @@ class SecurityTaxonomyModel(Base):
         String(20), nullable=False, server_default="amber"
     )
 
-    # FK to prioritization_formulas added by Sub-spec 03 migration
+    # FK wired by Sub-spec 03 Task 2 (prioritization_formulas table now exists).
     prioritization_formula_id: Mapped[str | None] = mapped_column(
-        String(36), nullable=True
+        String(36),
+        ForeignKey("prioritization_formulas.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     mitre_techniques: Mapped[list] = mapped_column(
