@@ -761,3 +761,154 @@ def test_normalized_event_dataclass_defaults():
     assert e.wazuh_rule_id is None
     assert e.wazuh_rule_groups == []
     assert e.wazuh_level is None
+
+
+# ── Task 7: Generic JSONPath parser ────────────────────────────────────
+
+
+class _Mapping:
+    """Stand-in for IntegrationMappingModel rows passed to parse_via_mappings."""
+    def __init__(
+        self, target_field, json_path,
+        transform=None, default_value=None, is_required=False,
+    ):
+        self.target_field = target_field
+        self.json_path = json_path
+        self.transform = transform
+        self.default_value = default_value
+        self.is_required = is_required
+
+
+def _run_async(coro):
+    """Tiny helper to call an async function from sync test bodies."""
+    return asyncio.run(coro)
+
+
+def test_generic_parser_extracts_title_via_jsonpath():
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    payload = {"event": {"name": "Custom alert", "id": "abc"}}
+    mappings = [
+        _Mapping(target_field="title", json_path="$.event.name", is_required=True),
+    ]
+    event = _run_async(parse_via_mappings(payload, mappings))
+    assert event.title == "Custom alert"
+
+
+def test_generic_parser_required_field_missing_raises_validation_error():
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    mappings = [
+        _Mapping(target_field="title", json_path="$.missing.path", is_required=True),
+    ]
+    with _pytest.raises(ValidationError):
+        _run_async(parse_via_mappings({"foo": "bar"}, mappings))
+
+
+def test_generic_parser_optional_missing_falls_back_to_default_value():
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    mappings = [
+        _Mapping(
+            target_field="title", json_path="$.missing",
+            default_value="DEFAULT TITLE",
+        ),
+    ]
+    event = _run_async(parse_via_mappings({}, mappings))
+    assert event.title == "DEFAULT TITLE"
+
+
+def test_generic_parser_optional_missing_no_default_skips_field():
+    """No match, no default, not required → field stays at NormalizedEvent default."""
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    mappings = [
+        _Mapping(target_field="title", json_path="$.missing"),
+    ]
+    event = _run_async(parse_via_mappings({}, mappings))
+    # Title falls back to NormalizedEvent's own default
+    assert event.title == "Untitled event"
+
+
+def test_generic_parser_uppercase_transform():
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    mappings = [
+        _Mapping(target_field="title", json_path="$.x", transform="uppercase"),
+    ]
+    event = _run_async(parse_via_mappings({"x": "lower"}, mappings))
+    assert event.title == "LOWER"
+
+
+def test_generic_parser_truncate_transform_with_arg():
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    mappings = [
+        _Mapping(target_field="title", json_path="$.x", transform="truncate(5)"),
+    ]
+    event = _run_async(parse_via_mappings({"x": "abcdefghij"}, mappings))
+    assert event.title == "abcde"
+
+
+def test_generic_parser_regex_transform_extracts_match():
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    mappings = [
+        _Mapping(
+            target_field="title", json_path="$.x",
+            transform=r"regex:CVE-\d{4}-\d+",
+        ),
+    ]
+    event = _run_async(parse_via_mappings(
+        {"x": "Patch fixes CVE-2026-12345 in OpenSSL"}, mappings,
+    ))
+    assert event.title == "CVE-2026-12345"
+
+
+def test_generic_parser_custom_prefix_routes_to_custom_values():
+    """target_field='custom.affected_user' → custom_values['affected_user']."""
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    mappings = [
+        _Mapping(
+            target_field="custom.affected_user",
+            json_path="$.user", is_required=True,
+        ),
+    ]
+    event = _run_async(parse_via_mappings({"user": "alice"}, mappings))
+    assert event.custom_values["affected_user"] == "alice"
+
+
+def test_generic_parser_unknown_transform_passes_value_through():
+    """Unknown transform name silently no-ops rather than crashing the pipeline."""
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    mappings = [
+        _Mapping(
+            target_field="title", json_path="$.x",
+            transform="nonexistent_transform",
+        ),
+    ]
+    event = _run_async(parse_via_mappings({"x": "raw"}, mappings))
+    assert event.title == "raw"
+
+
+def test_generic_parser_title_truncated_to_500_chars():
+    from backend.src.modules.integrations.application.parsers.generic import (
+        parse_via_mappings,
+    )
+    mappings = [
+        _Mapping(target_field="title", json_path="$.x", is_required=True),
+    ]
+    event = _run_async(parse_via_mappings({"x": "Y" * 600}, mappings))
+    assert len(event.title) == 500
