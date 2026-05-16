@@ -162,3 +162,108 @@ def test_default_header_names_used_when_source_field_is_null():
     from backend.src.modules.integrations.application.auth import validate_auth
     source = _FakeSource(auth_method="api_key", auth_header_name=None)
     validate_auth(source, b'{}', {"x-api-key": "k"}, secret="k")  # default 'X-API-Key'
+
+
+# ── Task 4: Idempotency key + rate limiting ────────────────────────────
+
+
+class _FakeIdSource:
+    """Stand-in for IntegrationSourceModel exposing the fields needed by
+    calculate_idempotency_key."""
+    def __init__(self, id, source_type):
+        self.id = id
+        self.source_type = source_type
+
+
+def test_idempotency_key_wazuh_is_deterministic():
+    from backend.src.modules.integrations.application.idempotency import (
+        calculate_idempotency_key,
+    )
+    source = _FakeIdSource(id="src-1", source_type="wazuh")
+    payload = {
+        "id": "1234.567", "rule": {"id": 87123},
+        "agent": {"id": "001"}, "timestamp": "2026-01-01T00:00:00Z",
+    }
+    assert calculate_idempotency_key(source, payload) == calculate_idempotency_key(source, payload)
+
+
+def test_idempotency_key_wazuh_ignores_irrelevant_payload_fields():
+    """Two Wazuh events with the same canonical subset (id+rule+agent+ts) but
+    different `full_log` text yield the same key — re-deliveries of the same
+    alert should dedupe."""
+    from backend.src.modules.integrations.application.idempotency import (
+        calculate_idempotency_key,
+    )
+    source = _FakeIdSource(id="src-1", source_type="wazuh")
+    base = {
+        "id": "1234.567", "rule": {"id": 87123},
+        "agent": {"id": "001"}, "timestamp": "2026-01-01T00:00:00Z",
+    }
+    p1 = {**base, "full_log": "first delivery"}
+    p2 = {**base, "full_log": "second delivery with different text"}
+    assert calculate_idempotency_key(source, p1) == calculate_idempotency_key(source, p2)
+
+
+def test_idempotency_key_different_payloads_yield_different_keys():
+    from backend.src.modules.integrations.application.idempotency import (
+        calculate_idempotency_key,
+    )
+    source = _FakeIdSource(id="src-1", source_type="wazuh")
+    p1 = {"id": "1234.567", "rule": {"id": 87123}, "agent": {"id": "001"}}
+    p2 = {"id": "9999.000", "rule": {"id": 87123}, "agent": {"id": "001"}}
+    assert calculate_idempotency_key(source, p1) != calculate_idempotency_key(source, p2)
+
+
+def test_idempotency_key_includes_source_id():
+    """Same payload, different source → different keys (so a Wazuh event seen
+    by both prod and DR managers does not collide)."""
+    from backend.src.modules.integrations.application.idempotency import (
+        calculate_idempotency_key,
+    )
+    payload = {"id": "1.2", "rule": {"id": 100}, "agent": {"id": "001"}}
+    src_a = _FakeIdSource(id="src-a", source_type="wazuh")
+    src_b = _FakeIdSource(id="src-b", source_type="wazuh")
+    assert calculate_idempotency_key(src_a, payload) != calculate_idempotency_key(src_b, payload)
+
+
+def test_idempotency_key_generic_source_uses_full_payload():
+    """Unknown source_type falls back to sha256 of the full payload."""
+    from backend.src.modules.integrations.application.idempotency import (
+        calculate_idempotency_key,
+    )
+    source = _FakeIdSource(id="s", source_type="custom")
+    p1 = {"foo": "bar"}
+    p2 = {"foo": "baz"}
+    assert calculate_idempotency_key(source, p1) != calculate_idempotency_key(source, p2)
+
+
+def test_rate_limit_allows_calls_under_limit():
+    from backend.src.modules.integrations.application.idempotency import (
+        check_rate_limit, reset_rate_limit_for_source,
+    )
+    reset_rate_limit_for_source("rl-under")
+    for _ in range(5):
+        check_rate_limit("rl-under", limit_per_minute=10)  # no raise
+
+
+def test_rate_limit_raises_when_exceeded():
+    from backend.src.modules.integrations.application.idempotency import (
+        RateLimitExceededError, check_rate_limit, reset_rate_limit_for_source,
+    )
+    reset_rate_limit_for_source("rl-over")
+    for _ in range(3):
+        check_rate_limit("rl-over", limit_per_minute=3)
+    with pytest.raises(RateLimitExceededError):
+        check_rate_limit("rl-over", limit_per_minute=3)
+
+
+def test_rate_limit_per_source_isolation():
+    """Hitting the limit on source A does not affect source B."""
+    from backend.src.modules.integrations.application.idempotency import (
+        check_rate_limit, reset_rate_limit_for_source,
+    )
+    reset_rate_limit_for_source("rl-iso-a")
+    reset_rate_limit_for_source("rl-iso-b")
+    for _ in range(2):
+        check_rate_limit("rl-iso-a", limit_per_minute=2)
+    check_rate_limit("rl-iso-b", limit_per_minute=2)  # B still has full budget
