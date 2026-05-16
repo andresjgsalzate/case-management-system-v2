@@ -317,9 +317,18 @@ class IntegrationsUseCases:
             return ProcessEventResult(status="processed", case_id=case.id)
 
         except Exception as e:
-            inbound.last_error = f"{type(e).__name__}: {str(e)[:1000]}"
-            inbound.status = "failed"  # Task 10 will replace with smart retry
-            await self.db.commit()
+            # Reload source (it may not have been loaded yet if parse blew up)
+            try:
+                source_for_metrics = source  # type: ignore[name-defined]
+            except NameError:
+                source_for_metrics = await self._load_source(inbound.source_id)
+            from backend.src.modules.integrations.application.retry import (
+                handle_processing_failure,
+            )
+            await handle_processing_failure(
+                self.db, inbound, source_for_metrics, e,
+                events_bus=self.events_bus,
+            )
             raise
 
     # ── Helpers for process_event ────────────────────────────────────

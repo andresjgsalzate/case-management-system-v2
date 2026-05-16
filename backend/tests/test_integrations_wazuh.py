@@ -1539,6 +1539,206 @@ def test_process_event_delegate_to_n8n_calls_bridge():
     assert n8n.calls[0]["case_id"] == result.case_id
 
 
+# ── Task 10: Retry logic + dead letter ────────────────────────────────
+
+
+class _RecordingBus:
+    """Records BaseEvent publishes for assertions."""
+    def __init__(self):
+        self.events: list = []
+
+    async def publish(self, event):
+        self.events.append(event)
+
+
+def test_compute_backoff_seconds_progression():
+    """attempt 1 → 2s, 2 → 8s, 3 → 32s (exponential with base 4)."""
+    from backend.src.modules.integrations.application.retry import (
+        compute_backoff_seconds,
+    )
+    assert compute_backoff_seconds(1) == 2
+    assert compute_backoff_seconds(2) == 8
+    assert compute_backoff_seconds(3) == 32
+
+
+def test_handle_failure_schedules_retry_when_attempts_remain():
+    """attempt_count < max_attempts → status='pending', next_retry_at set."""
+    from backend.src.modules.integrations.application.retry import (
+        handle_processing_failure,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+    import uuid as _uuid
+    tenant_id = f"t-retry-sched-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        svc_id = await _first_service_item_id(session)
+        source_id = await _seed_source(
+            session, source_type="wazuh", tenant_id=tenant_id,
+            default_service_item_id=svc_id, created_by=actor.id,
+        )
+        inbound_id = await _seed_inbound_event(
+            session, source_id=source_id, tenant_id=tenant_id,
+            payload={"id": "ev-retry-1"}, status="processing",
+        )
+        # Simulate already-incremented attempt_count from a prior attempt
+        from sqlalchemy import text as _t
+        await session.execute(_t(
+            "UPDATE inbound_events SET attempt_count = 1 WHERE id = :id"
+        ), {"id": inbound_id})
+        await session.commit()
+
+        inbound = (await session.execute(_t(
+            "SELECT id, status, next_retry_at, last_error, attempt_count, "
+            "max_attempts, source_id FROM inbound_events WHERE id = :id"
+        ), {"id": inbound_id})).first()
+
+        # Pull a fresh ORM object so handle_processing_failure can mutate it.
+        from backend.src.modules.integrations.infrastructure.models import (
+            InboundEventModel, IntegrationSourceModel,
+        )
+        inbound_obj = await session.get(InboundEventModel, inbound_id)
+        source_obj = await session.get(IntegrationSourceModel, source_id)
+
+        await handle_processing_failure(
+            session, inbound_obj, source_obj, RuntimeError("boom"),
+            events_bus=None,
+        )
+
+        # Reload
+        row = (await session.execute(_t(
+            "SELECT status, next_retry_at, last_error, attempt_count "
+            "FROM inbound_events WHERE id = :id"
+        ), {"id": inbound_id})).first()
+        failed_count = (await session.execute(_t(
+            "SELECT total_events_failed FROM integration_sources WHERE id = :id"
+        ), {"id": source_id})).first()[0]
+
+        await _cleanup_inbound_and_case(session, inbound_id, None)
+        await _cleanup_source(session, source_id)
+        return row, failed_count
+
+    row, failed_count = _run_db_query(_go)
+    assert row[0] == "pending"
+    assert row[1] is not None  # next_retry_at scheduled
+    assert "RuntimeError: boom" in row[2]
+    assert row[3] == 1  # attempt_count unchanged by handler
+    assert failed_count == 1
+
+
+def test_handle_failure_marks_failed_after_max_attempts():
+    """attempt_count >= max_attempts → status='failed', next_retry_at=NULL."""
+    from backend.src.modules.integrations.application.retry import (
+        handle_processing_failure,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+    import uuid as _uuid
+    tenant_id = f"t-retry-dead-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        from sqlalchemy import text as _t
+        svc_id = await _first_service_item_id(session)
+        source_id = await _seed_source(
+            session, source_type="wazuh", tenant_id=tenant_id,
+            default_service_item_id=svc_id, created_by=actor.id,
+        )
+        inbound_id = await _seed_inbound_event(
+            session, source_id=source_id, tenant_id=tenant_id,
+            payload={"id": "ev-retry-dead"}, status="processing",
+        )
+        # Simulate this being the final (3rd) attempt
+        await session.execute(_t(
+            "UPDATE inbound_events SET attempt_count = 3, max_attempts = 3 "
+            "WHERE id = :id"
+        ), {"id": inbound_id})
+        await session.commit()
+
+        from backend.src.modules.integrations.infrastructure.models import (
+            InboundEventModel, IntegrationSourceModel,
+        )
+        inbound_obj = await session.get(InboundEventModel, inbound_id)
+        source_obj = await session.get(IntegrationSourceModel, source_id)
+
+        bus = _RecordingBus()
+        await handle_processing_failure(
+            session, inbound_obj, source_obj,
+            ValueError("permanent"), events_bus=bus,
+        )
+
+        row = (await session.execute(_t(
+            "SELECT status, next_retry_at, last_error "
+            "FROM inbound_events WHERE id = :id"
+        ), {"id": inbound_id})).first()
+        await _cleanup_inbound_and_case(session, inbound_id, None)
+        await _cleanup_source(session, source_id)
+        return row, bus.events
+
+    row, events = _run_db_query(_go)
+    assert row[0] == "failed"
+    assert row[1] is None
+    assert "ValueError: permanent" in row[2]
+    assert len(events) == 1
+    assert events[0].event_name == "inbound_event.failed"
+    assert "permanent" in events[0].payload["error"]
+
+
+def test_process_event_retries_on_failure_does_not_mark_failed_prematurely():
+    """E2E: process_event with a bad source (no service_item, no taxonomy)
+    should mark inbound for retry, not failed, on first attempt."""
+    from backend.src.modules.cases.application.use_cases import CaseUseCases
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+    from backend.src.modules.security_taxonomies.application.use_cases import (
+        SecurityTaxonomyUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+    import uuid as _uuid
+    tenant_id = f"t-retry-e2e-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        from sqlalchemy import text as _t
+        # Source WITHOUT default_service_item_id → ValidationError inside process_event
+        source_id = await _seed_source(
+            session, source_type="wazuh", tenant_id=tenant_id,
+            default_service_item_id=None, created_by=actor.id,
+        )
+        inbound_id = await _seed_inbound_event(
+            session, source_id=source_id, tenant_id=tenant_id,
+            payload={
+                "id": "ev-retry-e2e", "timestamp": "2026-05-16T11:00:00Z",
+                "rule": {"id": 88888, "level": 3, "groups": [], "description": "x"},
+                "agent": {"id": "001", "name": "h"},
+                "data": {},
+            },
+        )
+        uc = IntegrationsUseCases(
+            db=session,
+            taxonomies_uc=SecurityTaxonomyUseCases(db=session),
+            cases_uc=CaseUseCases(db=session),
+        )
+        # process_event still reraises so callers see failures in logs;
+        # the side-effect we care about is the inbound row's state.
+        with _pytest.raises(Exception):
+            await uc.process_event(inbound_id, system_user_id=actor.id)
+
+        row = (await session.execute(_t(
+            "SELECT status, next_retry_at, attempt_count "
+            "FROM inbound_events WHERE id = :id"
+        ), {"id": inbound_id})).first()
+        await _cleanup_inbound_and_case(session, inbound_id, None)
+        await _cleanup_source(session, source_id)
+        return row
+
+    row = _run_db_query(_go)
+    # First attempt of 3 → scheduled retry, not dead-letter
+    assert row[0] == "pending"
+    assert row[1] is not None
+    assert row[2] == 1
+
+
 def test_process_event_skip_when_already_processed():
     """Non-pending status → status='skip' without side effects."""
     from backend.src.modules.cases.application.use_cases import CaseUseCases
