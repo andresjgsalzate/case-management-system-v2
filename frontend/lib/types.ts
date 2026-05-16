@@ -707,3 +707,110 @@ export interface PriorityCalculation {
   triggered_by: CalculationTriggeredBy;
   triggered_by_user: string | null;
 }
+
+// ── Sub-spec 04 — Inbound Integrations & Wazuh Adapter ───────────────────────
+
+export type SourceType =
+  | "wazuh"
+  | "splunk"
+  | "sentinel"
+  | "crowdstrike"
+  | "qradar"
+  | "wazuh_velociraptor"
+  | "custom";
+
+export type AuthMethod = "hmac" | "api_key" | "bearer" | "none";
+
+export type InboundEventStatus =
+  | "pending"
+  | "processing"
+  | "processed"
+  | "failed"
+  | "duplicate";
+
+export interface IntegrationSource {
+  id: string;
+  tenant_id: string | null;
+  name: string;
+  source_type: SourceType;
+  auth_method: AuthMethod;
+  auth_header_name: string | null;
+  default_service_item_id: string | null;
+  default_priority_id: string | null;
+  is_active: boolean;
+  rate_limit_per_minute: number | null;
+  last_event_received_at: string | null;
+  last_event_processed_at: string | null;
+  total_events_received: number;
+  total_events_failed: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+}
+
+export interface CreateIntegrationSourcePayload {
+  tenant_id?: string | null;
+  name: string;
+  source_type: SourceType;
+  auth_method: AuthMethod;
+  auth_header_name?: string | null;
+  default_service_item_id?: string | null;
+  default_priority_id?: string | null;
+  rate_limit_per_minute?: number | null;
+}
+
+export interface UpdateIntegrationSourcePayload {
+  name?: string;
+  auth_header_name?: string | null;
+  default_service_item_id?: string | null;
+  default_priority_id?: string | null;
+  rate_limit_per_minute?: number | null;
+  is_active?: boolean;
+}
+
+export interface CreateSourceResponse {
+  source: IntegrationSource;
+  plaintext_secret: string;
+  webhook_url: string | null;
+}
+
+export interface RotateSecretResponse {
+  source_id: string;
+  plaintext_secret: string;
+}
+
+export type WazuhMatchStrategy =
+  | "rule_id"
+  | "rule_groups_any"
+  | "rule_groups_all"
+  | "level_min"
+  | "level_range";
+
+export interface WazuhRuleMapping {
+  id: string;
+  tenant_id: string | null;
+  source_id: string | null;
+  match_strategy: WazuhMatchStrategy;
+  match_value: Record<string, unknown>;
+  taxonomy_id: string;
+  priority_order: number;
+  is_active: boolean;
+  description: string | null;
+}
+
+export interface InboundEvent {
+  id: string;
+  source_id: string;
+  tenant_id: string | null;
+  idempotency_key: string;
+  raw_payload: Record<string, unknown>;
+  case_id: string | null;
+  status: InboundEventStatus;
+  attempt_count: number;
+  max_attempts: number;
+  last_error: string | null;
+  last_attempted_at: string | null;
+  next_retry_at: string | null;
+  received_at: string;
+  processed_at: string | null;
+}
