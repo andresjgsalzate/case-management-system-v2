@@ -186,6 +186,168 @@ def test_calculate_priority_persists_calculation_and_updates_case():
         _run_db_query(_cleanup)
 
 
+class _FakeActor:
+    """Minimal CurrentUser-like stub for use case tests."""
+    def __init__(self, user_id, role_name="Super Admin", tenant_id="t-fake"):
+        self.user_id = user_id
+        self.tenant_id = tenant_id
+        self.role_name = role_name
+        self.role_id: str | None = None
+
+
+async def _resolve_actor_role_id(session, actor: "_FakeActor"):
+    if actor.role_id is None:
+        from sqlalchemy import text
+        row = (await session.execute(text(
+            "SELECT id FROM roles WHERE name = :n AND tenant_id IS NULL LIMIT 1"
+        ), {"n": actor.role_name})).first()
+        actor.role_id = row[0] if row else None
+    return actor.role_id
+
+
+def test_create_formula_v2_supersedes_v1():
+    """Creating v2 with base_version_id=v1 → v1.is_active=false, v1.superseded_by_id=v2.id."""
+    import uuid as _uuid
+    from decimal import Decimal
+    from sqlalchemy import text
+
+    logical = f"test-formula-{_uuid.uuid4().hex[:6]}"
+
+    async def _seed_v1(session):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        actor = _FakeActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+        actor.role_id = await _resolve_actor_role_id(session, actor)
+        uc = PrioritizationUseCases(db=session)
+        v1 = await uc.create_formula_version(
+            actor=actor,
+            tenant_id=None,
+            logical_key=logical,
+            base_version_id=None,
+            name="Test v1",
+            description="initial",
+            criteria_weights={"severity": Decimal("0.5"),
+                              "impact": Decimal("0.3"),
+                              "asset_criticality": Decimal("0.2")},
+            thresholds=[
+                (Decimal("0.0"), Decimal("2.49"), "Baja"),
+                (Decimal("2.5"), Decimal("3.49"), "Media"),
+                (Decimal("3.5"), Decimal("4.49"), "Alta"),
+                (Decimal("4.5"), Decimal("5.0"), "Critica"),
+            ],
+        )
+        await session.commit()
+        return v1.id
+
+    async def _seed_v2_and_check(session, v1_id):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        actor = _FakeActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+        actor.role_id = await _resolve_actor_role_id(session, actor)
+        uc = PrioritizationUseCases(db=session)
+        v2 = await uc.create_formula_version(
+            actor=actor,
+            tenant_id=None,
+            logical_key=logical,
+            base_version_id=v1_id,
+            name="Test v2",
+            description="updated",
+            criteria_weights={"severity": Decimal("0.4"),
+                              "impact": Decimal("0.4"),
+                              "asset_criticality": Decimal("0.2")},
+            thresholds=[
+                (Decimal("0.0"), Decimal("2.49"), "Baja"),
+                (Decimal("2.5"), Decimal("3.49"), "Media"),
+                (Decimal("3.5"), Decimal("4.49"), "Alta"),
+                (Decimal("4.5"), Decimal("5.0"), "Critica"),
+            ],
+        )
+        await session.commit()
+        rows = (await session.execute(text(
+            "SELECT version, is_active, superseded_by_id FROM prioritization_formulas "
+            "WHERE id IN (:v1, :v2) ORDER BY version"
+        ), {"v1": v1_id, "v2": v2.id})).all()
+        return v2.id, [(int(r[0]), r[1], r[2]) for r in rows]
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM prioritization_formulas "
+            "WHERE logical_key = :k AND tenant_id IS NULL"
+        ), {"k": logical})
+        await session.commit()
+
+    try:
+        v1_id = _run_db_query(_seed_v1)
+        v2_id, rows = _run_db_query(lambda s: _seed_v2_and_check(s, v1_id))
+        # rows ordered by version ASC: [(1, ..., ...), (2, ..., ...)]
+        v1_row, v2_row = rows
+        assert v1_row[0] == 1 and v2_row[0] == 2
+        assert v1_row[1] is False, "v1 should be deactivated after supersession"
+        assert v1_row[2] == v2_id, f"v1.superseded_by_id expected {v2_id}, got {v1_row[2]}"
+        assert v2_row[1] is True, "v2 should be active"
+        assert v2_row[2] is None, "v2 should not be superseded"
+    finally:
+        _run_db_query(_cleanup)
+
+
+def test_create_formula_rejects_weights_not_summing_to_one():
+    """Weights summing to 0.99 → ValidationError, no row inserted."""
+    from decimal import Decimal
+    from backend.src.core.exceptions import ValidationError
+
+    async def _run(session):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        actor = _FakeActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+        actor.role_id = await _resolve_actor_role_id(session, actor)
+        uc = PrioritizationUseCases(db=session)
+        try:
+            await uc.create_formula_version(
+                actor=actor, tenant_id=None, logical_key="test-bad-weights",
+                base_version_id=None, name="bad", description=None,
+                criteria_weights={"severity": Decimal("0.50"),
+                                  "impact": Decimal("0.49")},
+                thresholds=[(Decimal("0.0"), Decimal("5.0"), "Baja")],
+            )
+            return False
+        except ValidationError:
+            return True
+
+    assert _run_db_query(_run) is True
+
+
+def test_create_formula_rejects_thresholds_with_gap():
+    """Thresholds [(0,2),(3,5)] → ValidationError (gap at 2.0–3.0)."""
+    from decimal import Decimal
+    from backend.src.core.exceptions import ValidationError
+
+    async def _run(session):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        actor = _FakeActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+        actor.role_id = await _resolve_actor_role_id(session, actor)
+        uc = PrioritizationUseCases(db=session)
+        try:
+            await uc.create_formula_version(
+                actor=actor, tenant_id=None, logical_key="test-bad-thresholds",
+                base_version_id=None, name="bad", description=None,
+                criteria_weights={"severity": Decimal("1.0")},
+                thresholds=[
+                    (Decimal("0.0"), Decimal("2.0"), "Baja"),
+                    (Decimal("3.0"), Decimal("5.0"), "Alta"),  # gap at 2..3
+                ],
+            )
+            return False
+        except ValidationError:
+            return True
+
+    assert _run_db_query(_run) is True
+
+
 def test_formula_resolution_via_taxonomy_wins_over_default():
     """When case.taxonomy.prioritization_formula_id is set, that formula is used
     instead of the tenant/global 'soc-default'."""

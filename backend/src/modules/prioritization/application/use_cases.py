@@ -324,6 +324,219 @@ class PrioritizationUseCases:
         )
         return (await self.db.execute(global_stmt)).scalar_one_or_none()
 
+    # ── Formula version creation (immutable + supersession) ─────────────
+
+    async def create_formula_version(
+        self,
+        *,
+        actor,
+        tenant_id: str | None,
+        logical_key: str,
+        base_version_id: str | None,
+        name: str,
+        description: str | None,
+        criteria_weights: dict[str, Decimal],
+        thresholds: list[tuple[Decimal, Decimal, str]],
+    ) -> PrioritizationFormulaModel:
+        """Insert a new immutable formula version.
+
+        If base_version_id is provided, atomically:
+          - load base
+          - set base.is_active=false, base.effective_to=now
+          - new.version = base.version + 1
+          - new.is_active=true
+          - base.superseded_by_id = new.id
+
+        If base_version_id is None: brand-new logical_key (rejects if there's
+        already an active formula for the same (tenant_id, logical_key)).
+
+        Validations:
+          - weights sum to 1.00 (Decimal precision)
+          - thresholds cover [0.00, max(max_value)] without gaps/overlaps
+          - all criterion codes exist for this tenant or global
+        """
+        # Permission gate
+        await self._require_formula_write(actor=actor, tenant_id=tenant_id)
+
+        # Weights sum check (Decimal precision)
+        total_weight = sum(criteria_weights.values(), Decimal("0"))
+        if total_weight != Decimal("1.00") and total_weight != Decimal("1"):
+            raise ValidationError(
+                f"Weights must sum to 1.00, got {total_weight}"
+            )
+
+        # Threshold coverage check
+        self._validate_threshold_coverage(thresholds)
+
+        # Validate criteria exist for tenant or global
+        criterion_id_by_code: dict[str, str] = {}
+        for code in criteria_weights:
+            crit_row = await self._get_criterion(code, tenant_id)
+            if not crit_row:
+                raise ValidationError(f"Criterion '{code}' not found")
+            criterion_id_by_code[code] = crit_row.id
+
+        # Resolve priority_id per threshold (case_priorities by name)
+        priority_id_by_name: dict[str, str] = {}
+        for _min, _max, name_or_slug in thresholds:
+            pri_id = await self._get_priority_by_name(name_or_slug, tenant_id)
+            if not pri_id:
+                raise ValidationError(
+                    f"Priority '{name_or_slug}' not found for tenant"
+                )
+            priority_id_by_name[name_or_slug] = pri_id
+
+        # Determine version + supersession
+        new_version_number = 1
+        base: PrioritizationFormulaModel | None = None
+        if base_version_id:
+            base = await self.db.get(PrioritizationFormulaModel, base_version_id)
+            if not base:
+                raise NotFoundError(f"Base formula {base_version_id} not found")
+            if base.logical_key != logical_key:
+                raise ValidationError(
+                    f"logical_key mismatch: base={base.logical_key}, new={logical_key}"
+                )
+            new_version_number = base.version + 1
+        else:
+            existing_active = await self._get_active_formula(logical_key, tenant_id)
+            if existing_active:
+                raise ValidationError(
+                    f"Active formula '{logical_key}' already exists for this tenant. "
+                    "Use base_version_id to create a new version."
+                )
+
+        # Deactivate base FIRST (avoid transient violation of ux_formula_active
+        # partial unique index).
+        now = datetime.now(timezone.utc)
+        if base:
+            base.is_active = False
+            base.effective_to = now
+
+        # Insert new formula
+        formula = PrioritizationFormulaModel(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            logical_key=logical_key,
+            version=new_version_number,
+            name=name,
+            description=description,
+            is_active=True,
+            effective_from=now,
+            created_by=actor.user_id,
+        )
+        self.db.add(formula)
+        await self.db.flush()
+
+        # Insert formula_criteria
+        for code, weight in criteria_weights.items():
+            self.db.add(PrioritizationFormulaCriterionModel(
+                id=str(uuid.uuid4()),
+                formula_id=formula.id,
+                criterion_id=criterion_id_by_code[code],
+                weight=weight,
+            ))
+
+        # Insert thresholds
+        from backend.src.modules.prioritization.infrastructure.models import (
+            PrioritizationThresholdModel as _Threshold,
+        )
+        for min_v, max_v, pri_name in thresholds:
+            self.db.add(_Threshold(
+                id=str(uuid.uuid4()),
+                formula_id=formula.id,
+                min_value=min_v,
+                max_value=max_v,
+                priority_id=priority_id_by_name[pri_name],
+            ))
+
+        # Wire supersession link
+        if base:
+            base.superseded_by_id = formula.id
+
+        await self.db.flush()
+        return formula
+
+    async def _require_formula_write(self, *, actor, tenant_id: str | None) -> None:
+        """Gate formula CRUD: 'manage_global' for tenant=None, 'manage_formulas' otherwise."""
+        from backend.src.core.middleware.permission_checker import has_permission
+        from backend.src.core.exceptions import PermissionDeniedError
+        action = "manage_global" if tenant_id is None else "manage_formulas"
+        if not getattr(actor, "role_id", None):
+            raise PermissionDeniedError(f"actor missing role_id for prioritization:{action}")
+        ok = await has_permission(self.db, actor.role_id, "prioritization", action)
+        if not ok:
+            raise PermissionDeniedError(f"prioritization:{action} required")
+
+    def _validate_threshold_coverage(
+        self, thresholds: list[tuple[Decimal, Decimal, str]],
+    ) -> None:
+        """Ensure thresholds cover [0, max] with no gaps or overlaps.
+
+        Sorts by min_value, then walks: each next.min must equal prev.max
+        (or prev.max + smallest representable gap; we allow contiguous because
+        thresholds use inclusive ranges on both ends — see _find_priority_by_threshold).
+        """
+        if not thresholds:
+            raise ValidationError("At least one threshold required")
+        sorted_t = sorted(thresholds, key=lambda x: x[0])
+        first_min = sorted_t[0][0]
+        if first_min > Decimal("0.01"):
+            raise ValidationError(
+                f"Thresholds must start at 0.00; first min={first_min}"
+            )
+        prev_max = sorted_t[0][1]
+        for min_v, max_v, _ in sorted_t[1:]:
+            # Tolerate the tiny implicit gap from inclusive ranges
+            # (e.g. (0.0, 2.49) → (2.5, 3.49)). Real gaps > 0.5 reject.
+            if min_v - prev_max > Decimal("0.5"):
+                raise ValidationError(
+                    f"Threshold gap detected: previous max={prev_max}, next min={min_v}"
+                )
+            if min_v < prev_max:
+                raise ValidationError(
+                    f"Threshold overlap: previous max={prev_max}, next min={min_v}"
+                )
+            prev_max = max_v
+
+    async def _get_criterion(self, code: str, tenant_id: str | None):
+        stmt = select(PrioritizationCriterionModel).where(
+            PrioritizationCriterionModel.code == code,
+        )
+        if tenant_id is None:
+            stmt = stmt.where(PrioritizationCriterionModel.tenant_id.is_(None))
+        else:
+            # Tenant-scoped criterion OR fall back to global
+            from sqlalchemy import or_
+            stmt = stmt.where(
+                or_(
+                    PrioritizationCriterionModel.tenant_id == tenant_id,
+                    PrioritizationCriterionModel.tenant_id.is_(None),
+                )
+            ).order_by(PrioritizationCriterionModel.tenant_id.desc().nulls_last())
+        stmt = stmt.limit(1)
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def _get_active_formula(self, logical_key: str, tenant_id: str | None):
+        stmt = select(PrioritizationFormulaModel).where(
+            PrioritizationFormulaModel.logical_key == logical_key,
+            PrioritizationFormulaModel.is_active.is_(True),
+        )
+        if tenant_id is None:
+            stmt = stmt.where(PrioritizationFormulaModel.tenant_id.is_(None))
+        else:
+            stmt = stmt.where(PrioritizationFormulaModel.tenant_id == tenant_id)
+        return (await self.db.execute(stmt.limit(1))).scalar_one_or_none()
+
+    async def _get_priority_by_name(self, name: str, tenant_id: str | None) -> str | None:
+        """Resolve case_priorities.id by name (Baja/Media/Alta/Critica)."""
+        stmt = text(
+            "SELECT id FROM case_priorities WHERE name = :n "
+            "AND (tenant_id = :tid OR tenant_id IS NULL) "
+            "ORDER BY tenant_id NULLS LAST LIMIT 1"
+        )
+        return (await self.db.execute(stmt, {"n": name, "tid": tenant_id})).scalar_one_or_none()
+
     async def _find_priority_by_threshold(
         self, formula_id: str, weighted_sum: Decimal,
     ) -> str | None:
