@@ -912,3 +912,268 @@ def test_generic_parser_title_truncated_to_500_chars():
     ]
     event = _run_async(parse_via_mappings({"x": "Y" * 600}, mappings))
     assert len(event.title) == 500
+
+
+# ── Task 8: Wazuh taxonomy resolver ────────────────────────────────────
+
+
+class _WazuhMap:
+    """Stand-in for WazuhRuleTaxonomyMapModel rows in pure-function tests."""
+    def __init__(self, match_strategy, match_value):
+        self.match_strategy = match_strategy
+        self.match_value = match_value
+
+
+# ── Pure _wazuh_mapping_matches ────────────────────────────────────────
+
+
+def test_match_rule_id_exact():
+    from backend.src.modules.integrations.application.use_cases import (
+        _wazuh_mapping_matches,
+    )
+    m = _WazuhMap("rule_id", {"value": 87123})
+    assert _wazuh_mapping_matches(m, 87123, [], None) is True
+    assert _wazuh_mapping_matches(m, 87124, [], None) is False
+    assert _wazuh_mapping_matches(m, None, [], None) is False
+
+
+def test_match_rule_groups_any_intersection():
+    from backend.src.modules.integrations.application.use_cases import (
+        _wazuh_mapping_matches,
+    )
+    m = _WazuhMap("rule_groups_any", {"groups": ["malware", "ransomware"]})
+    assert _wazuh_mapping_matches(m, None, ["malware", "windows"], None) is True
+    assert _wazuh_mapping_matches(m, None, ["ssh", "auth"], None) is False
+    assert _wazuh_mapping_matches(m, None, [], None) is False
+
+
+def test_match_rule_groups_all_subset():
+    from backend.src.modules.integrations.application.use_cases import (
+        _wazuh_mapping_matches,
+    )
+    m = _WazuhMap("rule_groups_all", {"groups": ["intrusion", "lateral_movement"]})
+    assert _wazuh_mapping_matches(
+        m, None, ["intrusion", "lateral_movement", "windows"], None,
+    ) is True
+    # Missing one required group → no match
+    assert _wazuh_mapping_matches(m, None, ["intrusion", "windows"], None) is False
+
+
+def test_match_level_min_threshold():
+    from backend.src.modules.integrations.application.use_cases import (
+        _wazuh_mapping_matches,
+    )
+    m = _WazuhMap("level_min", {"value": 12})
+    assert _wazuh_mapping_matches(m, None, [], 15) is True
+    assert _wazuh_mapping_matches(m, None, [], 12) is True  # >= boundary
+    assert _wazuh_mapping_matches(m, None, [], 11) is False
+    assert _wazuh_mapping_matches(m, None, [], None) is False
+
+
+def test_match_level_range_inclusive_bounds():
+    from backend.src.modules.integrations.application.use_cases import (
+        _wazuh_mapping_matches,
+    )
+    m = _WazuhMap("level_range", {"min": 10, "max": 15})
+    assert _wazuh_mapping_matches(m, None, [], 10) is True
+    assert _wazuh_mapping_matches(m, None, [], 15) is True
+    assert _wazuh_mapping_matches(m, None, [], 9) is False
+    assert _wazuh_mapping_matches(m, None, [], 16) is False
+
+
+def test_match_unknown_strategy_returns_false():
+    """Defensive: unknown match_strategy value never matches (silent skip)."""
+    from backend.src.modules.integrations.application.use_cases import (
+        _wazuh_mapping_matches,
+    )
+    m = _WazuhMap("nonexistent", {"value": 1})
+    assert _wazuh_mapping_matches(m, 1, [], None) is False
+
+
+# ── DB-touching resolver tests ─────────────────────────────────────────
+
+
+async def _create_wazuh_mapping(
+    session, *, strategy, value, taxonomy_id, priority=100,
+    tenant_id=None, source_id=None, created_by,
+):
+    """Insert a wazuh_rule_to_taxonomy_map row and return its id."""
+    from sqlalchemy import text
+    import json
+    import uuid as _uuid
+    map_id = str(_uuid.uuid4())
+    await session.execute(text(
+        "INSERT INTO wazuh_rule_to_taxonomy_map "
+        "(id, tenant_id, source_id, match_strategy, match_value, taxonomy_id, "
+        "priority_order, is_active, created_at, updated_at, created_by) "
+        "VALUES (:id, :tenant_id, :source_id, :strategy, "
+        "CAST(:value AS json), :tax_id, :prio, true, NOW(), NOW(), :cb)"
+    ), {
+        "id": map_id, "tenant_id": tenant_id, "source_id": source_id,
+        "strategy": strategy, "value": json.dumps(value),
+        "tax_id": taxonomy_id, "prio": priority, "cb": created_by,
+    })
+    await session.commit()
+    return map_id
+
+
+async def _seed_taxonomy(session, *, name, tuic_code, tenant_id=None, created_by):
+    """Insert a security_taxonomy row and return its id."""
+    from sqlalchemy import text
+    import uuid as _uuid
+    tax_id = str(_uuid.uuid4())
+    await session.execute(text(
+        "INSERT INTO security_taxonomies "
+        "(id, tenant_id, tuic_code, name, default_case_type, requires_ticket, "
+        "triage_mode, tlp_default, is_active, created_at, updated_at, "
+        "created_by, mitre_techniques) "
+        "VALUES (:id, :tenant_id, :code, :name, 'incident', false, 'auto', "
+        "'amber', true, NOW(), NOW(), :cb, CAST('[]' AS json))"
+    ), {
+        "id": tax_id, "tenant_id": tenant_id, "code": tuic_code, "name": name,
+        "cb": created_by,
+    })
+    await session.commit()
+    return tax_id
+
+
+async def _cleanup_wazuh_maps(session, ids):
+    from sqlalchemy import text
+    for mid in ids:
+        await session.execute(text(
+            "DELETE FROM wazuh_rule_to_taxonomy_map WHERE id = :id"
+        ), {"id": mid})
+    await session.commit()
+
+
+async def _cleanup_taxonomies(session, ids):
+    from sqlalchemy import text
+    for tid in ids:
+        await session.execute(text(
+            "DELETE FROM security_taxonomies WHERE id = :id"
+        ), {"id": tid})
+    await session.commit()
+
+
+def test_resolver_picks_highest_priority_when_multiple_match():
+    """rule_id mapping (priority=1000) wins over rule_groups (priority=500)."""
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+    from backend.src.modules.security_taxonomies.application.use_cases import (
+        SecurityTaxonomyUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+
+    async def _go(session):
+        # Use a random tenant_id so we never collide with other tests' mappings.
+        import uuid as _uuid
+        tenant_id = f"test-resolver-prio-{_uuid.uuid4().hex[:8]}"
+        tax_high = await _seed_taxonomy(
+            session, name="HIGH", tuic_code=f"TEST-HIGH-{_uuid.uuid4().hex[:6]}",
+            tenant_id=tenant_id, created_by=actor.id,
+        )
+        tax_low = await _seed_taxonomy(
+            session, name="LOW", tuic_code=f"TEST-LOW-{_uuid.uuid4().hex[:6]}",
+            tenant_id=tenant_id, created_by=actor.id,
+        )
+        m_high = await _create_wazuh_mapping(
+            session, strategy="rule_id", value={"value": 99001},
+            taxonomy_id=tax_high, priority=1000, tenant_id=tenant_id,
+            created_by=actor.id,
+        )
+        m_low = await _create_wazuh_mapping(
+            session, strategy="rule_groups_any", value={"groups": ["malware"]},
+            taxonomy_id=tax_low, priority=500, tenant_id=tenant_id,
+            created_by=actor.id,
+        )
+        uc = IntegrationsUseCases(
+            db=session, taxonomies_uc=SecurityTaxonomyUseCases(db=session),
+        )
+        resolved = await uc._resolve_wazuh_taxonomy(
+            wazuh_rule_id=99001, wazuh_rule_groups=["malware"],
+            wazuh_level=12, source_id="dummy-src", tenant_id=tenant_id,
+        )
+        result_id = resolved.id if resolved else None
+        await _cleanup_wazuh_maps(session, [m_high, m_low])
+        await _cleanup_taxonomies(session, [tax_high, tax_low])
+        return result_id, tax_high
+
+    resolved_id, expected = _run_db_query(_go)
+    assert resolved_id == expected
+
+
+def test_resolver_tenant_override_beats_global_at_equal_priority():
+    """When tenant-specific and global mappings both match with equal priority,
+    the tenant override wins (NULLS LAST on tenant_id DESC)."""
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+    from backend.src.modules.security_taxonomies.application.use_cases import (
+        SecurityTaxonomyUseCases,
+    )
+
+    actor = _IntActor(user_id="ec35a91e-5778-4210-a631-c5ed673c679d")
+
+    async def _go(session):
+        import uuid as _uuid
+        tenant_id = f"test-tenant-{_uuid.uuid4().hex[:8]}"
+        tax_global = await _seed_taxonomy(
+            session, name="GLOBAL",
+            tuic_code=f"TEST-GLOBAL-{_uuid.uuid4().hex[:6]}",
+            tenant_id=None, created_by=actor.id,
+        )
+        tax_tenant = await _seed_taxonomy(
+            session, name="TENANT",
+            tuic_code=f"TEST-TENANT-{_uuid.uuid4().hex[:6]}",
+            tenant_id=tenant_id, created_by=actor.id,
+        )
+        m_global = await _create_wazuh_mapping(
+            session, strategy="rule_id", value={"value": 99002},
+            taxonomy_id=tax_global, priority=100, tenant_id=None,
+            created_by=actor.id,
+        )
+        m_tenant = await _create_wazuh_mapping(
+            session, strategy="rule_id", value={"value": 99002},
+            taxonomy_id=tax_tenant, priority=100, tenant_id=tenant_id,
+            created_by=actor.id,
+        )
+        uc = IntegrationsUseCases(
+            db=session, taxonomies_uc=SecurityTaxonomyUseCases(db=session),
+        )
+        resolved = await uc._resolve_wazuh_taxonomy(
+            wazuh_rule_id=99002, wazuh_rule_groups=[], wazuh_level=None,
+            source_id="dummy-src", tenant_id=tenant_id,
+        )
+        result_id = resolved.id if resolved else None
+        await _cleanup_wazuh_maps(session, [m_global, m_tenant])
+        await _cleanup_taxonomies(session, [tax_global, tax_tenant])
+        return result_id, tax_tenant
+
+    resolved_id, expected = _run_db_query(_go)
+    assert resolved_id == expected
+
+
+def test_resolver_returns_none_when_no_mapping_matches():
+    from backend.src.modules.integrations.application.use_cases import (
+        IntegrationsUseCases,
+    )
+    from backend.src.modules.security_taxonomies.application.use_cases import (
+        SecurityTaxonomyUseCases,
+    )
+
+    async def _go(session):
+        uc = IntegrationsUseCases(
+            db=session, taxonomies_uc=SecurityTaxonomyUseCases(db=session),
+        )
+        # Use unique tenant_id so no other test's mappings can match
+        import uuid as _uuid
+        tenant_id = f"test-nomatch-{_uuid.uuid4().hex[:8]}"
+        return await uc._resolve_wazuh_taxonomy(
+            wazuh_rule_id=88888888,  # nothing seeded for this rule
+            wazuh_rule_groups=["nonexistent-group"],
+            wazuh_level=1, source_id="dummy-src", tenant_id=tenant_id,
+        )
+
+    assert _run_db_query(_go) is None

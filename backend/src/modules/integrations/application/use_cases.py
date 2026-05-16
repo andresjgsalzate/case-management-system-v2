@@ -25,7 +25,39 @@ from backend.src.modules.integrations.application.dtos import (
 )
 from backend.src.modules.integrations.infrastructure.models import (
     IntegrationSourceModel,
+    WazuhRuleTaxonomyMapModel,
 )
+
+
+def _wazuh_mapping_matches(
+    mapping,
+    rule_id: int | None,
+    rule_groups: list[str],
+    level: int | None,
+) -> bool:
+    """Pure-function predicate: does `mapping` apply to this Wazuh alert?
+
+    Module-level (not a method) so unit tests can exercise each strategy
+    without spinning up a use-case + DB.
+    """
+    strategy = mapping.match_strategy
+    value = mapping.match_value or {}
+    groups = set(rule_groups or [])
+
+    if strategy == "rule_id":
+        return rule_id is not None and rule_id == value.get("value")
+    if strategy == "rule_groups_any":
+        return bool(groups & set(value.get("groups") or []))
+    if strategy == "rule_groups_all":
+        required = set(value.get("groups") or [])
+        return required.issubset(groups) if required else False
+    if strategy == "level_min":
+        return level is not None and level >= value.get("value", 0)
+    if strategy == "level_range":
+        if level is None:
+            return False
+        return value.get("min", 0) <= level <= value.get("max", 9999)
+    return False  # Unknown strategy — silently skip rather than crash
 
 
 class IntegrationsUseCases:
@@ -161,3 +193,50 @@ class IntegrationsUseCases:
         if not source:
             raise NotFoundError(f"integration_source {source_id} not found")
         return source
+
+    # ── Wazuh taxonomy resolver ──────────────────────────────────────
+
+    async def _resolve_wazuh_taxonomy(
+        self,
+        *,
+        wazuh_rule_id: int | None,
+        wazuh_rule_groups: list[str],
+        wazuh_level: int | None,
+        source_id: str,
+        tenant_id: str | None,
+    ):
+        """Walk applicable wazuh_rule_to_taxonomy_map rows in priority order
+        (priority DESC, then tenant DESC NULLS LAST so tenant overrides beat
+        globals at equal priority). First strategy match wins; returns the
+        SecurityTaxonomyModel or None if nothing matches."""
+        stmt = (
+            select(WazuhRuleTaxonomyMapModel)
+            .where(
+                WazuhRuleTaxonomyMapModel.is_active.is_(True),
+                or_(
+                    WazuhRuleTaxonomyMapModel.tenant_id == tenant_id,
+                    WazuhRuleTaxonomyMapModel.tenant_id.is_(None),
+                ),
+                or_(
+                    WazuhRuleTaxonomyMapModel.source_id == source_id,
+                    WazuhRuleTaxonomyMapModel.source_id.is_(None),
+                ),
+            )
+            .order_by(
+                WazuhRuleTaxonomyMapModel.priority_order.desc(),
+                WazuhRuleTaxonomyMapModel.tenant_id.desc().nulls_last(),
+            )
+        )
+        mappings = (await self.db.execute(stmt)).scalars().all()
+
+        for m in mappings:
+            if _wazuh_mapping_matches(
+                m, wazuh_rule_id, wazuh_rule_groups, wazuh_level,
+            ):
+                if not self.taxonomies_uc:
+                    raise RuntimeError(
+                        "taxonomies_uc not injected — cannot resolve taxonomy",
+                    )
+                return await self.taxonomies_uc.get_taxonomy_by_id(m.taxonomy_id)
+
+        return None
