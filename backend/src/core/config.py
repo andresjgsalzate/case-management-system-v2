@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # SLA
     SLA_CHECK_INTERVAL_MINUTES: int = 5
 
+    # Integrations (Sub-spec 04) — Fernet symmetric key (urlsafe-base64 32 bytes)
+    # Generate via: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    INTEGRATIONS_ENCRYPTION_KEY: str | None = None
+
     # Email (optional)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
