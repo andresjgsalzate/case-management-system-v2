@@ -8,16 +8,32 @@ This file ships incrementally:
 - Task 8: create_formula_version.
 - Task 10: manual_recalculation + history.
 """
+import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.src.core.exceptions import (
+    BusinessRuleError,
+    NotFoundError,
+    ValidationError,
+)
+# Repo doesn't have a dedicated OperationalError — use BusinessRuleError for
+# engine-level invariant violations (no formula / no threshold matches).
+OperationalError = BusinessRuleError
 from backend.src.modules.prioritization.application.derived_handlers import (
     DERIVED_HANDLERS,
     DerivedResult,
 )
 from backend.src.modules.prioritization.infrastructure.models import (
+    CasePriorityCalculationModel,
     PrioritizationCriterionModel,
+    PrioritizationFormulaCriterionModel,
+    PrioritizationFormulaModel,
     PrioritizationScaleModel,
+    PrioritizationThresholdModel,
 )
 
 
@@ -143,4 +159,134 @@ class PrioritizationUseCases:
             PrioritizationScaleModel.criterion_id == criterion_id,
             PrioritizationScaleModel.label == label,
         )
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    # ── Engine ──────────────────────────────────────────────────────────
+
+    async def calculate_priority(
+        self,
+        *,
+        case_id: str,
+        triggered_by: str = "case_created",
+        triggered_by_user: str | None = None,
+    ) -> CasePriorityCalculationModel:
+        """Compute priority for a case using the active formula + persist audit.
+
+        Task 5 minimal version:
+        - Formula resolution = hardcoded 'soc-default' global (Task 7 perfects it
+          with taxonomy → tenant → global fallback chain).
+        - Missing-data strategy handling: use_default applies criterion.default_value;
+          skip drops the criterion WITHOUT renormalizing remaining weights (Task 6
+          adds proper renormalization); error raises ValidationError.
+        - Updates cases.priority_id atomically with calculation persistence.
+        """
+        from backend.src.modules.cases.infrastructure.models import CaseModel
+
+        case = await self.db.get(CaseModel, case_id)
+        if case is None:
+            raise NotFoundError(f"Case {case_id} not found")
+
+        formula = await self._resolve_formula_for_case(case)
+        if formula is None:
+            raise OperationalError(
+                "No active default formula found for tenant or globally"
+            )
+
+        # Load formula's criteria with weights
+        fc_stmt = (
+            select(PrioritizationFormulaCriterionModel, PrioritizationCriterionModel)
+            .join(
+                PrioritizationCriterionModel,
+                PrioritizationCriterionModel.id
+                == PrioritizationFormulaCriterionModel.criterion_id,
+            )
+            .where(PrioritizationFormulaCriterionModel.formula_id == formula.id)
+        )
+        rows = (await self.db.execute(fc_stmt)).all()
+
+        inputs: dict[str, dict] = {}
+        weighted_sum = Decimal("0")
+        for fc, criterion in rows:
+            value, label, source = await self._resolve_criterion_value(case, criterion)
+
+            entry: dict = {
+                "value": value, "label": label,
+                "weight": float(fc.weight),
+                "source": criterion.data_source,
+            }
+
+            if value is None:
+                strategy = criterion.missing_data_strategy
+                if strategy == "error":
+                    raise ValidationError(
+                        f"Required criterion '{criterion.code}' has no value"
+                    )
+                if strategy == "use_default":
+                    value = criterion.default_value
+                    entry["value"] = value
+                    entry["label"] = await self._lookup_scale_label(
+                        criterion.id, value,
+                    ) if value is not None else None
+                    entry["source"] = f"default({source})"
+                else:  # 'skip'
+                    entry["skipped"] = True
+                    entry["reason"] = source
+                    inputs[criterion.code] = entry
+                    continue
+
+            inputs[criterion.code] = entry
+            weighted_sum += Decimal(str(value)) * fc.weight
+
+        # Find threshold matching weighted_sum
+        priority = await self._find_priority_by_threshold(formula.id, weighted_sum)
+        if priority is None:
+            raise OperationalError(
+                f"No threshold matches weighted_sum={weighted_sum} for formula {formula.id}"
+            )
+
+        # Persist calculation + update case
+        calc = CasePriorityCalculationModel(
+            id=str(uuid.uuid4()),
+            case_id=case.id,
+            formula_id=formula.id,
+            formula_version=formula.version,
+            inputs=inputs,
+            weighted_sum=weighted_sum,
+            resulting_priority_id=priority,
+            triggered_by=triggered_by,
+            triggered_by_user=triggered_by_user,
+        )
+        self.db.add(calc)
+        case.priority_id = priority
+        case.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        return calc
+
+    async def _resolve_formula_for_case(self, case) -> PrioritizationFormulaModel | None:
+        """Task 5: hardcoded — pick 'soc-default' global. Task 7 perfects with
+        taxonomy.prioritization_formula_id → tenant default → global fallback.
+        """
+        stmt = (
+            select(PrioritizationFormulaModel)
+            .where(
+                PrioritizationFormulaModel.logical_key == "soc-default",
+                PrioritizationFormulaModel.is_active.is_(True),
+                PrioritizationFormulaModel.tenant_id.is_(None),
+            )
+            .limit(1)
+        )
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def _find_priority_by_threshold(
+        self, formula_id: str, weighted_sum: Decimal,
+    ) -> str | None:
+        """Returns the priority_id whose threshold range contains weighted_sum.
+
+        Range comparison: min_value <= value <= max_value (inclusive both ends).
+        """
+        stmt = select(PrioritizationThresholdModel.priority_id).where(
+            PrioritizationThresholdModel.formula_id == formula_id,
+            PrioritizationThresholdModel.min_value <= weighted_sum,
+            PrioritizationThresholdModel.max_value >= weighted_sum,
+        ).limit(1)
         return (await self.db.execute(stmt)).scalar_one_or_none()

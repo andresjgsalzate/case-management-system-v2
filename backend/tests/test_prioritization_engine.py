@@ -24,6 +24,115 @@ def _run_db_query(async_query):
     return asyncio.run(_go())
 
 
+def _make_test_case(session, *, case_number_suffix: str, taxonomy_tuic: str | None = None):
+    """Helper: insert a minimal case row + return its id.
+
+    Returns (case_id, taxonomy_id_or_none). Caller is responsible for cleanup
+    via the case_number prefix matching the cleanup query.
+    """
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    async def _do():
+        # Look up bootstrapping foreign keys
+        admin_row = (await session.execute(text(
+            "SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id "
+            "WHERE r.name IN ('Super Admin', 'Admin') AND r.tenant_id IS NULL "
+            "ORDER BY u.created_at ASC LIMIT 1"
+        ))).first()
+        status_row = (await session.execute(text(
+            "SELECT id FROM case_statuses LIMIT 1"
+        ))).first()
+        priority_row = (await session.execute(text(
+            "SELECT id FROM case_priorities WHERE name = 'Baja' LIMIT 1"
+        ))).first()
+        tax_id = None
+        if taxonomy_tuic:
+            tax_row = (await session.execute(text(
+                "SELECT id FROM security_taxonomies "
+                "WHERE tuic_code = :c AND tenant_id IS NULL LIMIT 1"
+            ), {"c": taxonomy_tuic})).first()
+            tax_id = tax_row[0] if tax_row else None
+
+        case_id = str(_uuid.uuid4())
+        case_number = f"TEST-PRIO-{case_number_suffix}"
+        await session.execute(text(
+            "INSERT INTO cases "
+            "(id, case_number, title, status_id, priority_id, case_type, "
+            " complexity, current_level, taxonomy_id, tenant_id, created_by, "
+            " is_archived, created_at, updated_at) "
+            "VALUES (:id, :num, 'priority test', :sid, :pid, 'incident', "
+            "        'simple', 1, :tid, NULL, :uid, false, NOW(), NOW())"
+        ), {
+            "id": case_id, "num": case_number,
+            "sid": status_row[0], "pid": priority_row[0],
+            "tid": tax_id, "uid": admin_row[0],
+        })
+        await session.commit()
+        return case_id, tax_id
+
+    return _do
+
+
+def test_calculate_priority_persists_calculation_and_updates_case():
+    """calculate_priority creates an audit row and updates case.priority_id."""
+    import uuid as _uuid
+    from sqlalchemy import text
+
+    suffix = _uuid.uuid4().hex[:8].upper()
+
+    async def _setup(session):
+        make = _make_test_case(session, case_number_suffix=suffix,
+                               taxonomy_tuic="RANSOM-LOCKBIT")
+        return await make()
+
+    async def _calculate(session, case_id):
+        from backend.src.modules.prioritization.application.use_cases import (
+            PrioritizationUseCases,
+        )
+        uc = PrioritizationUseCases(db=session)
+        calc = await uc.calculate_priority(
+            case_id=case_id, triggered_by="manual_recalculation",
+        )
+        await session.commit()
+        # Re-read case to confirm priority was updated
+        new_pri = (await session.execute(text(
+            "SELECT priority_id FROM cases WHERE id = :cid"
+        ), {"cid": case_id})).scalar()
+        return calc.id, calc.case_id, calc.formula_id, calc.triggered_by, \
+               calc.weighted_sum, calc.resulting_priority_id, new_pri, \
+               dict(calc.inputs)
+
+    async def _cleanup(session):
+        await session.execute(text(
+            "DELETE FROM case_priority_calculations "
+            "WHERE case_id IN (SELECT id FROM cases WHERE case_number = :n)"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.execute(text(
+            "DELETE FROM cases WHERE case_number = :n"
+        ), {"n": f"TEST-PRIO-{suffix}"})
+        await session.commit()
+
+    try:
+        case_id, _tax = _run_db_query(_setup)
+        calc_id, calc_case, formula_id, triggered_by, weighted, resulting, \
+            new_pri, inputs = _run_db_query(lambda s: _calculate(s, case_id))
+        assert calc_case == case_id
+        assert triggered_by == "manual_recalculation"
+        assert formula_id is not None, "Formula should be resolved"
+        assert resulting is not None, "Resulting priority should be set"
+        assert new_pri == resulting, "case.priority_id should equal resulting_priority_id"
+        # weighted_sum should be a positive Decimal (>0 since at least one criterion resolves)
+        assert float(weighted) > 0, f"weighted_sum={weighted}, expected > 0"
+        # inputs should contain the criteria the formula references
+        # (soc-default uses severity, impact, asset_criticality)
+        assert "severity" in inputs or "impact" in inputs, (
+            f"Expected criteria in inputs, got keys: {list(inputs.keys())}"
+        )
+    finally:
+        _run_db_query(_cleanup)
+
+
 def test_resolve_taxonomy_field_tlp_default():
     """Criterion with data_source=taxonomy_field, source_field_key=tlp_default → numeric mapping."""
     from sqlalchemy import text
