@@ -12,7 +12,10 @@ from backend.src.modules.prioritization.application.dtos import (
     CalculationResponse,
     CreateFormulaVersionPayload,
     CriterionResponse,
+    FormulaDetailResponse,
     FormulaResponse,
+    FormulaThresholdDetail,
+    FormulaWeightDetail,
     ScaleResponse,
 )
 from backend.src.modules.prioritization.application.use_cases import (
@@ -20,8 +23,10 @@ from backend.src.modules.prioritization.application.use_cases import (
 )
 from backend.src.modules.prioritization.infrastructure.models import (
     PrioritizationCriterionModel,
+    PrioritizationFormulaCriterionModel,
     PrioritizationFormulaModel,
     PrioritizationScaleModel,
+    PrioritizationThresholdModel,
 )
 
 router = APIRouter(prefix="/api/v1/prioritization", tags=["prioritization"])
@@ -123,16 +128,73 @@ async def get_active_formula_by_key(
     return SuccessResponse.ok(FormulaResponse.model_validate(formula))
 
 
-@router.get("/formulas/{formula_id}", response_model=SuccessResponse[FormulaResponse])
+@router.get(
+    "/formulas/{formula_id}",
+    response_model=SuccessResponse[FormulaDetailResponse],
+)
 async def get_formula(
     formula_id: str,
     db: DBSession,
     current_user: CurrentUser = Read,
 ):
+    """Formula metadata plus embedded weights (joined with criterion) and thresholds
+    (joined with case_priorities.name) so the admin UI can render the full view
+    without follow-up requests."""
+    from sqlalchemy import text
     row = await db.get(PrioritizationFormulaModel, formula_id)
     if not row:
         raise HTTPException(status_code=404, detail="Formula not found")
-    return SuccessResponse.ok(FormulaResponse.model_validate(row))
+
+    weights_rows = (await db.execute(
+        select(
+            PrioritizationFormulaCriterionModel.criterion_id,
+            PrioritizationCriterionModel.code.label("criterion_code"),
+            PrioritizationCriterionModel.name.label("criterion_name"),
+            PrioritizationFormulaCriterionModel.weight,
+        )
+        .join(
+            PrioritizationCriterionModel,
+            PrioritizationCriterionModel.id
+            == PrioritizationFormulaCriterionModel.criterion_id,
+        )
+        .where(PrioritizationFormulaCriterionModel.formula_id == formula_id)
+    )).all()
+
+    thresholds_rows = (await db.execute(
+        text(
+            "SELECT t.id, t.min_value, t.max_value, "
+            "t.priority_id, p.name AS priority_name "
+            "FROM prioritization_thresholds t "
+            "JOIN case_priorities p ON p.id = t.priority_id "
+            "WHERE t.formula_id = :fid "
+            "ORDER BY t.min_value ASC"
+        ),
+        {"fid": formula_id},
+    )).mappings().all()
+
+    payload = FormulaDetailResponse(
+        **FormulaResponse.model_validate(row).model_dump(),
+        criteria_weights=[
+            FormulaWeightDetail(
+                criterion_id=w.criterion_id,
+                criterion_code=w.criterion_code,
+                criterion_name=w.criterion_name,
+                weight=w.weight,
+            )
+            for w in weights_rows
+        ],
+        thresholds=[
+            FormulaThresholdDetail(
+                id=t["id"],
+                min_value=t["min_value"],
+                max_value=t["max_value"],
+                priority_id=t["priority_id"],
+                priority_name=t["priority_name"],
+            )
+            for t in thresholds_rows
+        ],
+    )
+    return SuccessResponse.ok(payload)
 
 
 @router.post(

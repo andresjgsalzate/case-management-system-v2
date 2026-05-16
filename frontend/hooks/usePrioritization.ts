@@ -8,6 +8,7 @@ import type {
   CreateFormulaVersionPayload,
   PrioritizationCriterion,
   PrioritizationFormula,
+  PrioritizationFormulaDetail,
   PrioritizationScale,
   PriorityCalculation,
 } from "@/lib/types";
@@ -79,11 +80,11 @@ export function usePrioritizationFormulas(filters: FormulaListFilters = {}) {
 }
 
 export function useFormulaDetail(id: string | null | undefined) {
-  return useQuery<PrioritizationFormula>({
+  return useQuery<PrioritizationFormulaDetail>({
     queryKey: keys.formulaDetail(id ?? ""),
     enabled: Boolean(id),
     queryFn: async () => {
-      const { data } = await apiClient.get<ApiResponse<PrioritizationFormula>>(
+      const { data } = await apiClient.get<ApiResponse<PrioritizationFormulaDetail>>(
         `${BASE}/formulas/${id}`,
       );
       return data.data;

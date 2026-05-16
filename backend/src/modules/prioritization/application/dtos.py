@@ -66,6 +66,32 @@ class FormulaThresholdEntry(BaseModel):
     priority_name: str  # case_priorities.name (Baja/Media/Alta/Critica)
 
 
+class FormulaWeightDetail(BaseModel):
+    """Read-side weight row joined with criterion code/name for the detail view."""
+    model_config = ConfigDict(from_attributes=True)
+
+    criterion_id: str
+    criterion_code: str
+    criterion_name: str
+    weight: Decimal
+
+
+class FormulaThresholdDetail(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    min_value: Decimal
+    max_value: Decimal
+    priority_id: str
+    priority_name: str
+
+
+class FormulaDetailResponse(FormulaResponse):
+    """Formula metadata + embedded weights and thresholds for admin UI."""
+    criteria_weights: list[FormulaWeightDetail]
+    thresholds: list[FormulaThresholdDetail]
+
+
 class CreateFormulaVersionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

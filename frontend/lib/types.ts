@@ -657,6 +657,27 @@ export interface FormulaThresholdEntry {
   priority_name: string; // Baja | Media | Alta | Critica
 }
 
+// Read-side detail rows (returned by GET /formulas/{id})
+export interface FormulaWeightDetail {
+  criterion_id: string;
+  criterion_code: string;
+  criterion_name: string;
+  weight: string;
+}
+
+export interface FormulaThresholdDetail {
+  id: string;
+  min_value: string;
+  max_value: string;
+  priority_id: string;
+  priority_name: string;
+}
+
+export interface PrioritizationFormulaDetail extends PrioritizationFormula {
+  criteria_weights: FormulaWeightDetail[];
+  thresholds: FormulaThresholdDetail[];
+}
+
 export interface CreateFormulaVersionPayload {
   tenant_id?: string | null;
   logical_key: string;

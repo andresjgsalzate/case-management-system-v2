@@ -1112,6 +1112,43 @@ def test_e2e_403_when_reporter_creates_formula():
     assert status == 403, f"Expected 403, got {status}"
 
 
+def test_e2e_formula_detail_includes_weights_and_thresholds():
+    """GET /formulas/{id} returns embedded criteria_weights + thresholds."""
+    import asyncio
+
+    async def _go():
+        client, cleanup, make_jwt = _e2e_setup()
+        try:
+            token = await make_jwt("Admin")
+            headers = {"Authorization": f"Bearer {token}"}
+            # Resolve the seeded soc-default formula id
+            by_key = await client.get(
+                "/api/v1/prioritization/formulas/by-key/soc-default/active",
+                headers=headers,
+            )
+            formula_id = by_key.json()["data"]["id"]
+            r = await client.get(
+                f"/api/v1/prioritization/formulas/{formula_id}",
+                headers=headers,
+            )
+            return r.status_code, r.json()
+        finally:
+            await cleanup()
+
+    status, body = asyncio.run(_go())
+    assert status == 200, f"Got {status}: {body}"
+    weights = body["data"]["criteria_weights"]
+    thresholds = body["data"]["thresholds"]
+    assert len(weights) == 3, f"Expected 3 weights, got {weights}"
+    assert {w["criterion_code"] for w in weights} == {
+        "severity", "impact", "asset_criticality",
+    }
+    assert len(thresholds) == 4
+    assert {t["priority_name"] for t in thresholds} == {
+        "Baja", "Media", "Alta", "Critica",
+    }
+
+
 def test_e2e_create_formula_v1_roundtrip():
     """Super Admin POST new global formula → 201 → GET → 200 → cleanup."""
     import asyncio
