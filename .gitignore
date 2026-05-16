@@ -17,10 +17,6 @@ env/
 !.env.example
 !.env.production.example
 
-# Alembic
-backend/alembic/versions/*.py
-!backend/alembic/versions/.gitkeep
-
 # Node.js
 node_modules/
 .next/
