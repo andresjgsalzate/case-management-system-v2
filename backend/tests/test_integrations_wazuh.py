@@ -613,3 +613,151 @@ def test_delete_source_removes_when_no_events():
 
     row = _run_db_query(_go)
     assert row is None
+
+
+# ── Task 6: Wazuh hardcoded parser ─────────────────────────────────────
+
+
+class _ParserSource:
+    """Minimal source stand-in for parser tests (parser only reads .id)."""
+    def __init__(self, id="src-parser"):
+        self.id = id
+
+
+def _wazuh_payload_minimum():
+    """Realistic Wazuh ransomware alert (trimmed)."""
+    return {
+        "id": "1700000000.123",
+        "timestamp": "2026-05-16T10:00:00.000+0000",
+        "rule": {
+            "id": 87123, "level": 12,
+            "groups": ["malware", "ransomware", "windows"],
+            "description": "Ransomware activity detected on host",
+            "firedtimes": 3,
+        },
+        "agent": {"id": "001", "name": "PC-FIN-04", "ip": "10.0.0.5"},
+        "data": {
+            "srcip": "1.2.3.4", "dstip": "10.0.0.5",
+            "user": "jdoe", "process": "encryptor.exe",
+            "file": "C:/temp/xyz.locked", "hash": "abc123def",
+        },
+        "full_log": "May 16 10:00:00 PC-FIN-04: ransomware payload executed",
+    }
+
+
+def test_wazuh_parser_extracts_basic_fields():
+    from backend.src.modules.integrations.application.parsers.wazuh import (
+        parse_wazuh,
+    )
+    event = parse_wazuh(_wazuh_payload_minimum(), source=_ParserSource())
+
+    assert event.title == "Ransomware activity detected on host"
+    assert event.wazuh_rule_id == 87123
+    assert event.wazuh_level == 12
+    assert event.wazuh_rule_groups == ["malware", "ransomware", "windows"]
+
+
+def test_wazuh_parser_extracts_custom_values():
+    from backend.src.modules.integrations.application.parsers.wazuh import (
+        parse_wazuh,
+    )
+    event = parse_wazuh(_wazuh_payload_minimum(), source=_ParserSource())
+    cv = event.custom_values
+
+    assert cv["source_ip"] == "1.2.3.4"
+    assert cv["destination_ip"] == "10.0.0.5"
+    assert cv["affected_user"] == "jdoe"
+    assert cv["process_name"] == "encryptor.exe"
+    assert cv["file_path"] == "C:/temp/xyz.locked"
+    assert cv["hash"] == "abc123def"
+    assert cv["hostname"] == "PC-FIN-04"
+    assert cv["host_ip"] == "10.0.0.5"
+    assert cv["wazuh_level"] == "12"
+    assert cv["wazuh_rule_id"] == "87123"
+    assert cv["wazuh_rule_groups"] == "malware,ransomware,windows"
+    assert cv["wazuh_agent_id"] == "001"
+    assert cv["wazuh_firedtimes"] == "3"
+    assert cv["wazuh_full_log"].startswith("May 16")
+
+
+def test_wazuh_parser_omits_unset_optional_data_fields():
+    """If `data` lacks srcip/dstuser, those keys are not in custom_values."""
+    from backend.src.modules.integrations.application.parsers.wazuh import (
+        parse_wazuh,
+    )
+    payload = _wazuh_payload_minimum()
+    payload["data"] = {"user": "alice"}  # only `user`
+    event = parse_wazuh(payload, source=_ParserSource())
+    cv = event.custom_values
+    assert cv["affected_user"] == "alice"
+    assert "source_ip" not in cv
+    assert "destination_ip" not in cv
+    assert "file_path" not in cv
+
+
+def test_wazuh_parser_handles_missing_data_section():
+    """Payload without `data` doesn't crash; rule/agent extraction still works."""
+    from backend.src.modules.integrations.application.parsers.wazuh import (
+        parse_wazuh,
+    )
+    payload = _wazuh_payload_minimum()
+    payload.pop("data")
+    event = parse_wazuh(payload, source=_ParserSource())
+    assert event.wazuh_rule_id == 87123
+    assert "source_ip" not in event.custom_values
+    assert event.custom_values["hostname"] == "PC-FIN-04"
+
+
+def test_wazuh_parser_fallback_title_when_rule_description_missing():
+    """`rule.description` missing → title 'Wazuh alert <rule_id>'."""
+    from backend.src.modules.integrations.application.parsers.wazuh import (
+        parse_wazuh,
+    )
+    payload = _wazuh_payload_minimum()
+    payload["rule"].pop("description")
+    event = parse_wazuh(payload, source=_ParserSource())
+    assert event.title == "Wazuh alert 87123"
+
+
+def test_wazuh_parser_truncates_title_to_500_chars():
+    from backend.src.modules.integrations.application.parsers.wazuh import (
+        parse_wazuh,
+    )
+    payload = _wazuh_payload_minimum()
+    payload["rule"]["description"] = "X" * 600
+    event = parse_wazuh(payload, source=_ParserSource())
+    assert len(event.title) == 500
+
+
+def test_wazuh_parser_truncates_full_log_to_5000_chars():
+    """`full_log` can be enormous; capped to keep the case payload bounded."""
+    from backend.src.modules.integrations.application.parsers.wazuh import (
+        parse_wazuh,
+    )
+    payload = _wazuh_payload_minimum()
+    payload["full_log"] = "Y" * 6000
+    event = parse_wazuh(payload, source=_ParserSource())
+    assert len(event.custom_values["wazuh_full_log"]) == 5000
+
+
+def test_wazuh_parser_empty_rule_groups_yields_empty_string():
+    from backend.src.modules.integrations.application.parsers.wazuh import (
+        parse_wazuh,
+    )
+    payload = _wazuh_payload_minimum()
+    payload["rule"]["groups"] = []
+    event = parse_wazuh(payload, source=_ParserSource())
+    assert event.custom_values["wazuh_rule_groups"] == ""
+    assert event.wazuh_rule_groups == []
+
+
+def test_normalized_event_dataclass_defaults():
+    """NormalizedEvent fills empty defaults for non-Wazuh sources."""
+    from backend.src.modules.integrations.application.parsers.normalized_event import (
+        NormalizedEvent,
+    )
+    e = NormalizedEvent(title="t", description="d")
+    assert e.custom_values == {}
+    assert e.wazuh_rule_id is None
+    assert e.wazuh_rule_groups == []
+    assert e.wazuh_level is None
