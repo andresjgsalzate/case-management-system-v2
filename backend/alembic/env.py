@@ -56,6 +56,12 @@ from backend.src.modules.security_taxonomies.infrastructure.models import (
     SecurityTaxonomyModel, SecurityTaxonomyAuditLogModel,
     TaxonomyNotificationModel, TaxonomyCatalogMappingModel,
 )
+# SOC Sub-spec 03
+from backend.src.modules.prioritization.infrastructure.models import (
+    PrioritizationCriterionModel, PrioritizationScaleModel,
+    PrioritizationFormulaModel, PrioritizationFormulaCriterionModel,
+    PrioritizationThresholdModel, CasePriorityCalculationModel,
+)
 
 # Alembic Config object
 config = context.config
