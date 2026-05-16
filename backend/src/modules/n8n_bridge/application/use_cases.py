@@ -227,6 +227,57 @@ class N8nBridgeUseCases:
         await self.db.commit()
         return {"ok": True, "approval_id": approval.id, "decision": decision}
 
+    async def _timeout_approval(self, approval_id: str) -> dict:
+        """Background-job entry point: mark a pending approval as 'timeout'
+        and POST to resume_url with decision='timeout' so n8n can continue."""
+        approval = await self._load_approval_for_update(approval_id)
+        if approval is None:
+            return {"ok": False, "reason": "not_found"}
+        if approval.status != "pending":
+            return {"ok": True, "noop": True, "current": approval.status}
+
+        now = datetime.now(timezone.utc)
+        approval.status = "timeout"
+        approval.decided_at = now
+        approval.decided_reason = "auto-timeout (no operator decision)"
+        await self.db.commit()
+        await self.db.refresh(approval)
+
+        resume_payload = {
+            "decision": "timeout",
+            "approval_request_id": approval.id,
+            "case_id": approval.case_id,
+            "playbook_run_id": approval.playbook_run_id,
+            "decided_at": now.isoformat(),
+            "reason": "timeout reached without operator decision",
+        }
+        body = json.dumps(
+            resume_payload, separators=(",", ":"), default=str,
+        ).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if approval.resume_hmac_secret_encrypted:
+            secret = decrypt_secret(approval.resume_hmac_secret_encrypted)
+            sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+            headers["X-CMS-Signature"] = f"sha256={sig}"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self._RESUME_HTTP_TIMEOUT),
+            ) as client:
+                r = await client.post(
+                    approval.resume_url, content=body, headers=headers,
+                )
+                r.raise_for_status()
+            approval.resume_attempted_at = datetime.now(timezone.utc)
+            approval.resume_succeeded = True
+            approval.resume_error = None
+        except httpx.HTTPError as e:
+            approval.resume_attempted_at = datetime.now(timezone.utc)
+            approval.resume_succeeded = False
+            approval.resume_error = f"{type(e).__name__}: {str(e)[:500]}"
+        await self.db.commit()
+        return {"ok": True, "approval_id": approval.id, "status": "timeout"}
+
     async def _load_approval_for_update(
         self, approval_id: str,
     ) -> ApprovalRequestModel | None:

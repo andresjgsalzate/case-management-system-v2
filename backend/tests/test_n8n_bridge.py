@@ -1716,6 +1716,232 @@ def test_approve_rejects_non_pending_status():
     _aio.run(_go())
 
 
+# ── Task 11: APScheduler timeout jobs ──────────────────────────────────
+
+
+def test_timeout_pending_approvals_marks_expired_as_timeout():
+    """Approval with timeout_at in the past → status='timeout' + resume POST attempted."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from sqlalchemy import text as _t
+    from backend.src.modules.n8n_bridge.application.jobs import (
+        timeout_pending_approvals_once,
+    )
+
+    tenant_id = f"t-tmo-appr-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "x")
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+                approval_id = await _seed_pending_approval(
+                    session, case_id=case_id, run_id=run_id,
+                    tenant_id=tenant_id,
+                    resume_url="https://n8n.test/resume-timeout",
+                )
+                # Force the timeout into the past
+                await session.execute(_t(
+                    "UPDATE approval_requests SET timeout_at = :t WHERE id = :id"
+                ), {
+                    "t": datetime.now(timezone.utc) - timedelta(minutes=5),
+                    "id": approval_id,
+                })
+                await session.commit()
+
+                captured = {}
+                async def _post(url, **kwargs):
+                    captured["url"] = url
+                    captured["body"] = kwargs.get("content")
+                    resp = MagicMock()
+                    resp.status_code = 200
+                    resp.content = b"{}"
+                    resp.json = MagicMock(return_value={})
+                    resp.raise_for_status = MagicMock(return_value=None)
+                    return resp
+                fake = MagicMock()
+                fake.__aenter__ = AsyncMock(return_value=fake)
+                fake.__aexit__ = AsyncMock(return_value=None)
+                fake.post = AsyncMock(side_effect=_post)
+
+                with patch("httpx.AsyncClient", return_value=fake):
+                    n = await timeout_pending_approvals_once(session)
+
+                row = (await session.execute(_t(
+                    "SELECT status, resume_succeeded FROM approval_requests "
+                    "WHERE id = :id"
+                ), {"id": approval_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return n, row, captured
+        finally:
+            await engine.dispose()
+
+    n, row, captured = _aio.run(_go())
+    import json as _j
+    assert n == 1
+    assert row[0] == "timeout"
+    assert row[1] is True
+    body = _j.loads(captured["body"])
+    assert body["decision"] == "timeout"
+
+
+def test_timeout_pending_approvals_ignores_future_timeouts():
+    """Approval with timeout_at in the future is NOT touched."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    from backend.src.modules.n8n_bridge.application.jobs import (
+        timeout_pending_approvals_once,
+    )
+
+    tenant_id = f"t-tmo-future-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "x")
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+                approval_id = await _seed_pending_approval(
+                    session, case_id=case_id, run_id=run_id,
+                    tenant_id=tenant_id, resume_url="https://n8n.test/r",
+                )
+                n = await timeout_pending_approvals_once(session)
+                row = (await session.execute(_t(
+                    "SELECT status FROM approval_requests WHERE id = :id"
+                ), {"id": approval_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return n, row[0]
+        finally:
+            await engine.dispose()
+
+    n, status = _aio.run(_go())
+    # Approval is in this batch only if its timeout_at is past;
+    # default seed was now+1h so it should not be processed.
+    assert n == 0
+    assert status == "pending"
+
+
+def test_timeout_pending_triage_transitions_expired_cases():
+    """Case with pending_triage_until in the past → status='logged', timer cleared."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text as _t
+    from backend.src.modules.n8n_bridge.application.jobs import (
+        timeout_pending_triage_once,
+    )
+
+    tenant_id = f"t-tmo-trg-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "x")
+                case_id = await _seed_minimal_case(session, tenant_id)
+
+                pt_status = (await session.execute(_t(
+                    "SELECT id FROM case_statuses WHERE slug = 'pending_triage'"
+                ))).first()[0]
+                await session.execute(_t(
+                    "UPDATE cases SET status_id = :s, "
+                    "pending_triage_until = :t WHERE id = :id"
+                ), {
+                    "s": pt_status,
+                    "t": datetime.now(timezone.utc) - timedelta(minutes=1),
+                    "id": case_id,
+                })
+                await session.commit()
+
+                n = await timeout_pending_triage_once(session)
+                row = (await session.execute(_t(
+                    "SELECT cs.slug, c.pending_triage_until FROM cases c "
+                    "JOIN case_statuses cs ON cs.id = c.status_id "
+                    "WHERE c.id = :id"
+                ), {"id": case_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return n, row
+        finally:
+            await engine.dispose()
+
+    n, row = _aio.run(_go())
+    assert n == 1
+    assert row[0] == "logged"
+    assert row[1] is None
+
+
+def test_timeout_pending_triage_skips_recent_cases():
+    """Case still within its pending_triage_until window is not touched."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text as _t
+    from backend.src.modules.n8n_bridge.application.jobs import (
+        timeout_pending_triage_once,
+    )
+
+    tenant_id = f"t-tmo-trg-skip-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, "x")
+                case_id = await _seed_minimal_case(session, tenant_id)
+                pt_status = (await session.execute(_t(
+                    "SELECT id FROM case_statuses WHERE slug = 'pending_triage'"
+                ))).first()[0]
+                await session.execute(_t(
+                    "UPDATE cases SET status_id = :s, "
+                    "pending_triage_until = :t WHERE id = :id"
+                ), {
+                    "s": pt_status,
+                    "t": datetime.now(timezone.utc) + timedelta(minutes=10),
+                    "id": case_id,
+                })
+                await session.commit()
+                # Make sure no globally-expired cases from another tenant pollute count
+                expired_globally = (await session.execute(_t(
+                    "SELECT COUNT(*) FROM cases c JOIN case_statuses cs "
+                    "ON cs.id = c.status_id WHERE cs.slug = 'pending_triage' "
+                    "AND c.pending_triage_until <= NOW()"
+                ))).first()[0]
+                n = await timeout_pending_triage_once(session)
+                row = (await session.execute(_t(
+                    "SELECT cs.slug FROM cases c "
+                    "JOIN case_statuses cs ON cs.id = c.status_id "
+                    "WHERE c.id = :id"
+                ), {"id": case_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return n, row[0], expired_globally
+        finally:
+            await engine.dispose()
+
+    n, current_status, expired_globally = _aio.run(_go())
+    # Our case is in the future window → unchanged
+    assert current_status == "pending_triage"
+    # n could be ≥0 depending on other tests' leftovers, but our case is not in it
+    assert n == expired_globally
+
+
 def test_models_import_smoke():
     """All 3 n8n_bridge models import without errors."""
     from backend.src.modules.n8n_bridge.infrastructure.models import (
