@@ -12,6 +12,7 @@ import {
   useItemFields,
 } from "@/hooks/useServiceCatalog";
 import { FieldPreview } from "@/components/organisms/ServiceCatalog/FieldPreview";
+import { TaxonomySelector } from "@/components/molecules/TaxonomySelector";
 import { useAuthStore } from "@/store/auth.store";
 import { hasPermission } from "@/lib/permissions";
 import type { CaseType, ServiceCatalogField } from "@/lib/types";
@@ -45,6 +46,8 @@ export function CaseForm() {
   const [categoryId, setCategoryId] = useState("");
   const [serviceItemId, setServiceItemId] = useState("");
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
+  // Sub-spec 02: taxonomy selector for incident/event types
+  const [taxonomyId, setTaxonomyId] = useState<string | null>(null);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -99,6 +102,8 @@ export function CaseForm() {
         priority_id: priorityId,
         application_id: applicationId || undefined,
         service_item_id: serviceItemId,
+        // Sub-spec 02: taxonomy only relevant for incident/event
+        taxonomy_id: caseType !== "request" ? (taxonomyId ?? undefined) : undefined,
         custom_values: fields
           .map((f) => ({ field_id: f.id, value: customValues[f.id] ?? null }))
           .filter((v) => v.value !== null && v.value !== ""),
@@ -177,6 +182,24 @@ export function CaseForm() {
               </label>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Sub-spec 02: Taxonomía de seguridad — solo para incident y event */}
+      {caseType !== "request" && (
+        <div className="flex flex-col gap-1 max-w-2xl">
+          <label className="text-sm font-medium text-foreground">
+            Taxonomía de seguridad
+            <span className="ml-1 text-xs font-normal text-muted-foreground">
+              (opcional — clasifica el evento/incidente)
+            </span>
+          </label>
+          <TaxonomySelector
+            value={taxonomyId}
+            onChange={(id) => setTaxonomyId(id)}
+            caseTypeFilter={caseType}
+            placeholder="— Sin taxonomía —"
+          />
         </div>
       )}
 

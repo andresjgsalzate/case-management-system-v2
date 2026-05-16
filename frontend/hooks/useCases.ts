@@ -65,6 +65,7 @@ export function useCreateCase() {
       priority_id: string;
       application_id?: string;
       service_item_id?: string;
+      taxonomy_id?: string | null;
       custom_values?: { field_id: string; value: string | null }[];
     }) => {
       const { data } = await apiClient.post<ApiResponse<Case>>("/cases", payload);
