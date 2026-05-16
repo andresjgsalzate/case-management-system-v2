@@ -467,3 +467,133 @@ export interface CaseCustomValue {
   value: string | null;
   options?: ServiceFieldOption[] | null;
 }
+
+// ─── Sub-spec 02 — Security Taxonomies ────────────────────────────────────────
+
+export type TLP = "white" | "green" | "amber" | "red";
+export type TriageMode = "auto" | "delegate_to_n8n";
+export type TaxonomyDefaultCaseType = "event" | "incident";
+export type NotifyPhase =
+  | "triage" | "created" | "critical_priority"
+  | "sla_breach" | "resolved" | "promoted";
+export type NotifyChannel = "email" | "chat" | "sms" | "all";
+export type TaxonomyChangeType =
+  | "created" | "updated" | "soft_deleted"
+  | "activated" | "forked" | "refreshed_from_global";
+
+export interface SecurityTaxonomy {
+  id: string;
+  tenant_id: string | null;
+  tuic_code: string;
+  name: string;
+  description: string | null;
+  parent_id: string | null;
+  attack_type: string | null;
+  attack_subtype: string | null;
+  internal_impact_context: string | null;
+  external_impact_context: string | null;
+  managed_by_team_id: string | null;
+  default_case_type: TaxonomyDefaultCaseType;
+  requires_ticket: boolean;
+  triage_mode: TriageMode;
+  delegated_workflow_id: string | null;
+  triage_timeout_seconds: number;
+  tlp_default: TLP;
+  prioritization_formula_id: string | null;
+  mitre_techniques: string[];
+  is_active: boolean;
+  forked_from_global_id: string | null;
+  forked_from_global_at: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  updated_by: string | null;
+}
+
+// /tree response: same as SecurityTaxonomy + children
+export interface SecurityTaxonomyTreeNode extends SecurityTaxonomy {
+  children: SecurityTaxonomyTreeNode[];
+}
+
+export interface TaxonomyNotification {
+  id: string;
+  taxonomy_id: string;
+  team_id: string;
+  notify_phase: NotifyPhase;
+  notify_channel: NotifyChannel;
+  escalation_minutes: number | null;
+}
+
+export interface TaxonomyCatalogMapping {
+  id: string;
+  taxonomy_id: string;
+  service_catalog_item_id: string;
+  is_default: boolean;
+  priority_order: number;
+}
+
+export interface TaxonomyAuditLogEntry {
+  id: string;
+  taxonomy_id: string;
+  changed_by: string;
+  changed_at: string;
+  change_type: TaxonomyChangeType;
+  field_changes: Record<string, { from: unknown; to: unknown } | unknown>;
+  reason: string | null;
+}
+
+// ── Create / update payloads (router accepts these directly) ──────────────────
+
+export interface CreateTaxonomyPayload {
+  tenant_id?: string | null;
+  tuic_code: string;
+  name: string;
+  description?: string | null;
+  parent_id?: string | null;
+  attack_type?: string | null;
+  attack_subtype?: string | null;
+  internal_impact_context?: string | null;
+  external_impact_context?: string | null;
+  managed_by_team_id?: string | null;
+  default_case_type?: TaxonomyDefaultCaseType;
+  requires_ticket?: boolean;
+  triage_mode?: TriageMode;
+  delegated_workflow_id?: string | null;
+  triage_timeout_seconds?: number;
+  tlp_default?: TLP;
+  prioritization_formula_id?: string | null;
+  mitre_techniques?: string[];
+}
+
+export interface UpdateTaxonomyPayload {
+  name?: string;
+  description?: string | null;
+  parent_id?: string | null;
+  attack_type?: string | null;
+  attack_subtype?: string | null;
+  internal_impact_context?: string | null;
+  external_impact_context?: string | null;
+  managed_by_team_id?: string | null;
+  default_case_type?: TaxonomyDefaultCaseType;
+  requires_ticket?: boolean;
+  triage_mode?: TriageMode;
+  delegated_workflow_id?: string | null;
+  triage_timeout_seconds?: number;
+  tlp_default?: TLP;
+  prioritization_formula_id?: string | null;
+  mitre_techniques?: string[];
+  is_active?: boolean;
+}
+
+export interface CreateNotificationPayload {
+  team_id: string;
+  notify_phase: NotifyPhase;
+  notify_channel?: NotifyChannel;
+  escalation_minutes?: number | null;
+}
+
+export interface CreateCatalogMappingPayload {
+  service_catalog_item_id: string;
+  is_default?: boolean;
+  priority_order?: number;
+}
