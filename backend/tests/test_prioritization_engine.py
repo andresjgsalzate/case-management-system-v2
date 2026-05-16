@@ -936,3 +936,44 @@ def test_models_import_smoke():
     assert PrioritizationFormulaCriterionModel.__tablename__ == "prioritization_formula_criteria"
     assert PrioritizationThresholdModel.__tablename__ == "prioritization_thresholds"
     assert CasePriorityCalculationModel.__tablename__ == "case_priority_calculations"
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Router smoke tests (Task 11)
+# ───────────────────────────────────────────────────────────────────────
+
+
+def test_router_endpoints_registered():
+    """Smoke: prioritization routers mounted with expected paths."""
+    from backend.src.main import app
+
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+
+    expected = {
+        "/api/v1/prioritization/criteria",
+        "/api/v1/prioritization/criteria/{criterion_id}/scales",
+        "/api/v1/prioritization/formulas",
+        "/api/v1/prioritization/formulas/by-key/{logical_key}/active",
+        "/api/v1/prioritization/formulas/{formula_id}",
+        "/api/v1/cases/{case_id}/priority-calculations",
+        "/api/v1/cases/{case_id}/recalculate-priority",
+        "/api/v1/cases/{case_id}/promote-to-formula-version",
+    }
+    missing = expected - paths
+    assert not missing, f"Missing routes: {missing}"
+
+
+def test_router_unauthenticated_returns_401():
+    """No Authorization header → 401 (router enforces PermissionChecker)."""
+    import asyncio
+    from httpx import AsyncClient, ASGITransport
+    from backend.src.main import app
+
+    async def _go():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/prioritization/criteria")
+            return r.status_code
+
+    status = asyncio.run(_go())
+    assert status == 401, f"Expected 401, got {status}"
