@@ -567,14 +567,14 @@ def test_callback_valid_transitions_triggered_to_running():
                 case_id = await _seed_minimal_case(session, tenant_id)
                 run_id = await _seed_playbook_run(session, case_id, tenant_id)
 
-                # Use a still-stubbed action (record_decision) so the test
-                # only exercises the dispatcher path, not Task 6/7 handlers.
-                body = b'{"action":"record_decision"}'
+                # Use a still-stubbed action (attach_artifact) so the test
+                # only exercises the dispatcher path, not Task 6/7/8 handlers.
+                body = b'{"action":"attach_artifact"}'
                 headers = {"x-cms-signature": _hmac_header(body, secret)}
 
                 uc = N8nBridgeUseCases(db=session)
                 response = await uc.handle_callback(
-                    action="record_decision", payload={},
+                    action="attach_artifact", payload={},
                     playbook_run_id=run_id,
                     request_body=body, request_headers=headers,
                 )
@@ -1064,6 +1064,186 @@ def test_action_request_approval_encrypts_resume_hmac_secret():
     stored = _aio.run(_go())
     assert stored != resume_secret  # never plaintext
     assert decrypt_secret(stored) == resume_secret  # roundtrips through Fernet
+
+
+# ── Task 8: record_decision terminal callback ─────────────────────────
+
+
+def test_record_decision_marks_run_completed_with_decision():
+    """decision='confirmed_as_event' → run.status='completed' + final_decision."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-dec-conf-{_uuid.uuid4().hex[:8]}"
+    secret = "dec-conf-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {"decision": "confirmed_as_event", "summary": "no malware"}
+                body, headers = _hmac_callback(session, secret, "record_decision", payload)
+
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="record_decision", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                row = (await session.execute(_t(
+                    "SELECT status, final_decision, completed_at, "
+                    "final_decision_data FROM playbook_runs WHERE id = :id"
+                ), {"id": run_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, row
+        finally:
+            await engine.dispose()
+
+    response, row = _aio.run(_go())
+    assert response["ok"] is True
+    assert response["decision"] == "confirmed_as_event"
+    assert row[0] == "completed"
+    assert row[1] == "confirmed_as_event"
+    assert row[2] is not None  # completed_at stamped
+    assert row[3]["summary"] == "no malware"
+
+
+def test_record_decision_discarded_updates_case_status():
+    """decision='discarded' → case.status changes to 'discarded'."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-dec-disc-{_uuid.uuid4().hex[:8]}"
+    secret = "dec-disc-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {"decision": "discarded", "reason": "false positive"}
+                body, headers = _hmac_callback(session, secret, "record_decision", payload)
+
+                uc = _make_uc(session)
+                await uc.handle_callback(
+                    action="record_decision", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                case_status = (await session.execute(_t(
+                    "SELECT cs.slug FROM cases c "
+                    "JOIN case_statuses cs ON cs.id = c.status_id "
+                    "WHERE c.id = :id"
+                ), {"id": case_id})).first()[0]
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return case_status
+        finally:
+            await engine.dispose()
+
+    assert _aio.run(_go()) == "discarded"
+
+
+def test_record_decision_unknown_value_rejected():
+    """decision='resolved' (not in allowlist) → ValidationError (n8n can't close)."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from backend.src.core.exceptions import ValidationError
+
+    tenant_id = f"t-dec-bad-{_uuid.uuid4().hex[:8]}"
+    secret = "dec-bad-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {"decision": "resolved"}  # forbidden
+                body, headers = _hmac_callback(session, secret, "record_decision", payload)
+
+                uc = _make_uc(session)
+                with pytest.raises(ValidationError):
+                    await uc.handle_callback(
+                        action="record_decision", payload=payload,
+                        playbook_run_id=run_id,
+                        request_body=body, request_headers=headers,
+                    )
+                await _cleanup_n8n_tenant(session, tenant_id)
+        finally:
+            await engine.dispose()
+
+    _aio.run(_go())
+
+
+def test_record_decision_idempotent_when_run_already_completed():
+    """Second record_decision call on completed run returns noop."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-dec-idem-{_uuid.uuid4().hex[:8]}"
+    secret = "dec-idem-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {"decision": "confirmed_as_event"}
+                body, headers = _hmac_callback(session, secret, "record_decision", payload)
+
+                uc = _make_uc(session)
+                first = await uc.handle_callback(
+                    action="record_decision", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                second = await uc.handle_callback(
+                    action="record_decision", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                cb_count = (await session.execute(_t(
+                    "SELECT callback_count FROM playbook_runs WHERE id = :id"
+                ), {"id": run_id})).first()[0]
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return first, second, cb_count
+        finally:
+            await engine.dispose()
+
+    first, second, cb_count = _aio.run(_go())
+    assert first["ok"] is True
+    assert first.get("noop") is not True
+    assert second["ok"] is True
+    assert second.get("noop") is True
+    # Both callbacks counted (audit trail intact), but case state only mutated once
+    assert cb_count == 2
 
 
 def test_models_import_smoke():

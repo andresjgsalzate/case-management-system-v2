@@ -210,7 +210,7 @@ class N8nBridgeUseCases:
             "update_taxonomy": self._action_update_taxonomy,
             "add_note": self._action_add_note,
             "request_approval": self._action_request_approval,
-            "record_decision": self._stub_action,
+            "record_decision": self._action_record_decision,
             "attach_artifact": self._stub_action,
             "set_pending_triage_complete": self._stub_action,
         }
@@ -272,6 +272,72 @@ class N8nBridgeUseCases:
     # is the upper bound for incident response decisions; tunable per-call via
     # payload.timeout_minutes.
     _DEFAULT_APPROVAL_TIMEOUT_MINUTES = 60
+
+    # Allowlist for record_decision payload — governance: n8n CANNOT close
+    # cases. Decisions that need terminal status transitions ('resolved',
+    # 'closed') must be made by a human operator in the CMS UI.
+    _ALLOWED_DECISIONS = frozenset({
+        "promoted_to_incident",
+        "confirmed_as_event",
+        "discarded",
+        "requires_human_review",
+    })
+
+    async def _action_record_decision(
+        self, *, case: CaseModel, run: PlaybookRunModel, payload: dict,
+    ) -> dict:
+        """Terminal callback: n8n reports the playbook's final decision.
+
+        Idempotent — second call on an already-completed run returns noop
+        (the audit table still records the inbound callback).
+        """
+        if run.status == "completed":
+            return {"ok": True, "noop": True, "reason": "run already completed"}
+
+        decision = payload.get("decision")
+        if decision not in self._ALLOWED_DECISIONS:
+            raise ValidationError(
+                f"Unknown decision '{decision}'. Allowed: "
+                f"{sorted(self._ALLOWED_DECISIONS)}",
+            )
+
+        # Apply per-decision case mutations (allowlist enforced above)
+        if decision == "discarded":
+            await self._set_case_status_by_slug(case, "discarded")
+        elif decision == "requires_human_review":
+            await self._set_case_status_by_slug(case, "triage")
+        elif decision == "promoted_to_incident":
+            # Lightweight promotion: flip case_type. Full promote (with
+            # case_number re-issue) is operator-initiated via UI.
+            case.case_type = "incident"
+        # 'confirmed_as_event' is a no-op on the case — workflow just records
+        # the verdict in run.final_decision for audit.
+
+        # Always clear pending_triage_until and stamp run completion
+        case.pending_triage_until = None
+        case.updated_at = datetime.now(timezone.utc)
+        run.final_decision = decision
+        run.final_decision_data = {
+            k: v for k, v in payload.items() if k != "decision"
+        }
+        run.status = "completed"
+        run.completed_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        return {"ok": True, "decision": decision, "run_id": run.id}
+
+    async def _set_case_status_by_slug(
+        self, case: CaseModel, slug: str,
+    ) -> None:
+        """Look up case_statuses by slug and assign to case.status_id."""
+        from sqlalchemy import text as _t
+        row = (await self.db.execute(_t(
+            "SELECT id FROM case_statuses WHERE slug = :s LIMIT 1"
+        ), {"s": slug})).first()
+        if not row:
+            raise BusinessRuleError(
+                f"case_status with slug '{slug}' not found",
+            )
+        case.status_id = row[0]
 
     async def _action_request_approval(
         self, *, case: CaseModel, run: PlaybookRunModel, payload: dict,
