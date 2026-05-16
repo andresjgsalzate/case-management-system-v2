@@ -273,6 +273,22 @@ def test_rate_limit_per_source_isolation():
     check_rate_limit("rl-iso-b", limit_per_minute=2)  # B still has full budget
 
 
+def test_integrations_permissions_seeded():
+    """Migration 7fc159a525e6 inserted 4 actions for module=integrations."""
+    from sqlalchemy import text as _t
+
+    async def _go(session):
+        rows = (await session.execute(_t(
+            "SELECT DISTINCT action FROM permissions WHERE module = 'integrations'"
+        ))).all()
+        return {r[0] for r in rows}
+
+    actions = _run_db_query(_go)
+    assert actions == {"read", "manage", "read_events", "replay_events"}, (
+        f"Expected 4 integrations actions, got {actions}"
+    )
+
+
 # ── Task 5: Source CRUD + secret rotation ──────────────────────────────
 
 
