@@ -567,14 +567,14 @@ def test_callback_valid_transitions_triggered_to_running():
                 case_id = await _seed_minimal_case(session, tenant_id)
                 run_id = await _seed_playbook_run(session, case_id, tenant_id)
 
-                # Use a still-stubbed action (request_approval) so the test
-                # only exercises the dispatcher path, not Task 6 handlers.
-                body = b'{"action":"request_approval"}'
+                # Use a still-stubbed action (record_decision) so the test
+                # only exercises the dispatcher path, not Task 6/7 handlers.
+                body = b'{"action":"record_decision"}'
                 headers = {"x-cms-signature": _hmac_header(body, secret)}
 
                 uc = N8nBridgeUseCases(db=session)
                 response = await uc.handle_callback(
-                    action="request_approval", payload={},
+                    action="record_decision", payload={},
                     playbook_run_id=run_id,
                     request_body=body, request_headers=headers,
                 )
@@ -858,6 +858,212 @@ def test_action_add_note_persists_with_playbook_marker():
     assert note[0] == ADMIN_USER_ID
     assert "VirusTotal" in note[1]
     assert run_id[:8] in note[1]  # short marker so operator can trace the n8n source
+
+
+# ── Task 7: Action handler — request_approval ─────────────────────────
+
+
+def test_action_request_approval_creates_pending_row():
+    """request_approval payload → ApprovalRequestModel row with timeout_at set."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-appr-{_uuid.uuid4().hex[:8]}"
+    secret = "appr-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {
+                    "requested_action": "Aislar host PC-FIN-04 de la red",
+                    "action_category": "host_quarantine",
+                    "resume_url": "https://n8n.test/webhook-waiting/abc-123",
+                    "timeout_minutes": 30,
+                    "context": {"host": "PC-FIN-04", "ip": "10.0.0.5"},
+                }
+                body, headers = _hmac_callback(session, secret, "request_approval", payload)
+
+                before = datetime.now(timezone.utc)
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="request_approval", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                row = (await session.execute(_t(
+                    "SELECT id, status, requested_action, action_category, "
+                    "resume_url, timeout_at, playbook_run_id, tenant_id, "
+                    "case_id, context_payload FROM approval_requests "
+                    "WHERE id = :id"
+                ), {"id": response["approval_id"]})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, row, before
+        finally:
+            await engine.dispose()
+
+    response, row, before = _aio.run(_go())
+    assert response["ok"] is True
+    assert response["approval_id"]
+    assert row[1] == "pending"
+    assert row[2] == "Aislar host PC-FIN-04 de la red"
+    assert row[3] == "host_quarantine"
+    assert row[4] == "https://n8n.test/webhook-waiting/abc-123"
+    # timeout_at should be roughly now + 30min
+    timeout_dt = row[5]
+    if timeout_dt.tzinfo is None:
+        timeout_dt = timeout_dt.replace(tzinfo=timezone.utc)
+    delta = (timeout_dt - before).total_seconds()
+    assert 1700 <= delta <= 1900  # 30min ± some margin
+    assert row[6] is not None  # playbook_run_id wired
+    assert row[8] is not None  # case_id wired
+
+
+def test_action_request_approval_uses_default_timeout_when_unspecified():
+    import asyncio as _aio
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-appr-def-{_uuid.uuid4().hex[:8]}"
+    secret = "appr-def-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {
+                    "requested_action": "Default-timeout test",
+                    "action_category": "custom",
+                    "resume_url": "https://n8n.test/wb/default",
+                }
+                body, headers = _hmac_callback(session, secret, "request_approval", payload)
+
+                before = datetime.now(timezone.utc)
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="request_approval", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                row = (await session.execute(_t(
+                    "SELECT timeout_at FROM approval_requests WHERE id = :id"
+                ), {"id": response["approval_id"]})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return row[0], before
+        finally:
+            await engine.dispose()
+
+    timeout_dt, before = _aio.run(_go())
+    if timeout_dt.tzinfo is None:
+        timeout_dt = timeout_dt.replace(tzinfo=timezone.utc)
+    delta = (timeout_dt - before).total_seconds()
+    # Default is 60 minutes per spec — allow margin for test runtime
+    assert 3500 <= delta <= 3700
+
+
+def test_action_request_approval_missing_required_fields_raises():
+    import asyncio as _aio
+    import uuid as _uuid
+    from backend.src.core.exceptions import ValidationError
+
+    tenant_id = f"t-act-appr-bad-{_uuid.uuid4().hex[:8]}"
+    secret = "appr-bad-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                # Missing 'resume_url' entirely
+                payload = {
+                    "requested_action": "no resume here",
+                    "action_category": "custom",
+                }
+                body, headers = _hmac_callback(session, secret, "request_approval", payload)
+                uc = _make_uc(session)
+                with pytest.raises(ValidationError):
+                    await uc.handle_callback(
+                        action="request_approval", payload=payload,
+                        playbook_run_id=run_id,
+                        request_body=body, request_headers=headers,
+                    )
+                await _cleanup_n8n_tenant(session, tenant_id)
+        finally:
+            await engine.dispose()
+
+    _aio.run(_go())
+
+
+def test_action_request_approval_encrypts_resume_hmac_secret():
+    """When payload includes resume_hmac_secret, it's stored as ciphertext."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+    from backend.src.modules.integrations.application.crypto import decrypt_secret
+
+    tenant_id = f"t-act-appr-enc-{_uuid.uuid4().hex[:8]}"
+    secret = "appr-enc-secret"
+    resume_secret = "n8n-resume-hmac-12345"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {
+                    "requested_action": "Encrypt test",
+                    "action_category": "custom",
+                    "resume_url": "https://n8n.test/wb/enc",
+                    "resume_hmac_secret": resume_secret,
+                }
+                body, headers = _hmac_callback(session, secret, "request_approval", payload)
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="request_approval", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                row = (await session.execute(_t(
+                    "SELECT resume_hmac_secret_encrypted FROM approval_requests "
+                    "WHERE id = :id"
+                ), {"id": response["approval_id"]})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return row[0]
+        finally:
+            await engine.dispose()
+
+    stored = _aio.run(_go())
+    assert stored != resume_secret  # never plaintext
+    assert decrypt_secret(stored) == resume_secret  # roundtrips through Fernet
 
 
 def test_models_import_smoke():

@@ -6,7 +6,7 @@ flow land in Tasks 5-12.
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -20,7 +20,10 @@ from backend.src.core.exceptions import (
     ValidationError,
 )
 from backend.src.modules.cases.infrastructure.models import CaseModel
-from backend.src.modules.integrations.application.crypto import decrypt_secret
+from backend.src.modules.integrations.application.crypto import (
+    decrypt_secret,
+    encrypt_secret,
+)
 from backend.src.modules.integrations.infrastructure.models import (
     IntegrationSourceModel,
 )
@@ -29,6 +32,7 @@ from backend.src.modules.n8n_bridge.application.jwt_helper import (
     validate_callback_jwt,
 )
 from backend.src.modules.n8n_bridge.infrastructure.models import (
+    ApprovalRequestModel,
     PlaybookRunCallbackModel,
     PlaybookRunModel,
 )
@@ -205,7 +209,7 @@ class N8nBridgeUseCases:
             "update_priority": self._action_update_priority,
             "update_taxonomy": self._action_update_taxonomy,
             "add_note": self._action_add_note,
-            "request_approval": self._stub_action,
+            "request_approval": self._action_request_approval,
             "record_decision": self._stub_action,
             "attach_artifact": self._stub_action,
             "set_pending_triage_complete": self._stub_action,
@@ -263,6 +267,60 @@ class N8nBridgeUseCases:
         case.updated_at = datetime.now(timezone.utc)
         await self.db.flush()
         return {"ok": True, "taxonomy_id": taxonomy_id}
+
+    # Default approval TTL when n8n omits `timeout_minutes`. SLA spec says 60min
+    # is the upper bound for incident response decisions; tunable per-call via
+    # payload.timeout_minutes.
+    _DEFAULT_APPROVAL_TIMEOUT_MINUTES = 60
+
+    async def _action_request_approval(
+        self, *, case: CaseModel, run: PlaybookRunModel, payload: dict,
+    ) -> dict:
+        """Persist an ApprovalRequestModel pending operator decision.
+
+        Required payload: requested_action, action_category, resume_url.
+        Optional: timeout_minutes (default 60), context (any dict),
+        resume_hmac_secret (encrypted at rest via Fernet).
+        """
+        requested_action = payload.get("requested_action")
+        action_category = payload.get("action_category")
+        resume_url = payload.get("resume_url")
+        if not (requested_action and action_category and resume_url):
+            raise ValidationError(
+                "request_approval requires requested_action, action_category, "
+                "and resume_url in payload",
+            )
+
+        timeout_minutes = payload.get("timeout_minutes") or self._DEFAULT_APPROVAL_TIMEOUT_MINUTES
+        timeout_at = datetime.now(timezone.utc) + timedelta(
+            minutes=int(timeout_minutes),
+        )
+
+        resume_secret = payload.get("resume_hmac_secret")
+        resume_secret_encrypted = (
+            encrypt_secret(resume_secret) if resume_secret else None
+        )
+
+        approval = ApprovalRequestModel(
+            tenant_id=case.tenant_id,
+            case_id=case.id,
+            playbook_run_id=run.id,
+            requested_action=requested_action,
+            action_category=action_category,
+            context_payload=payload.get("context") or {},
+            requested_by_workflow=run.workflow_url,
+            resume_url=resume_url,
+            resume_hmac_secret_encrypted=resume_secret_encrypted,
+            status="pending",
+            timeout_at=timeout_at,
+        )
+        self.db.add(approval)
+        await self.db.flush()
+        return {
+            "ok": True,
+            "approval_id": approval.id,
+            "timeout_at": timeout_at.isoformat(),
+        }
 
     async def _action_add_note(
         self, *, case: CaseModel, run, payload: dict,
