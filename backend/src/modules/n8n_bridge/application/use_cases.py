@@ -43,9 +43,13 @@ class N8nBridgeUseCases:
         self,
         db: AsyncSession,
         cms_base_url: str = "http://localhost:8000",
+        system_user_id: str | None = None,
     ):
         self.db = db
         self.cms_base_url = cms_base_url.rstrip("/")
+        # User attributed to actions n8n performs (case_notes.user_id, etc.).
+        # Phase 1 default is None; router wires this from env at request time.
+        self.system_user_id = system_user_id
 
     # ── trigger_workflow (Task 4) ────────────────────────────────────
 
@@ -195,12 +199,12 @@ class N8nBridgeUseCases:
             raise
 
     def _action_handlers(self):
-        """Map action name → handler. Task 6-9 will replace stubs."""
+        """Map action name → handler. Task 7-9 will replace remaining stubs."""
         return {
-            "update_case_field": self._stub_action,
-            "update_priority": self._stub_action,
-            "update_taxonomy": self._stub_action,
-            "add_note": self._stub_action,
+            "update_case_field": self._action_update_case_field,
+            "update_priority": self._action_update_priority,
+            "update_taxonomy": self._action_update_taxonomy,
+            "add_note": self._action_add_note,
             "request_approval": self._stub_action,
             "record_decision": self._stub_action,
             "attach_artifact": self._stub_action,
@@ -208,8 +212,88 @@ class N8nBridgeUseCases:
         }
 
     async def _stub_action(self, *, case, run, payload) -> dict:
-        """Placeholder for action handlers — Task 6-9 replace these."""
-        return {"ok": True, "todo": "real handler lands in Task 6-9"}
+        """Placeholder — actions still pending: request_approval, record_decision,
+        attach_artifact, set_pending_triage_complete (Tasks 7-9)."""
+        return {"ok": True, "todo": "real handler lands in Task 7-9"}
+
+    # ── Task 6 handlers ──────────────────────────────────────────────
+
+    # Fields n8n is allowed to mutate via update_case_field. Status transitions
+    # and archive flips intentionally excluded — those need either approval
+    # (Task 7) or human in CMS UI.
+    _UPDATE_CASE_FIELD_ALLOWLIST = {
+        "title", "description", "team_id", "complexity",
+        "application_id", "origin_id",
+    }
+
+    async def _action_update_case_field(
+        self, *, case: CaseModel, run, payload: dict,
+    ) -> dict:
+        updates = {
+            k: v for k, v in payload.items()
+            if k in self._UPDATE_CASE_FIELD_ALLOWLIST and k != "action"
+        }
+        if not updates:
+            return {"ok": True, "noop": True, "reason": "no allowed fields in payload"}
+
+        for field, value in updates.items():
+            setattr(case, field, value)
+        case.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        return {"ok": True, "updated_fields": list(updates.keys())}
+
+    async def _action_update_priority(
+        self, *, case: CaseModel, run, payload: dict,
+    ) -> dict:
+        priority_id = payload.get("priority_id")
+        if not priority_id:
+            raise ValidationError("update_priority requires priority_id in payload")
+        case.priority_id = priority_id
+        case.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        return {"ok": True, "priority_id": priority_id}
+
+    async def _action_update_taxonomy(
+        self, *, case: CaseModel, run, payload: dict,
+    ) -> dict:
+        taxonomy_id = payload.get("taxonomy_id")
+        if not taxonomy_id:
+            raise ValidationError("update_taxonomy requires taxonomy_id in payload")
+        case.taxonomy_id = taxonomy_id
+        case.updated_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        return {"ok": True, "taxonomy_id": taxonomy_id}
+
+    async def _action_add_note(
+        self, *, case: CaseModel, run, payload: dict,
+    ) -> dict:
+        """Insert a case_notes row attributed to the configured system_user_id.
+        Content is prefixed with a `[n8n run <short_id>]` marker so operators
+        can trace it back to the playbook execution without a JOIN."""
+        content = payload.get("content") or payload.get("text")
+        if not content:
+            raise ValidationError("add_note requires 'content' or 'text' in payload")
+        if not self.system_user_id:
+            raise BusinessRuleError(
+                "system_user_id not configured for n8n_bridge.add_note",
+            )
+
+        import uuid as _uuid
+        from sqlalchemy import text as _t
+        note_id = str(_uuid.uuid4())
+        short_marker = (run.id or "")[:8]
+        prefixed = f"[n8n run {short_marker}] {content}"
+        await self.db.execute(_t(
+            "INSERT INTO case_notes "
+            "(id, case_id, user_id, tenant_id, content, is_deleted, "
+            "created_at, updated_at) "
+            "VALUES (:id, :cid, :uid, :tid, :content, false, NOW(), NOW())"
+        ), {
+            "id": note_id, "cid": case.id, "uid": self.system_user_id,
+            "tid": case.tenant_id, "content": prefixed,
+        })
+        await self.db.flush()
+        return {"ok": True, "note_id": note_id}
 
     # ── Auth + persistence helpers ───────────────────────────────────
 

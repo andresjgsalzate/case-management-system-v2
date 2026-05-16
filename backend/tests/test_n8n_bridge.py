@@ -567,12 +567,14 @@ def test_callback_valid_transitions_triggered_to_running():
                 case_id = await _seed_minimal_case(session, tenant_id)
                 run_id = await _seed_playbook_run(session, case_id, tenant_id)
 
-                body = b'{"action":"add_note","text":"hello"}'
+                # Use a still-stubbed action (request_approval) so the test
+                # only exercises the dispatcher path, not Task 6 handlers.
+                body = b'{"action":"request_approval"}'
                 headers = {"x-cms-signature": _hmac_header(body, secret)}
 
                 uc = N8nBridgeUseCases(db=session)
                 response = await uc.handle_callback(
-                    action="add_note", payload={"text": "hello"},
+                    action="request_approval", payload={},
                     playbook_run_id=run_id,
                     request_body=body, request_headers=headers,
                 )
@@ -590,6 +592,272 @@ def test_callback_valid_transitions_triggered_to_running():
     assert row[0] == "running"
     assert row[1] == 1
     assert row[2] is not None
+
+
+# ── Task 6: Action handlers (update_case_field/priority/taxonomy/add_note) ──
+
+
+def _make_uc(session):
+    """Construct N8nBridgeUseCases with a system_user_id for handlers that
+    need an actor (add_note inserts user_id)."""
+    from backend.src.modules.n8n_bridge.application.use_cases import (
+        N8nBridgeUseCases,
+    )
+    return N8nBridgeUseCases(
+        db=session,
+        cms_base_url="https://cms.test",
+        system_user_id=ADMIN_USER_ID,
+    )
+
+
+def _hmac_callback(session_session, secret, action, payload):
+    """Build the body+headers tuple used by every action test."""
+    body = _json.dumps({"action": action, **payload}).encode()
+    return body, {"x-cms-signature": _hmac_header(body, secret)}
+
+
+def test_action_update_case_field_applies_allowlist():
+    """title/description from payload land on the case row."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-uf-{_uuid.uuid4().hex[:8]}"
+    secret = "uf-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {"title": "Updated by n8n", "description": "from playbook"}
+                body, headers = _hmac_callback(session, secret, "update_case_field", payload)
+
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="update_case_field", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                row = (await session.execute(_t(
+                    "SELECT title, description FROM cases WHERE id = :id"
+                ), {"id": case_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, row
+        finally:
+            await engine.dispose()
+
+    response, row = _aio.run(_go())
+    assert response["ok"] is True
+    assert set(response["updated_fields"]) == {"title", "description"}
+    assert row[0] == "Updated by n8n"
+    assert row[1] == "from playbook"
+
+
+def test_action_update_case_field_ignores_non_allowed_keys():
+    """status_id (governance: terminal transitions require human) is silently dropped."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-block-{_uuid.uuid4().hex[:8]}"
+    secret = "block-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                original_status = (await session.execute(_t(
+                    "SELECT status_id FROM cases WHERE id = :id"
+                ), {"id": case_id})).first()[0]
+
+                payload = {"status_id": "should-be-ignored", "is_archived": True}
+                body, headers = _hmac_callback(session, secret, "update_case_field", payload)
+
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="update_case_field", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                row = (await session.execute(_t(
+                    "SELECT status_id, is_archived FROM cases WHERE id = :id"
+                ), {"id": case_id})).first()
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, row, original_status
+        finally:
+            await engine.dispose()
+
+    response, row, original_status = _aio.run(_go())
+    assert response.get("noop") is True
+    assert row[0] == original_status
+    assert row[1] is False
+
+
+def test_action_update_priority_sets_priority_id():
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-pri-{_uuid.uuid4().hex[:8]}"
+    secret = "pri-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                # Pick a different priority than the seeded one
+                priorities = (await session.execute(_t(
+                    "SELECT id FROM case_priorities ORDER BY level LIMIT 5"
+                ))).all()
+                current = (await session.execute(_t(
+                    "SELECT priority_id FROM cases WHERE id = :id"
+                ), {"id": case_id})).first()[0]
+                new_pri = next(p[0] for p in priorities if p[0] != current)
+
+                payload = {"priority_id": new_pri}
+                body, headers = _hmac_callback(session, secret, "update_priority", payload)
+                uc = _make_uc(session)
+                await uc.handle_callback(
+                    action="update_priority", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                assigned = (await session.execute(_t(
+                    "SELECT priority_id FROM cases WHERE id = :id"
+                ), {"id": case_id})).first()[0]
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return assigned, new_pri
+        finally:
+            await engine.dispose()
+
+    assigned, expected = _aio.run(_go())
+    assert assigned == expected
+
+
+def test_action_update_taxonomy_sets_taxonomy_id():
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-tax-{_uuid.uuid4().hex[:8]}"
+    secret = "tax-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                # Seed a taxonomy
+                tax_id = str(_uuid.uuid4())
+                await session.execute(_t(
+                    "INSERT INTO security_taxonomies "
+                    "(id, tenant_id, tuic_code, name, default_case_type, "
+                    "requires_ticket, triage_mode, tlp_default, is_active, "
+                    "created_at, updated_at, created_by, mitre_techniques) "
+                    "VALUES (:id, :tid, :code, 'N8n Tax', 'event', false, "
+                    "'auto', 'amber', true, NOW(), NOW(), :cb, "
+                    "CAST('[]' AS json))"
+                ), {
+                    "id": tax_id, "tid": tenant_id,
+                    "code": f"N8N-TAX-{_uuid.uuid4().hex[:6]}",
+                    "cb": ADMIN_USER_ID,
+                })
+                await session.commit()
+
+                payload = {"taxonomy_id": tax_id}
+                body, headers = _hmac_callback(session, secret, "update_taxonomy", payload)
+                uc = _make_uc(session)
+                await uc.handle_callback(
+                    action="update_taxonomy", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                assigned = (await session.execute(_t(
+                    "SELECT taxonomy_id FROM cases WHERE id = :id"
+                ), {"id": case_id})).first()[0]
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return assigned, tax_id
+        finally:
+            await engine.dispose()
+
+    assigned, expected = _aio.run(_go())
+    assert assigned == expected
+
+
+def test_action_add_note_persists_with_playbook_marker():
+    """add_note inserts case_notes row attributed to system user, content prefixed."""
+    import asyncio as _aio
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-act-note-{_uuid.uuid4().hex[:8]}"
+    secret = "note-secret"
+
+    async def _go():
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        engine = create_async_engine(env["DATABASE_URL"])
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await _seed_n8n_source(session, tenant_id, secret)
+                case_id = await _seed_minimal_case(session, tenant_id)
+                run_id = await _seed_playbook_run(session, case_id, tenant_id)
+
+                payload = {"content": "VirusTotal flagged hash abc as malicious"}
+                body, headers = _hmac_callback(session, secret, "add_note", payload)
+
+                uc = _make_uc(session)
+                response = await uc.handle_callback(
+                    action="add_note", payload=payload,
+                    playbook_run_id=run_id,
+                    request_body=body, request_headers=headers,
+                )
+                note = (await session.execute(_t(
+                    "SELECT user_id, content FROM case_notes "
+                    "WHERE case_id = :id"
+                ), {"id": case_id})).first()
+                await session.execute(_t(
+                    "DELETE FROM case_notes WHERE case_id = :id"
+                ), {"id": case_id})
+                await _cleanup_n8n_tenant(session, tenant_id)
+                return response, note, run_id
+        finally:
+            await engine.dispose()
+
+    response, note, run_id = _aio.run(_go())
+    assert response.get("ok") is True
+    assert response.get("note_id")
+    assert note[0] == ADMIN_USER_ID
+    assert "VirusTotal" in note[1]
+    assert run_id[:8] in note[1]  # short marker so operator can trace the n8n source
 
 
 def test_models_import_smoke():
