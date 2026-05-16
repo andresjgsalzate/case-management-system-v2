@@ -53,6 +53,14 @@ from backend.src.modules.integrations.application.jobs import (
     start_inbound_jobs,
     stop_inbound_jobs,
 )
+from backend.src.modules.n8n_bridge.router import (
+    webhook_router as n8n_webhook_router,
+    admin_router as n8n_admin_router,
+)
+from backend.src.modules.n8n_bridge.application.jobs import (
+    start_n8n_jobs,
+    stop_n8n_jobs,
+)
 
 
 @asynccontextmanager
@@ -66,6 +74,7 @@ async def lifespan(app: FastAPI):
     from backend.src.modules.automation.application.jobs import start_scheduled_automations
     start_scheduled_automations(interval_hours=24)
     start_inbound_jobs(interval_seconds=5)
+    start_n8n_jobs()
     yield
     # Shutdown
     from backend.src.modules.sla.application.jobs import stop_sla_scheduler
@@ -73,6 +82,7 @@ async def lifespan(app: FastAPI):
     from backend.src.modules.automation.application.jobs import stop_scheduled_automations
     stop_scheduled_automations()
     stop_inbound_jobs()
+    stop_n8n_jobs()
     await close_redis()
     await engine.dispose()
 
@@ -156,6 +166,8 @@ def create_app() -> FastAPI:
     app.include_router(prioritization_case_router)
     app.include_router(integrations_webhook_router)
     app.include_router(integrations_admin_router)
+    app.include_router(n8n_webhook_router)
+    app.include_router(n8n_admin_router)
 
     return app
 

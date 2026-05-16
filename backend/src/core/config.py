@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     # Falls back to SECRET_KEY when unset.
     N8N_CALLBACK_JWT_SECRET: str | None = None
 
+    # Public base URL the worker embeds in `callback_url` so n8n knows where
+    # to call back. Override in production with the externally-reachable host.
+    CMS_BASE_URL: str = "http://localhost:8000"
+
     # Email (optional)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587

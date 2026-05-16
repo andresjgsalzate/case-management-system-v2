@@ -1942,6 +1942,82 @@ def test_timeout_pending_triage_skips_recent_cases():
     assert n == expired_globally
 
 
+# ── Task 12: Router smoke tests ────────────────────────────────────────
+
+
+def test_n8n_router_endpoints_registered():
+    """Smoke: every documented endpoint is mounted on the app."""
+    from backend.src.main import app
+
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+    expected = {
+        "/api/v1/integrations/callbacks/n8n",
+        "/api/v1/playbook-runs",
+        "/api/v1/playbook-runs/{run_id}",
+        "/api/v1/playbook-runs/{run_id}/callbacks",
+        "/api/v1/cases/{case_id}/trigger-workflow",
+        "/api/v1/approval-requests",
+        "/api/v1/approval-requests/{approval_id}",
+        "/api/v1/approval-requests/{approval_id}/decide",
+    }
+    missing = expected - paths
+    assert not missing, f"Missing routes: {missing}"
+
+
+def test_n8n_admin_endpoint_requires_auth():
+    """GET /playbook-runs without JWT → 401."""
+    import asyncio as _aio
+    from httpx import AsyncClient, ASGITransport
+    from backend.src.main import app
+
+    async def _go():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/playbook-runs")
+            return r.status_code
+
+    assert _aio.run(_go()) == 401
+
+
+def test_n8n_callback_endpoint_400_on_invalid_body():
+    """POST /callbacks/n8n with malformed body → 400."""
+    import asyncio as _aio
+    from httpx import AsyncClient, ASGITransport
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from dotenv import dotenv_values
+    from backend.src.main import app
+    from backend.src.core.database import get_db
+
+    env = dotenv_values("backend/.env")
+    if not env.get("DATABASE_URL"):
+        pytest.skip("DATABASE_URL not in .env")
+
+    engine = create_async_engine(env["DATABASE_URL"])
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _override():
+        async with Session() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override
+    try:
+        async def _go():
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.post(
+                    "/api/v1/integrations/callbacks/n8n",
+                    content=b"not json",
+                    headers={"content-type": "application/json"},
+                )
+                return r.status_code
+        status = _aio.run(_go())
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        _aio.run(engine.dispose())
+
+    assert status == 400
+
+
 def test_models_import_smoke():
     """All 3 n8n_bridge models import without errors."""
     from backend.src.modules.n8n_bridge.infrastructure.models import (
