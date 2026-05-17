@@ -114,3 +114,28 @@ async def test_velo_client_health_check_returns_metrics():
     assert h["total_clients"] == 150
     assert h["active_hunts"] == 1
     assert h["version"] == "0.74.1"
+
+
+def test_sha256_canonical_deterministic():
+    from backend.src.modules.forensic.application.hash_utils import (
+        sha256_canonical,
+    )
+    a = sha256_canonical({"b": 1, "a": 2})
+    b = sha256_canonical({"a": 2, "b": 1})
+    assert a == b
+
+
+def test_sha256_canonical_different_for_different_data():
+    from backend.src.modules.forensic.application.hash_utils import (
+        sha256_canonical,
+    )
+    assert sha256_canonical({"x": 1}) != sha256_canonical({"x": 2})
+
+
+def test_sha256_canonical_returns_64_hex_chars():
+    from backend.src.modules.forensic.application.hash_utils import (
+        sha256_canonical,
+    )
+    h = sha256_canonical({"a": 1})
+    assert len(h) == 64
+    int(h, 16)
