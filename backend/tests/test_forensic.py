@@ -672,3 +672,36 @@ async def test_velociraptor_health_probe_velo_unreachable_returns_error():
 
     assert "error" in metrics
     assert "conn refused" in metrics["error"]
+
+
+def test_forensic_router_imports_and_exposes_expected_paths():
+    """Router has every endpoint the spec lists, with the right HTTP verbs."""
+    from backend.src.modules.forensic.router import router
+
+    routes = {(r.path, tuple(sorted(r.methods))) for r in router.routes}
+    expected = {
+        ("/api/v1/forensic/artifacts", ("GET",)),
+        ("/api/v1/forensic/artifacts/sync", ("POST",)),
+        ("/api/v1/forensic/artifacts/{artifact_id}", ("PATCH",)),
+        ("/api/v1/forensic/clients", ("GET",)),
+        ("/api/v1/forensic/cases/{case_id}/hunts", ("POST",)),
+        ("/api/v1/forensic/hunts", ("GET",)),
+        ("/api/v1/forensic/hunts/{hunt_id}", ("GET",)),
+        ("/api/v1/forensic/hunts/{hunt_id}/cancel", ("POST",)),
+        ("/api/v1/forensic/hunts/{hunt_id}/results", ("GET",)),
+    }
+    missing = expected - routes
+    assert not missing, f"Missing forensic routes: {missing}"
+
+
+def test_main_app_includes_forensic_router():
+    """FastAPI app boots with the forensic router mounted."""
+    from backend.src.main import create_app
+    app = create_app()
+    forensic_paths = [
+        r.path for r in app.routes
+        if getattr(r, "path", "").startswith("/api/v1/forensic")
+    ]
+    assert len(forensic_paths) >= 9, (
+        f"Expected ≥9 forensic routes mounted on the app, got {forensic_paths}"
+    )

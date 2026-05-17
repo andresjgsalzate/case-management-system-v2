@@ -67,6 +67,15 @@ from backend.src.modules.operational_center.router import (
 from backend.src.modules.operational_center.application.jobs import (
     start_operational_jobs,
     stop_operational_jobs,
+    register_health_probe,
+)
+from backend.src.modules.forensic.router import router as forensic_router
+from backend.src.modules.forensic.application.jobs import (
+    start_forensic_jobs,
+    stop_forensic_jobs,
+)
+from backend.src.modules.forensic.application.health import (
+    velociraptor_health_probe,
 )
 
 
@@ -83,6 +92,8 @@ async def lifespan(app: FastAPI):
     start_inbound_jobs(interval_seconds=5)
     start_n8n_jobs()
     start_operational_jobs()
+    register_health_probe("velociraptor", velociraptor_health_probe)
+    start_forensic_jobs()
     yield
     # Shutdown
     from backend.src.modules.sla.application.jobs import stop_sla_scheduler
@@ -91,6 +102,7 @@ async def lifespan(app: FastAPI):
     stop_scheduled_automations()
     stop_inbound_jobs()
     stop_n8n_jobs()
+    stop_forensic_jobs()
     stop_operational_jobs()
     await close_redis()
     await engine.dispose()
@@ -124,6 +136,7 @@ def create_app() -> FastAPI:
             PermissionDeniedError,
             BusinessRuleError,
             ValidationError,
+            OperationalError,
         )
         status_map = {
             NotFoundError: 404,
@@ -133,6 +146,7 @@ def create_app() -> FastAPI:
             PermissionDeniedError: 403,
             BusinessRuleError: 422,
             ValidationError: 400,
+            OperationalError: 502,
         }
         status_code = status_map.get(type(exc), 400)
         return JSONResponse(
@@ -178,6 +192,7 @@ def create_app() -> FastAPI:
     app.include_router(n8n_webhook_router)
     app.include_router(n8n_admin_router)
     app.include_router(operational_router)
+    app.include_router(forensic_router)
 
     return app
 
