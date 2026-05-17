@@ -798,6 +798,91 @@ export interface WazuhRuleMapping {
   description: string | null;
 }
 
+// ── Sub-spec 05 — n8n Bridge ─────────────────────────────────────────────────
+
+export type PlaybookRunStatus =
+  | "triggered"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timeout"
+  | "cancelled";
+
+export type PlaybookRunTriggeredBy =
+  | "auto_triage"
+  | "automation_rule"
+  | "manual"
+  | "approval_resume";
+
+export interface PlaybookRun {
+  id: string;
+  tenant_id: string;
+  case_id: string;
+  workflow_url: string;
+  workflow_id: string | null;
+  triggered_at: string;
+  completed_at: string | null;
+  triggered_by: PlaybookRunTriggeredBy;
+  triggered_by_user: string | null;
+  status: PlaybookRunStatus;
+  last_callback_at: string | null;
+  callback_count: number;
+  n8n_execution_id: string | null;
+  error: string | null;
+  final_decision: string | null;
+  final_decision_data: Record<string, unknown> | null;
+}
+
+export interface PlaybookRunCallback {
+  id: string;
+  playbook_run_id: string;
+  received_at: string;
+  action: string;
+  payload: Record<string, unknown>;
+  success: boolean;
+  error: string | null;
+  response_payload: Record<string, unknown> | null;
+}
+
+export type ApprovalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "timeout"
+  | "cancelled";
+
+export interface ApprovalRequest {
+  id: string;
+  tenant_id: string;
+  case_id: string;
+  playbook_run_id: string | null;
+  requested_action: string;
+  action_category: string;
+  context_payload: Record<string, unknown>;
+  requested_by_workflow: string;
+  resume_url: string;
+  status: ApprovalStatus;
+  approver_user_id: string | null;
+  decided_at: string | null;
+  decided_reason: string | null;
+  timeout_at: string;
+  resume_attempted_at: string | null;
+  resume_succeeded: boolean;
+  resume_error: string | null;
+  created_at: string;
+}
+
+export interface ManualTriggerWorkflowPayload {
+  workflow_url: string;
+  extra_context?: Record<string, unknown> | null;
+}
+
+export interface ApprovalDecidePayload {
+  decision: "approved" | "rejected";
+  reason?: string | null;
+}
+
+
 export interface InboundEvent {
   id: string;
   source_id: string;
