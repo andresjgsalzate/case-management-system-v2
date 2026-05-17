@@ -71,6 +71,10 @@ from backend.src.modules.integrations.infrastructure.models import (
 from backend.src.modules.n8n_bridge.infrastructure.models import (
     PlaybookRunModel, ApprovalRequestModel, PlaybookRunCallbackModel,
 )
+# SOC Sub-spec 06
+from backend.src.modules.operational_center.infrastructure.models import (
+    IntegrationHealthModel,
+)
 
 # Alembic Config object
 config = context.config
