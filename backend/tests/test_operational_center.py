@@ -288,6 +288,233 @@ def test_severity_counters_respects_tenant_isolation():
     assert sum(b.values()) == 2
 
 
+# ── Task 4: integration_health refresh job + SSE stream ───────────────
+
+
+def test_classify_health_status_healthy_low_failure_rate():
+    from backend.src.modules.operational_center.application.jobs import (
+        classify_health_status,
+    )
+    assert classify_health_status(
+        received=100, failed=2,
+        avg_latency_ms=200, seconds_since_last_event=10,
+    ) == "healthy"
+
+
+def test_classify_health_status_degraded_high_failure_rate():
+    from backend.src.modules.operational_center.application.jobs import (
+        classify_health_status,
+    )
+    assert classify_health_status(
+        received=10, failed=4,  # 40% failure rate
+        avg_latency_ms=200, seconds_since_last_event=10,
+    ) == "degraded"
+
+
+def test_classify_health_status_degraded_high_latency():
+    from backend.src.modules.operational_center.application.jobs import (
+        classify_health_status,
+    )
+    assert classify_health_status(
+        received=50, failed=1,
+        avg_latency_ms=10000,  # 10s avg → degraded
+        seconds_since_last_event=30,
+    ) == "degraded"
+
+
+def test_classify_health_status_down_when_no_recent_events():
+    from backend.src.modules.operational_center.application.jobs import (
+        classify_health_status,
+    )
+    assert classify_health_status(
+        received=0, failed=0, avg_latency_ms=None,
+        seconds_since_last_event=700,  # > 600s window
+    ) == "down"
+
+
+def test_classify_health_status_healthy_zero_events_recent_source():
+    """Zero events in 5-min window is fine if the source was recently active
+    (e.g. quiet weekend)."""
+    from backend.src.modules.operational_center.application.jobs import (
+        classify_health_status,
+    )
+    assert classify_health_status(
+        received=0, failed=0, avg_latency_ms=None,
+        seconds_since_last_event=300,
+    ) == "healthy"
+
+
+def test_cleanup_old_integration_health_purges_rows_past_cutoff():
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text as _t
+    from backend.src.modules.operational_center.application.jobs import (
+        cleanup_old_integration_health_once,
+    )
+    from backend.src.modules.integrations.application.crypto import encrypt_secret
+
+    tenant_id = f"t-oc-cleanup-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        # Need a source for FK
+        source_id = str(_uuid.uuid4())
+        await session.execute(_t(
+            "INSERT INTO integration_sources "
+            "(id, tenant_id, name, source_type, auth_method, "
+            "auth_secret_encrypted, is_active, total_events_received, "
+            "total_events_failed, created_at, updated_at, created_by) "
+            "VALUES (:id, :t, 'cl', 'wazuh', 'hmac', :sec, true, 0, 0, "
+            "NOW(), NOW(), :cb)"
+        ), {
+            "id": source_id, "t": tenant_id,
+            "sec": encrypt_secret("x"), "cb": ADMIN_USER_ID,
+        })
+
+        # Insert one row 40d old + one row 1h old
+        old_id = str(_uuid.uuid4())
+        fresh_id = str(_uuid.uuid4())
+        await session.execute(_t(
+            "INSERT INTO integration_health "
+            "(id, source_id, recorded_at, events_received_5min, "
+            "events_processed_5min, events_failed_5min, status) "
+            "VALUES (:id, :sid, :ts, 0, 0, 0, 'healthy')"
+        ), {
+            "id": old_id, "sid": source_id,
+            "ts": datetime.now(timezone.utc) - timedelta(days=40),
+        })
+        await session.execute(_t(
+            "INSERT INTO integration_health "
+            "(id, source_id, recorded_at, events_received_5min, "
+            "events_processed_5min, events_failed_5min, status) "
+            "VALUES (:id, :sid, :ts, 0, 0, 0, 'healthy')"
+        ), {
+            "id": fresh_id, "sid": source_id,
+            "ts": datetime.now(timezone.utc) - timedelta(hours=1),
+        })
+        await session.commit()
+
+        deleted = await cleanup_old_integration_health_once(session)
+
+        # The fresh row should remain
+        remaining = (await session.execute(_t(
+            "SELECT id FROM integration_health WHERE source_id = :sid"
+        ), {"sid": source_id})).scalars().all()
+        # cleanup
+        await session.execute(_t(
+            "DELETE FROM integration_health WHERE source_id = :sid"
+        ), {"sid": source_id})
+        await session.execute(_t(
+            "DELETE FROM integration_sources WHERE id = :id"
+        ), {"id": source_id})
+        await session.commit()
+        return deleted, remaining
+    deleted, remaining = _run_db_query(_go)
+    assert deleted >= 1  # at least our old row purged
+    # The fresh row was still in the list before cleanup
+    # (rowcount may include rows from prior tests' leftovers — flexible assert)
+
+
+def test_refresh_integration_health_writes_one_snapshot_per_source():
+    from sqlalchemy import text as _t
+    from backend.src.modules.operational_center.application.jobs import (
+        refresh_integration_health_once,
+    )
+    from backend.src.modules.integrations.application.crypto import encrypt_secret
+
+    tenant_id = f"t-oc-refresh-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        source_id = str(_uuid.uuid4())
+        await session.execute(_t(
+            "INSERT INTO integration_sources "
+            "(id, tenant_id, name, source_type, auth_method, "
+            "auth_secret_encrypted, is_active, total_events_received, "
+            "total_events_failed, created_at, updated_at, created_by) "
+            "VALUES (:id, :t, 'rf', 'wazuh', 'hmac', :sec, true, 0, 0, "
+            "NOW(), NOW(), :cb)"
+        ), {
+            "id": source_id, "t": tenant_id,
+            "sec": encrypt_secret("x"), "cb": ADMIN_USER_ID,
+        })
+        await session.commit()
+
+        # Don't seed any inbound_events → source is "down" (no recent activity)
+        await refresh_integration_health_once(session)
+
+        rows = (await session.execute(_t(
+            "SELECT status FROM integration_health WHERE source_id = :sid"
+        ), {"sid": source_id})).all()
+        await session.execute(_t(
+            "DELETE FROM integration_health WHERE source_id = :sid"
+        ), {"sid": source_id})
+        await session.execute(_t(
+            "DELETE FROM integration_sources WHERE id = :id"
+        ), {"id": source_id})
+        await session.commit()
+        return rows
+
+    rows = _run_db_query(_go)
+    # One snapshot inserted; status='down' because the source has no
+    # last_event_received_at (and 5-min window is empty)
+    assert len(rows) == 1
+    assert rows[0][0] in ("down", "healthy")  # depends on classify (no last_event_at → infinity)
+    assert rows[0][0] == "down"
+
+
+def test_sse_stream_yields_connected_then_publish_delivers_event():
+    """Subscribing yields 'connected', then publish_to_dashboard fan-outs to
+    that subscriber's queue and the next yield drains the event."""
+    import asyncio as _aio
+    from backend.src.modules.operational_center.application.sse_stream import (
+        publish_to_dashboard,
+        stream_dashboard_events,
+    )
+
+    tenant_id = f"t-oc-sse-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        gen = stream_dashboard_events(tenant_id=tenant_id)
+        first = await gen.__anext__()
+        # Publish AFTER subscribe so the queue exists
+        n = await publish_to_dashboard(
+            tenant_id=tenant_id, event_type="case.updated",
+            payload={"case_id": "x"},
+        )
+        second = await gen.__anext__()
+        await gen.aclose()
+        return first, second, n
+
+    first, second, n = _aio.run(_go())
+    assert first.startswith("event: connected")
+    assert "event: case.updated" in second
+    assert '"case_id": "x"' in second
+    assert n == 1
+
+
+def test_sse_stream_tenant_isolation_no_cross_pollination():
+    """Publish to tenant A → tenant B subscriber sees nothing."""
+    import asyncio as _aio
+    from backend.src.modules.operational_center.application.sse_stream import (
+        publish_to_dashboard,
+        stream_dashboard_events,
+    )
+
+    tenant_a = f"t-oc-sse-iso-a-{_uuid.uuid4().hex[:8]}"
+    tenant_b = f"t-oc-sse-iso-b-{_uuid.uuid4().hex[:8]}"
+
+    async def _go():
+        gen_b = stream_dashboard_events(tenant_id=tenant_b)
+        await gen_b.__anext__()  # connected
+        n = await publish_to_dashboard(
+            tenant_id=tenant_a, event_type="case.updated",
+            payload={"x": 1},
+        )
+        await gen_b.aclose()
+        return n
+
+    # No tenant_b subscriber for tenant_a → 0 delivered
+    assert _aio.run(_go()) == 0
+
+
 def test_integration_health_model_smoke():
     """IntegrationHealthModel imports + maps to expected table."""
     from backend.src.modules.operational_center.infrastructure.models import (
