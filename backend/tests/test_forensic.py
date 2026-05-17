@@ -139,3 +139,29 @@ def test_sha256_canonical_returns_64_hex_chars():
     h = sha256_canonical({"a": 1})
     assert len(h) == 64
     int(h, 16)
+
+
+def test_detect_destructive_quarantine():
+    from backend.src.modules.forensic.application.catalog_sync import (
+        detect_destructive,
+    )
+    assert detect_destructive("Windows.Remediation.QuarantineHost") is True
+    assert detect_destructive("Windows.Detection.Yara.Process") is False
+
+
+def test_detect_evidence():
+    from backend.src.modules.forensic.application.catalog_sync import (
+        detect_evidence,
+    )
+    assert detect_evidence("Windows.Memory.Acquire") is True
+    assert detect_evidence("Windows.Forensics.Timeline") is True
+    assert detect_evidence("Windows.Detection.Yara.Process") is False
+
+
+def test_infer_category_collection():
+    from backend.src.modules.forensic.application.catalog_sync import (
+        infer_category,
+    )
+    assert infer_category("Windows.Memory.Acquire") == "collection"
+    assert infer_category("Windows.Detection.Yara.Process") == "detection"
+    assert infer_category("Windows.Remediation.QuarantineHost") == "remediation"
