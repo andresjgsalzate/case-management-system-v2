@@ -515,6 +515,255 @@ def test_sse_stream_tenant_isolation_no_cross_pollination():
     assert _aio.run(_go()) == 0
 
 
+# ── Task 5: Audit Explorer ────────────────────────────────────────────
+
+
+async def _seed_activity_entry(session, tenant_id, case_id, *, event_type, description):
+    from sqlalchemy import text as _t
+    aid = str(_uuid.uuid4())
+    await session.execute(_t(
+        "INSERT INTO activity_entries "
+        "(id, case_id, tenant_id, actor_id, event_type, description, "
+        "payload, created_at) "
+        "VALUES (:id, :cid, :tid, :uid, :et, :d, CAST('{}' AS json), NOW())"
+    ), {
+        "id": aid, "cid": case_id, "tid": tenant_id,
+        "uid": ADMIN_USER_ID, "et": event_type, "d": description,
+    })
+    await session.commit()
+    return aid
+
+
+async def _seed_audit_log(session, tenant_id, *, action, entity_type, entity_id):
+    from sqlalchemy import text as _t
+    lid = str(_uuid.uuid4())
+    await session.execute(_t(
+        "INSERT INTO audit_logs "
+        "(id, action, entity_type, entity_id, actor_id, tenant_id, created_at) "
+        "VALUES (:id, :a, :et, :eid, :uid, :tid, NOW())"
+    ), {
+        "id": lid, "a": action, "et": entity_type, "eid": entity_id,
+        "uid": ADMIN_USER_ID, "tid": tenant_id,
+    })
+    await session.commit()
+    return lid
+
+
+def test_audit_explorer_returns_union_across_sources():
+    """Activity entry + audit_log + inbound_event all appear in result."""
+    from sqlalchemy import text as _t
+    from backend.src.modules.integrations.application.crypto import encrypt_secret
+    from backend.src.modules.operational_center.application.audit_explorer import (
+        AuditFilters,
+        query_audit_events,
+    )
+
+    tenant_id = f"t-oc-aud-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        case_id = await _seed_case_for_tenant(session, tenant_id)
+        await _seed_activity_entry(
+            session, tenant_id, case_id,
+            event_type="status_changed", description="logged → in_progress",
+        )
+        await _seed_audit_log(
+            session, tenant_id, action="UPDATE",
+            entity_type="case", entity_id=case_id,
+        )
+        # Inbound event needs a source
+        source_id = str(_uuid.uuid4())
+        await session.execute(_t(
+            "INSERT INTO integration_sources "
+            "(id, tenant_id, name, source_type, auth_method, "
+            "auth_secret_encrypted, is_active, total_events_received, "
+            "total_events_failed, created_at, updated_at, created_by) "
+            "VALUES (:id, :t, 'aud-src', 'wazuh', 'hmac', :sec, true, 0, 0, "
+            "NOW(), NOW(), :cb)"
+        ), {
+            "id": source_id, "t": tenant_id, "sec": encrypt_secret("x"),
+            "cb": ADMIN_USER_ID,
+        })
+        await session.execute(_t(
+            "INSERT INTO inbound_events "
+            "(id, source_id, tenant_id, idempotency_key, raw_payload, "
+            "status, attempt_count, max_attempts, received_at) "
+            "VALUES (:id, :sid, :t, :ik, CAST('{}' AS json), 'pending', "
+            "0, 3, NOW())"
+        ), {
+            "id": str(_uuid.uuid4()), "sid": source_id, "t": tenant_id,
+            "ik": f"k-{_uuid.uuid4()}",
+        })
+        await session.commit()
+
+        result = await query_audit_events(
+            session, AuditFilters(tenant_id=tenant_id),
+        )
+
+        # Cleanup — audit_logs is intentionally immutable (compliance
+        # trigger), so test rows linger with a unique tenant_id.
+        await session.execute(_t(
+            "DELETE FROM activity_entries WHERE tenant_id = :t"
+        ), {"t": tenant_id})
+        await session.execute(_t(
+            "DELETE FROM inbound_events WHERE tenant_id = :t"
+        ), {"t": tenant_id})
+        await session.execute(_t(
+            "DELETE FROM integration_sources WHERE id = :id"
+        ), {"id": source_id})
+        await _cleanup_tenant(session, tenant_id)
+        return result
+
+    result = _run_db_query(_go)
+    tables = {e["source_table"] for e in result["events"]}
+    assert "activity" in tables
+    assert "audit" in tables
+    assert "inbound_event" in tables
+    assert result["total"] >= 3
+
+
+def test_audit_explorer_filters_by_case_id():
+    from backend.src.modules.operational_center.application.audit_explorer import (
+        AuditFilters,
+        query_audit_events,
+    )
+
+    tenant_id = f"t-oc-aud-case-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        case_a = await _seed_case_for_tenant(session, tenant_id)
+        case_b = await _seed_case_for_tenant(session, tenant_id)
+        await _seed_activity_entry(
+            session, tenant_id, case_a,
+            event_type="x", description="A1",
+        )
+        await _seed_activity_entry(
+            session, tenant_id, case_b,
+            event_type="x", description="B1",
+        )
+        result = await query_audit_events(
+            session, AuditFilters(tenant_id=tenant_id, case_id=case_a),
+        )
+        from sqlalchemy import text as _t
+        await session.execute(_t(
+            "DELETE FROM activity_entries WHERE tenant_id = :t"
+        ), {"t": tenant_id})
+        await _cleanup_tenant(session, tenant_id)
+        return result
+
+    result = _run_db_query(_go)
+    # Only the case_a activity should be in the result
+    summaries = [e["summary"] for e in result["events"]]
+    assert any("A1" in s for s in summaries)
+    assert not any("B1" in s for s in summaries)
+
+
+def test_audit_explorer_pagination_limit_offset():
+    from backend.src.modules.operational_center.application.audit_explorer import (
+        AuditFilters,
+        query_audit_events,
+    )
+
+    tenant_id = f"t-oc-aud-page-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        case_id = await _seed_case_for_tenant(session, tenant_id)
+        for i in range(5):
+            await _seed_activity_entry(
+                session, tenant_id, case_id,
+                event_type="seq", description=f"row {i}",
+            )
+        page1 = await query_audit_events(
+            session, AuditFilters(tenant_id=tenant_id, limit=2, offset=0),
+        )
+        page2 = await query_audit_events(
+            session, AuditFilters(tenant_id=tenant_id, limit=2, offset=2),
+        )
+        from sqlalchemy import text as _t
+        await session.execute(_t(
+            "DELETE FROM activity_entries WHERE tenant_id = :t"
+        ), {"t": tenant_id})
+        await _cleanup_tenant(session, tenant_id)
+        return page1, page2
+
+    page1, page2 = _run_db_query(_go)
+    assert len(page1["events"]) == 2
+    assert len(page2["events"]) == 2
+    assert page1["total"] == 5
+    # Pages don't overlap
+    ids1 = {e["event_id"] for e in page1["events"]}
+    ids2 = {e["event_id"] for e in page2["events"]}
+    assert ids1.isdisjoint(ids2)
+
+
+def test_audit_explorer_search_filter_narrows_results():
+    from backend.src.modules.operational_center.application.audit_explorer import (
+        AuditFilters,
+        query_audit_events,
+    )
+
+    tenant_id = f"t-oc-aud-s-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        case_id = await _seed_case_for_tenant(session, tenant_id)
+        await _seed_activity_entry(
+            session, tenant_id, case_id,
+            event_type="x", description="ransomware alert",
+        )
+        await _seed_activity_entry(
+            session, tenant_id, case_id,
+            event_type="x", description="phishing attempt",
+        )
+        result = await query_audit_events(
+            session,
+            AuditFilters(tenant_id=tenant_id, search="ransomware"),
+        )
+        from sqlalchemy import text as _t
+        await session.execute(_t(
+            "DELETE FROM activity_entries WHERE tenant_id = :t"
+        ), {"t": tenant_id})
+        await _cleanup_tenant(session, tenant_id)
+        return result
+
+    result = _run_db_query(_go)
+    assert all("ransomware" in e["summary"] for e in result["events"])
+    assert result["total"] >= 1
+
+
+def test_audit_explorer_csv_export_produces_valid_csv():
+    import csv as _csv
+    import io as _io
+    from backend.src.modules.operational_center.application.audit_explorer import (
+        AuditFilters,
+        export_audit_events_csv,
+    )
+
+    tenant_id = f"t-oc-aud-csv-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        case_id = await _seed_case_for_tenant(session, tenant_id)
+        await _seed_activity_entry(
+            session, tenant_id, case_id,
+            event_type="export", description="csv test row",
+        )
+        csv_str = await export_audit_events_csv(
+            session, AuditFilters(tenant_id=tenant_id),
+        )
+        from sqlalchemy import text as _t
+        await session.execute(_t(
+            "DELETE FROM activity_entries WHERE tenant_id = :t"
+        ), {"t": tenant_id})
+        await _cleanup_tenant(session, tenant_id)
+        return csv_str
+
+    csv_str = _run_db_query(_go)
+    rows = list(_csv.reader(_io.StringIO(csv_str)))
+    assert rows[0] == [
+        "source_table", "event_id", "occurred_at",
+        "case_id", "actor_id", "summary", "extra_json",
+    ]
+    assert any("csv test row" in r[5] for r in rows[1:])
+
+
 def test_integration_health_model_smoke():
     """IntegrationHealthModel imports + maps to expected table."""
     from backend.src.modules.operational_center.infrastructure.models import (
