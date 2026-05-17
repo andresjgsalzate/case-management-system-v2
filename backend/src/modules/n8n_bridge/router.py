@@ -85,7 +85,15 @@ async def n8n_callback(
         raise HTTPException(status_code=400, detail=f"Invalid callback body: {e}")
 
     settings = get_settings()
-    uc = N8nBridgeUseCases(db=db, cms_base_url=settings.CMS_BASE_URL)
+    import os as _os
+    uc = N8nBridgeUseCases(
+        db=db,
+        cms_base_url=settings.CMS_BASE_URL,
+        # n8n is the caller — no operator JWT. Handlers that need a user_id
+        # (add_note, attach_artifact) attribute actions to INTEGRATIONS_SYSTEM_USER_ID
+        # (configured per env, same fallback as Sub-spec 04 jobs).
+        system_user_id=_os.environ.get("INTEGRATIONS_SYSTEM_USER_ID"),
+    )
     try:
         result = await uc.handle_callback(
             action=parsed.action,
