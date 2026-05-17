@@ -141,7 +141,7 @@ class ForensicUseCases:
             )
 
         if artifact.is_destructive:
-            self._enforce_destructive_governance(
+            await self._enforce_destructive_governance(
                 n8n_run_id=n8n_run_id,
                 approval_request_id=approval_request_id,
                 case_id=case_id,
@@ -263,10 +263,49 @@ class ForensicUseCases:
             return "automation_n8n"
         raise BusinessRuleError("Cannot determine launched_via")
 
-    def _enforce_destructive_governance(
-        self, *, n8n_run_id, approval_request_id, case_id, artifact
+    async def _enforce_destructive_governance(
+        self,
+        *,
+        n8n_run_id: str | None,
+        approval_request_id: str | None,
+        case_id: str | None,
+        artifact: ForensicArtifactModel,
     ) -> None:
-        # Task 9 fills this in.
-        raise NotImplementedError(
-            "Destructive hunt governance is implemented in Task 9"
+        """Gate destructive hunts behind n8n + approved approval_request.
+
+        A destructive artifact (``is_destructive=True``) can only be launched
+        when ALL of the following hold:
+        - ``n8n_run_id`` is set (no direct UI path).
+        - ``approval_request_id`` is set and resolves to an ``ApprovalRequest``.
+        - That approval is in status ``'approved'``.
+        - The approval's ``case_id`` matches the hunt's ``case_id`` (if any).
+        """
+        if n8n_run_id is None:
+            raise PermissionDeniedError(
+                f"Destructive artifact '{artifact.name}' must be launched "
+                f"via an n8n workflow with approval. Direct UI launch denied."
+            )
+        if approval_request_id is None:
+            raise PermissionDeniedError(
+                "Destructive hunt requires an approved approval_request_id"
+            )
+
+        from backend.src.modules.n8n_bridge.infrastructure.models import (
+            ApprovalRequestModel,
         )
+        approval = await self.db.get(
+            ApprovalRequestModel, approval_request_id
+        )
+        if not approval:
+            raise PermissionDeniedError(
+                f"Approval request {approval_request_id} not found"
+            )
+        if approval.status != "approved":
+            raise PermissionDeniedError(
+                f"Approval {approval_request_id} "
+                f"status='{approval.status}', not 'approved'"
+            )
+        if case_id and approval.case_id != case_id:
+            raise PermissionDeniedError(
+                f"Approval {approval_request_id} not for case {case_id}"
+            )

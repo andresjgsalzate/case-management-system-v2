@@ -235,3 +235,106 @@ def test_launch_hunt_merge_parameters_applies_defaults():
     assert merged["YaraRules"] == "rule default {}"
     assert merged["MaxFileSize"] == 9999
     assert "NoDefault" not in merged
+
+
+@pytest.mark.asyncio
+async def test_destructive_governance_no_n8n_run_denied():
+    from backend.src.core.exceptions import PermissionDeniedError
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    artifact = MagicMock(name="Windows.Remediation.Quarantine")
+    artifact.name = "Windows.Remediation.Quarantine"
+    uc = ForensicUseCases(db=AsyncMock())
+    with pytest.raises(PermissionDeniedError, match="must be launched via"):
+        await uc._enforce_destructive_governance(
+            n8n_run_id=None, approval_request_id="appr-1",
+            case_id="c1", artifact=artifact,
+        )
+
+
+@pytest.mark.asyncio
+async def test_destructive_governance_no_approval_denied():
+    from backend.src.core.exceptions import PermissionDeniedError
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    artifact = MagicMock()
+    artifact.name = "Windows.Remediation.Quarantine"
+    uc = ForensicUseCases(db=AsyncMock())
+    with pytest.raises(PermissionDeniedError, match="approval_request_id"):
+        await uc._enforce_destructive_governance(
+            n8n_run_id="run-1", approval_request_id=None,
+            case_id="c1", artifact=artifact,
+        )
+
+
+@pytest.mark.asyncio
+async def test_destructive_governance_approval_not_approved_denied():
+    from backend.src.core.exceptions import PermissionDeniedError
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    artifact = MagicMock()
+    artifact.name = "Windows.Remediation.Quarantine"
+
+    pending_approval = MagicMock()
+    pending_approval.status = "pending"
+    pending_approval.case_id = "c1"
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=pending_approval)
+
+    uc = ForensicUseCases(db=mock_db)
+    with pytest.raises(PermissionDeniedError, match="status='pending'"):
+        await uc._enforce_destructive_governance(
+            n8n_run_id="run-1", approval_request_id="appr-1",
+            case_id="c1", artifact=artifact,
+        )
+
+
+@pytest.mark.asyncio
+async def test_destructive_governance_approved_for_correct_case_ok():
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    artifact = MagicMock()
+    artifact.name = "Windows.Remediation.Quarantine"
+
+    approved = MagicMock()
+    approved.status = "approved"
+    approved.case_id = "c1"
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=approved)
+
+    uc = ForensicUseCases(db=mock_db)
+    # No exception raised
+    await uc._enforce_destructive_governance(
+        n8n_run_id="run-1", approval_request_id="appr-1",
+        case_id="c1", artifact=artifact,
+    )
+
+
+@pytest.mark.asyncio
+async def test_destructive_governance_approval_for_wrong_case_denied():
+    from backend.src.core.exceptions import PermissionDeniedError
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    artifact = MagicMock()
+    artifact.name = "Windows.Remediation.Quarantine"
+
+    approved = MagicMock()
+    approved.status = "approved"
+    approved.case_id = "other-case"
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=approved)
+
+    uc = ForensicUseCases(db=mock_db)
+    with pytest.raises(PermissionDeniedError, match="not for case"):
+        await uc._enforce_destructive_governance(
+            n8n_run_id="run-1", approval_request_id="appr-1",
+            case_id="c1", artifact=artifact,
+        )
