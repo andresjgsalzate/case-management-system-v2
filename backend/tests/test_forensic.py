@@ -1,6 +1,6 @@
 """Forensic module unit tests."""
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -165,3 +165,35 @@ def test_infer_category_collection():
     assert infer_category("Windows.Memory.Acquire") == "collection"
     assert infer_category("Windows.Detection.Yara.Process") == "detection"
     assert infer_category("Windows.Remediation.QuarantineHost") == "remediation"
+
+
+@pytest.mark.asyncio
+async def test_list_clients_passes_org_id_to_velo():
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    fake_tenant = MagicMock()
+    fake_tenant.id = "t1"
+    fake_tenant.velo_org_id = "O.passes_org_id"
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=fake_tenant)
+
+    with patch(
+        "backend.src.modules.forensic.application.use_cases.get_velo_client"
+    ) as mock_get:
+        mock_velo = MagicMock()
+        mock_velo.list_clients = AsyncMock(return_value=[
+            {"client_id": "C.x", "hostname": "h1", "os": "Windows",
+             "last_seen_at": None},
+        ])
+        mock_get.return_value = mock_velo
+
+        uc = ForensicUseCases(db=mock_db)
+        clients = await uc.list_clients(tenant_id="t1")
+
+    assert len(clients) == 1
+    assert clients[0].client_id == "C.x"
+    mock_velo.list_clients.assert_called_once_with(
+        org_id="O.passes_org_id", label=None, limit=100,
+    )
