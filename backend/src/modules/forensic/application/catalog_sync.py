@@ -75,9 +75,23 @@ def derive_supported_os(velo_artifact: dict) -> list[str]:
 
 
 async def _sync_tenant_catalog(db: AsyncSession, tenant: TenantModel) -> None:
-    """Upsert artifacts for a single tenant. Preserves admin overrides."""
+    """Upsert artifacts for a single tenant. Preserves admin overrides.
+
+    Caller (``sync_all_tenants``) already filters on ``velo_org_id IS NOT NULL``
+    but we re-check here so this function is safe to invoke from tests
+    and ad-hoc one-off scripts without crashing on a tenant that lost its
+    org mapping between filter and call.
+    """
+    if not tenant.velo_org_id:
+        logger.info(
+            "Skipping tenant %s catalog sync: no velo_org_id mapped",
+            tenant.id,
+        )
+        return
     velo_client = get_velo_client()
-    velo_artifacts = await velo_client.list_artifacts(org_id=tenant.velo_org_id)
+    velo_artifacts = await velo_client.list_artifacts(
+        org_id=tenant.velo_org_id,
+    )
 
     seen_names: set[str] = set()
     for va in velo_artifacts:

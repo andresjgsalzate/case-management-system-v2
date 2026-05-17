@@ -221,7 +221,7 @@ class ForensicUseCases:
                 CaseModel,
             )
             case = await self.db.get(CaseModel, case_id)
-            if case:
+            if case and case.tenant_id:
                 return case.tenant_id
         if actor and getattr(actor, "tenant_id", None):
             return actor.tenant_id
