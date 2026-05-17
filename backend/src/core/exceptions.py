@@ -45,3 +45,14 @@ class PermissionDeniedError(AppError):
 class BusinessRuleError(AppError):
     def __init__(self, message: str):
         super().__init__(message=message, code="BUSINESS_RULE_VIOLATION")
+
+
+class OperationalError(AppError):
+    """External system / integration failure (Velociraptor down, n8n unreachable, etc).
+
+    Distinct from BusinessRuleError: the caller did nothing wrong; an upstream
+    dependency is unavailable or returned an error. HTTP layer should map this
+    to 502/503, not 422.
+    """
+    def __init__(self, message: str):
+        super().__init__(message=message, code="OPERATIONAL_ERROR")

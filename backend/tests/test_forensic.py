@@ -197,3 +197,41 @@ async def test_list_clients_passes_org_id_to_velo():
     mock_velo.list_clients.assert_called_once_with(
         org_id="O.passes_org_id", label=None, limit=100,
     )
+
+
+def test_launch_hunt_infer_launched_via_ui_direct():
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    uc = ForensicUseCases(db=AsyncMock())
+    actor = MagicMock(user_id="u1")
+    assert uc._infer_launched_via(actor, None) == "ui_direct"
+    assert uc._infer_launched_via(actor, "n8n-run-x") == "ui_via_n8n"
+    assert uc._infer_launched_via(None, "n8n-run-x") == "automation_n8n"
+
+
+def test_launch_hunt_infer_launched_via_no_launcher_raises():
+    from backend.src.core.exceptions import BusinessRuleError
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    uc = ForensicUseCases(db=AsyncMock())
+    with pytest.raises(BusinessRuleError):
+        uc._infer_launched_via(None, None)
+
+
+def test_launch_hunt_merge_parameters_applies_defaults():
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    uc = ForensicUseCases(db=AsyncMock())
+    schema = [
+        {"name": "YaraRules", "default": "rule default {}"},
+        {"name": "MaxFileSize", "default": 1048576},
+        {"name": "NoDefault"},
+    ]
+    supplied = {"MaxFileSize": 9999}
+    merged = uc._merge_parameters(schema, supplied)
+    assert merged["YaraRules"] == "rule default {}"
+    assert merged["MaxFileSize"] == 9999
+    assert "NoDefault" not in merged
