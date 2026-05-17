@@ -1014,3 +1014,98 @@ export interface InboundEvent {
   received_at: string;
   processed_at: string | null;
 }
+
+// ── Forensic (Sub-spec 07) ──────────────────────────────────────────────
+
+export interface ForensicArtifactParameter {
+  name: string;
+  description?: string;
+  type?: string;
+  default?: unknown;
+}
+
+export interface ForensicArtifact {
+  id: string;
+  name: string;
+  description: string | null;
+  artifact_type:
+    | "CLIENT" | "SERVER" | "NOTEBOOK"
+    | "CLIENT_EVENT" | "SERVER_EVENT";
+  supported_os: string[];
+  parameters_schema: ForensicArtifactParameter[] | null;
+  is_featured: boolean;
+  is_destructive: boolean;
+  requires_evidence_handling: boolean;
+  default_timeout_seconds: number;
+  category: string | null;
+  is_active: boolean;
+  last_synced_at: string;
+}
+
+export type ForensicHuntStatus =
+  | "pending" | "starting" | "running"
+  | "completed" | "failed" | "timeout" | "cancelled";
+
+export type ForensicHuntLaunchedVia =
+  | "ui_direct" | "ui_via_n8n" | "automation_n8n" | "manual_n8n";
+
+export interface ForensicHuntResultSummary {
+  total_rows: number;
+  per_client: Record<string, { status: string; row_count: number }>;
+  sample_rows: Array<Record<string, unknown>>;
+  client_count: number;
+}
+
+export interface ForensicHuntChainOfCustody {
+  result_hash: string | null;
+  velo_hunt_id: string | null;
+  velo_org_id: string;
+  approval_request_id: string | null;
+}
+
+export interface ForensicHunt {
+  id: string;
+  case_id: string | null;
+  artifact_id: string;
+  artifact_name: string;
+  target_label: string | null;
+  status: ForensicHuntStatus;
+  started_at: string;
+  completed_at: string | null;
+  timeout_at: string;
+  launched_via: ForensicHuntLaunchedVia;
+  launched_by_user_id: string | null;
+  result_summary: ForensicHuntResultSummary | null;
+  error: string | null;
+  chain_of_custody?: ForensicHuntChainOfCustody;
+}
+
+export interface ForensicHuntResult {
+  id: string;
+  velo_client_id: string;
+  hostname: string | null;
+  os: string | null;
+  output_summary: {
+    row_count: number;
+    sample_rows: unknown[];
+  } | null;
+  output_total_rows: number;
+  attachments_count: number;
+  status: string;
+  row_hash: string | null;
+  collected_at: string;
+}
+
+export interface VeloClient {
+  client_id: string;
+  hostname: string | null;
+  os: string | null;
+  last_seen_at: string | null;
+}
+
+export interface LaunchHuntRequest {
+  artifact_id: string;
+  parameters: Record<string, unknown>;
+  target_clients: string[];
+  timeout_seconds?: number;
+}
