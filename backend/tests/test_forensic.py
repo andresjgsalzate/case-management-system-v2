@@ -530,3 +530,100 @@ async def test_attach_artifact_idempotent_on_completed_hunt():
     assert response["ok"] is True
     assert response["noop"] is True
     assert response["hunt_status"] == "completed"
+
+
+def _make_timeout_hunt(
+    hunt_id: str = "h1", velo_hunt_id: str | None = "H.expired"
+):
+    h = MagicMock()
+    h.id = hunt_id
+    h.status = "running"
+    h.velo_hunt_id = velo_hunt_id
+    h.velo_org_id = "O.test"
+    h.completed_at = None
+    h.error = None
+    return h
+
+
+@pytest.mark.asyncio
+async def test_check_hunt_timeouts_marks_returned_hunts_as_timeout():
+    from backend.src.modules.forensic.application.jobs import (
+        check_hunt_timeouts_once,
+    )
+    h1 = _make_timeout_hunt("h1", "H.exp1")
+    h2 = _make_timeout_hunt("h2", "H.exp2")
+
+    mock_result = MagicMock()
+    mock_result.scalars = MagicMock(
+        return_value=MagicMock(all=MagicMock(return_value=[h1, h2]))
+    )
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_velo = MagicMock()
+    mock_velo.cancel_hunt = AsyncMock()
+    with patch(
+        "backend.src.modules.forensic.application.jobs.get_velo_client",
+        return_value=mock_velo,
+    ):
+        n = await check_hunt_timeouts_once(mock_db)
+
+    assert n == 2
+    assert h1.status == "timeout"
+    assert h2.status == "timeout"
+    assert h1.completed_at is not None
+    assert h2.completed_at is not None
+    assert mock_velo.cancel_hunt.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_check_hunt_timeouts_velo_failure_still_marks():
+    from backend.src.modules.forensic.application.jobs import (
+        check_hunt_timeouts_once,
+    )
+    h = _make_timeout_hunt("h1", "H.exp")
+
+    mock_result = MagicMock()
+    mock_result.scalars = MagicMock(
+        return_value=MagicMock(all=MagicMock(return_value=[h]))
+    )
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_velo = MagicMock()
+    mock_velo.cancel_hunt = AsyncMock(side_effect=RuntimeError("velo down"))
+    with patch(
+        "backend.src.modules.forensic.application.jobs.get_velo_client",
+        return_value=mock_velo,
+    ):
+        n = await check_hunt_timeouts_once(mock_db)
+
+    assert n == 1
+    assert h.status == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_check_hunt_timeouts_skips_velo_when_no_velo_hunt_id():
+    """Hunt that never reached Velo (velo_hunt_id is None) → no cancel call."""
+    from backend.src.modules.forensic.application.jobs import (
+        check_hunt_timeouts_once,
+    )
+    h = _make_timeout_hunt("h1", velo_hunt_id=None)
+
+    mock_result = MagicMock()
+    mock_result.scalars = MagicMock(
+        return_value=MagicMock(all=MagicMock(return_value=[h]))
+    )
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    mock_velo = MagicMock()
+    mock_velo.cancel_hunt = AsyncMock()
+    with patch(
+        "backend.src.modules.forensic.application.jobs.get_velo_client",
+        return_value=mock_velo,
+    ):
+        await check_hunt_timeouts_once(mock_db)
+
+    assert h.status == "timeout"
+    mock_velo.cancel_hunt.assert_not_called()
