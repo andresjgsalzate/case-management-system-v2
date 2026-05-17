@@ -764,6 +764,236 @@ def test_audit_explorer_csv_export_produces_valid_csv():
     assert any("csv test row" in r[5] for r in rows[1:])
 
 
+# ── Task 6: Approval inbox + integration health detail ───────────────
+
+
+class _OcActor:
+    """Lightweight CurrentUser stand-in for use-case tests."""
+    def __init__(self, tenant_id, user_id=ADMIN_USER_ID, role_name="Super Admin"):
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+        self.id = user_id
+        self.role_name = role_name
+        self.role_id: str | None = None
+
+
+async def _seed_pending_approval_oc(
+    session, *, tenant_id, case_id, status="pending",
+):
+    """Insert an approval_requests row directly (no playbook_run dependency)."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text as _t
+    aid = str(_uuid.uuid4())
+    decided_at = None if status == "pending" else datetime.now(timezone.utc)
+    await session.execute(_t(
+        "INSERT INTO approval_requests "
+        "(id, tenant_id, case_id, requested_action, action_category, "
+        "context_payload, requested_by_workflow, resume_url, status, "
+        "timeout_at, resume_succeeded, decided_at, created_at) "
+        "VALUES (:id, :tid, :cid, 'inbox test', 'custom', "
+        "CAST('{}' AS json), 'wf', 'https://n8n.test/r', :s, "
+        ":to_at, false, :da, NOW())"
+    ), {
+        "id": aid, "tid": tenant_id, "cid": case_id, "s": status,
+        "to_at": datetime.now(timezone.utc) + timedelta(hours=1),
+        "da": decided_at,
+    })
+    await session.commit()
+    return aid
+
+
+def test_get_approval_inbox_filters_by_status():
+    from backend.src.modules.operational_center.application.use_cases import (
+        OperationalCenterUseCases,
+    )
+    from sqlalchemy import text as _t
+
+    tenant_id = f"t-oc-inbox-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        case_id = await _seed_case_for_tenant(session, tenant_id)
+        await _seed_pending_approval_oc(
+            session, tenant_id=tenant_id, case_id=case_id, status="pending",
+        )
+        await _seed_pending_approval_oc(
+            session, tenant_id=tenant_id, case_id=case_id, status="approved",
+        )
+        await _seed_pending_approval_oc(
+            session, tenant_id=tenant_id, case_id=case_id, status="rejected",
+        )
+
+        uc = OperationalCenterUseCases(db=session)
+        actor = _OcActor(tenant_id=tenant_id)
+        pending = await uc.get_approval_inbox(actor=actor, status="pending")
+        approved = await uc.get_approval_inbox(actor=actor, status="approved")
+        all_rows = await uc.get_approval_inbox(actor=actor, status="all")
+
+        await session.execute(_t(
+            "DELETE FROM approval_requests WHERE tenant_id = :t"
+        ), {"t": tenant_id})
+        await _cleanup_tenant(session, tenant_id)
+        return pending, approved, all_rows
+
+    pending, approved, all_rows = _run_db_query(_go)
+    assert {a["status"] for a in pending} == {"pending"}
+    assert {a["status"] for a in approved} == {"approved"}
+    assert len(all_rows) == 3
+
+
+def test_get_approval_inbox_tenant_isolation():
+    """Tenant A inbox never includes Tenant B approvals."""
+    from backend.src.modules.operational_center.application.use_cases import (
+        OperationalCenterUseCases,
+    )
+    from sqlalchemy import text as _t
+
+    tenant_a = f"t-oc-inbox-a-{_uuid.uuid4().hex[:8]}"
+    tenant_b = f"t-oc-inbox-b-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        case_a = await _seed_case_for_tenant(session, tenant_a)
+        case_b = await _seed_case_for_tenant(session, tenant_b)
+        await _seed_pending_approval_oc(
+            session, tenant_id=tenant_a, case_id=case_a, status="pending",
+        )
+        await _seed_pending_approval_oc(
+            session, tenant_id=tenant_b, case_id=case_b, status="pending",
+        )
+
+        uc = OperationalCenterUseCases(db=session)
+        a_rows = await uc.get_approval_inbox(
+            actor=_OcActor(tenant_id=tenant_a),
+        )
+        b_rows = await uc.get_approval_inbox(
+            actor=_OcActor(tenant_id=tenant_b),
+        )
+
+        for t in (tenant_a, tenant_b):
+            await session.execute(_t(
+                "DELETE FROM approval_requests WHERE tenant_id = :t"
+            ), {"t": t})
+            await _cleanup_tenant(session, t)
+        return a_rows, b_rows
+
+    a_rows, b_rows = _run_db_query(_go)
+    assert len(a_rows) == 1
+    assert len(b_rows) == 1
+    assert a_rows[0]["id"] != b_rows[0]["id"]
+
+
+def test_get_integration_health_detail_returns_time_series():
+    """Detail returns rows ordered by recorded_at ASC within window."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text as _t
+    from backend.src.modules.integrations.application.crypto import encrypt_secret
+    from backend.src.modules.operational_center.application.use_cases import (
+        OperationalCenterUseCases,
+    )
+
+    tenant_id = f"t-oc-hdet-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        source_id = str(_uuid.uuid4())
+        await session.execute(_t(
+            "INSERT INTO integration_sources "
+            "(id, tenant_id, name, source_type, auth_method, "
+            "auth_secret_encrypted, is_active, total_events_received, "
+            "total_events_failed, created_at, updated_at, created_by) "
+            "VALUES (:id, :t, 'h-detail', 'wazuh', 'hmac', :sec, true, 0, 0, "
+            "NOW(), NOW(), :cb)"
+        ), {
+            "id": source_id, "t": tenant_id, "sec": encrypt_secret("x"),
+            "cb": ADMIN_USER_ID,
+        })
+        # Insert 3 snapshots spanning 30 min
+        base = datetime.now(timezone.utc) - timedelta(minutes=30)
+        for i in range(3):
+            await session.execute(_t(
+                "INSERT INTO integration_health "
+                "(id, source_id, recorded_at, events_received_5min, "
+                "events_processed_5min, events_failed_5min, status) "
+                "VALUES (:id, :sid, :ts, :n, :n, 0, 'healthy')"
+            ), {
+                "id": str(_uuid.uuid4()), "sid": source_id,
+                "ts": base + timedelta(minutes=i * 10), "n": 10 + i,
+            })
+        await session.commit()
+
+        uc = OperationalCenterUseCases(db=session)
+        rows = await uc.get_integration_health_detail(
+            tenant_id=tenant_id, source_id=source_id, hours=6,
+        )
+
+        await session.execute(_t(
+            "DELETE FROM integration_health WHERE source_id = :sid"
+        ), {"sid": source_id})
+        await session.execute(_t(
+            "DELETE FROM integration_sources WHERE id = :id"
+        ), {"id": source_id})
+        return rows
+
+    rows = _run_db_query(_go)
+    assert len(rows) == 3
+    # ASC by recorded_at
+    assert rows[0]["recorded_at"] <= rows[1]["recorded_at"] <= rows[2]["recorded_at"]
+    assert rows[0]["events_received_5min"] == 10
+    assert rows[2]["events_received_5min"] == 12
+
+
+def test_get_integration_health_detail_returns_all_sources_when_no_source_id():
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text as _t
+    from backend.src.modules.integrations.application.crypto import encrypt_secret
+    from backend.src.modules.operational_center.application.use_cases import (
+        OperationalCenterUseCases,
+    )
+
+    tenant_id = f"t-oc-hdet-all-{_uuid.uuid4().hex[:8]}"
+
+    async def _go(session):
+        # 2 sources, 1 snapshot each
+        source_ids = []
+        for i in range(2):
+            sid = str(_uuid.uuid4())
+            await session.execute(_t(
+                "INSERT INTO integration_sources "
+                "(id, tenant_id, name, source_type, auth_method, "
+                "auth_secret_encrypted, is_active, total_events_received, "
+                "total_events_failed, created_at, updated_at, created_by) "
+                "VALUES (:id, :t, :n, 'wazuh', 'hmac', :sec, true, 0, 0, "
+                "NOW(), NOW(), :cb)"
+            ), {
+                "id": sid, "t": tenant_id, "n": f"src-{i}",
+                "sec": encrypt_secret("x"), "cb": ADMIN_USER_ID,
+            })
+            await session.execute(_t(
+                "INSERT INTO integration_health "
+                "(id, source_id, recorded_at, events_received_5min, "
+                "events_processed_5min, events_failed_5min, status) "
+                "VALUES (:id, :sid, NOW(), 0, 0, 0, 'healthy')"
+            ), {"id": str(_uuid.uuid4()), "sid": sid})
+            source_ids.append(sid)
+        await session.commit()
+
+        uc = OperationalCenterUseCases(db=session)
+        rows = await uc.get_integration_health_detail(
+            tenant_id=tenant_id, hours=6,
+        )
+
+        for sid in source_ids:
+            await session.execute(_t(
+                "DELETE FROM integration_health WHERE source_id = :sid"
+            ), {"sid": sid})
+            await session.execute(_t(
+                "DELETE FROM integration_sources WHERE id = :id"
+            ), {"id": sid})
+        return rows, source_ids
+
+    rows, source_ids = _run_db_query(_go)
+    returned_sources = {r["source_id"] for r in rows}
+    assert set(source_ids).issubset(returned_sources)
+
+
 def test_integration_health_model_smoke():
     """IntegrationHealthModel imports + maps to expected table."""
     from backend.src.modules.operational_center.infrastructure.models import (
