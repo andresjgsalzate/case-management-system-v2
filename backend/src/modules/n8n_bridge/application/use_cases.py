@@ -496,43 +496,28 @@ class N8nBridgeUseCases:
     async def _action_attach_artifact(
         self, *, case: CaseModel, run: PlaybookRunModel, payload: dict,
     ) -> dict:
-        """Phase 1 stub: record the artifact reference as a case note.
+        """Delegated to ``forensic.callback_handler`` (Sub-spec 07).
 
-        Sub-spec 07 (Velociraptor forensics) will replace this with a real
-        forensic_artifacts row + a download link. For now operators see the
-        reference in the case timeline.
+        Payload shape (from n8n → CMS):
+            { "velo_hunt_id": "H.xxxxx",
+              "artifact_name": "Windows.Detection.Yara.Process",
+              "client_results": [ {client_id, hostname, os, row_count,
+                                   sample_rows, blob_uploads: [...]} ] }
         """
-        artifact_type = payload.get("artifact_type") or "unknown"
-        artifact_ref = payload.get("artifact_ref") or ""
-        summary = payload.get("summary") or ""
         if not self.system_user_id:
             raise BusinessRuleError(
-                "system_user_id not configured for n8n_bridge.attach_artifact",
+                "system_user_id not configured for "
+                "n8n_bridge.attach_artifact",
             )
-
-        import uuid as _uuid
-        from sqlalchemy import text as _t
-        note_id = str(_uuid.uuid4())
-        short_marker = (run.id or "")[:8]
-        content = (
-            f"[n8n run {short_marker}] Artifact attached: "
-            f"type={artifact_type}, ref={artifact_ref}"
-            + (f" — {summary}" if summary else "")
+        from backend.src.modules.forensic.application.callback_handler import (
+            ForensicCallbackHandler,
         )
-        await self.db.execute(_t(
-            "INSERT INTO case_notes "
-            "(id, case_id, user_id, tenant_id, content, is_deleted, "
-            "created_at, updated_at) "
-            "VALUES (:id, :cid, :uid, :tid, :content, false, NOW(), NOW())"
-        ), {
-            "id": note_id, "cid": case.id, "uid": self.system_user_id,
-            "tid": case.tenant_id, "content": content,
-        })
-        await self.db.flush()
-        return {
-            "ok": True, "note_id": note_id,
-            "artifact_type": artifact_type, "artifact_ref": artifact_ref,
-        }
+        handler = ForensicCallbackHandler(
+            db=self.db, system_user_id=self.system_user_id
+        )
+        return await handler.handle_attach_artifact(
+            case=case, run=run, payload=payload
+        )
 
     async def _action_set_pending_triage_complete(
         self, *, case: CaseModel, run: PlaybookRunModel, payload: dict,

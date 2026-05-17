@@ -468,3 +468,65 @@ async def test_cancel_hunt_records_reason_in_error():
 
     assert "false alarm" in (result.error or "")
     assert "Alice" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_attach_artifact_missing_velo_hunt_id_raises():
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.forensic.application.callback_handler import (
+        ForensicCallbackHandler,
+    )
+    handler = ForensicCallbackHandler(db=AsyncMock(), system_user_id="sys")
+    case = MagicMock(id="c1", tenant_id="t1")
+    run = MagicMock(id="r1")
+    with pytest.raises(ValidationError, match="velo_hunt_id"):
+        await handler.handle_attach_artifact(
+            case=case, run=run, payload={"artifact_name": "X"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_attach_artifact_hunt_not_found_raises():
+    from backend.src.core.exceptions import NotFoundError
+    from backend.src.modules.forensic.application.callback_handler import (
+        ForensicCallbackHandler,
+    )
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none = MagicMock(return_value=None)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    handler = ForensicCallbackHandler(db=mock_db, system_user_id="sys")
+    case = MagicMock(id="c1", tenant_id="t1")
+    run = MagicMock(id="r1")
+    with pytest.raises(NotFoundError, match="not found"):
+        await handler.handle_attach_artifact(
+            case=case, run=run,
+            payload={"velo_hunt_id": "H.missing"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_attach_artifact_idempotent_on_completed_hunt():
+    from backend.src.modules.forensic.application.callback_handler import (
+        ForensicCallbackHandler,
+    )
+    completed_hunt = MagicMock()
+    completed_hunt.status = "completed"
+    completed_hunt.id = "hunt-1"
+
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none = MagicMock(return_value=completed_hunt)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    handler = ForensicCallbackHandler(db=mock_db, system_user_id="sys")
+    case = MagicMock(id="c1", tenant_id="t1")
+    run = MagicMock(id="r1")
+    response = await handler.handle_attach_artifact(
+        case=case, run=run,
+        payload={"velo_hunt_id": "H.done", "client_results": []},
+    )
+    assert response["ok"] is True
+    assert response["noop"] is True
+    assert response["hunt_status"] == "completed"

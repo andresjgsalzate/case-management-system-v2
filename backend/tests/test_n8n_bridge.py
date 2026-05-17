@@ -1258,58 +1258,12 @@ def test_record_decision_idempotent_when_run_already_completed():
 # ── Task 9: attach_artifact + set_pending_triage_complete ──────────────
 
 
-def test_action_attach_artifact_creates_note_marker():
-    """attach_artifact stub records a note describing the artifact reference."""
-    import asyncio as _aio
-    import uuid as _uuid
-    from sqlalchemy import text as _t
-
-    tenant_id = f"t-act-art-{_uuid.uuid4().hex[:8]}"
-    secret = "art-secret"
-
-    async def _go():
-        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-        from dotenv import dotenv_values
-        env = dotenv_values("backend/.env")
-        engine = create_async_engine(env["DATABASE_URL"])
-        try:
-            async with AsyncSession(engine, expire_on_commit=False) as session:
-                await _seed_n8n_source(session, tenant_id, secret)
-                case_id = await _seed_minimal_case(session, tenant_id)
-                run_id = await _seed_playbook_run(session, case_id, tenant_id)
-
-                payload = {
-                    "artifact_type": "velociraptor_collection",
-                    "artifact_ref": "vc-flow-abc-123",
-                    "summary": "Memory dump from PC-FIN-04",
-                }
-                body, headers = _hmac_callback(session, secret, "attach_artifact", payload)
-
-                uc = _make_uc(session)
-                response = await uc.handle_callback(
-                    action="attach_artifact", payload=payload,
-                    playbook_run_id=run_id,
-                    request_body=body, request_headers=headers,
-                )
-                note = (await session.execute(_t(
-                    "SELECT content FROM case_notes WHERE case_id = :id "
-                    "ORDER BY created_at DESC LIMIT 1"
-                ), {"id": case_id})).first()
-                await session.execute(_t(
-                    "DELETE FROM case_notes WHERE case_id = :id"
-                ), {"id": case_id})
-                await _cleanup_n8n_tenant(session, tenant_id)
-                return response, note
-        finally:
-            await engine.dispose()
-
-    response, note = _aio.run(_go())
-    assert response["ok"] is True
-    assert response.get("artifact_type") == "velociraptor_collection"
-    assert response.get("artifact_ref") == "vc-flow-abc-123"
-    assert "[n8n run" in note[0]
-    assert "velociraptor_collection" in note[0]
-    assert "vc-flow-abc-123" in note[0]
+# Sub-spec 07 Task 11 replaced the Phase-1 `attach_artifact` stub (which
+# created a case_note marker) with a real ForensicCallbackHandler that
+# persists ForensicHuntResultModel rows and computes chain-of-custody hashes.
+# The old "creates_note_marker" test has been removed because that behaviour
+# no longer exists. Real-DB E2E coverage for the new handler lives in the
+# forensic integration suite (Task 15).
 
 
 def test_action_set_pending_triage_complete_transitions_to_logged():
