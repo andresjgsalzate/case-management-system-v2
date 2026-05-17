@@ -994,6 +994,42 @@ def test_get_integration_health_detail_returns_all_sources_when_no_source_id():
     assert set(source_ids).issubset(returned_sources)
 
 
+# ── Task 7: Router smoke tests ────────────────────────────────────────
+
+
+def test_operational_router_endpoints_registered():
+    """All documented routes are mounted on the app."""
+    from backend.src.main import app
+
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+    expected = {
+        "/api/v1/operational/dashboard/summary",
+        "/api/v1/operational/dashboard/stream",
+        "/api/v1/operational/integration-health",
+        "/api/v1/operational/integration-health/{source_id}/history",
+        "/api/v1/operational/approval-requests/inbox",
+        "/api/v1/operational/audit-explorer/query",
+        "/api/v1/operational/audit-explorer/export",
+    }
+    missing = expected - paths
+    assert not missing, f"Missing routes: {missing}"
+
+
+def test_operational_admin_endpoint_requires_auth():
+    """GET /dashboard/summary without JWT → 401."""
+    import asyncio as _aio
+    from httpx import AsyncClient, ASGITransport
+    from backend.src.main import app
+
+    async def _go():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/operational/dashboard/summary")
+            return r.status_code
+
+    assert _aio.run(_go()) == 401
+
+
 def test_integration_health_model_smoke():
     """IntegrationHealthModel imports + maps to expected table."""
     from backend.src.modules.operational_center.infrastructure.models import (
