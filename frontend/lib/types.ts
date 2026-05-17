@@ -883,6 +883,121 @@ export interface ApprovalDecidePayload {
 }
 
 
+// ── Sub-spec 06 — Operational Center UI ─────────────────────────────────────
+
+export type DashboardKPIs = {
+  period_hours: number;
+  cases_per_hour: number | null;
+  mttr_minutes: number | null;
+  mttd_minutes: number | null;
+  sla_compliance_pct: number | null;
+  false_positive_rate_pct: number | null;
+};
+
+export type DashboardRecentEvent = {
+  id: string;
+  source_id: string;
+  received_at: string;
+  status: string;
+  case_id: string | null;
+};
+
+export type IntegrationHealthStatus = "healthy" | "degraded" | "down" | "unknown";
+
+export type IntegrationHealthSummary = {
+  source_id: string;
+  source_name: string | null;
+  status: IntegrationHealthStatus;
+  recorded_at: string;
+  events_received_5min: number;
+  events_processed_5min: number;
+  events_failed_5min: number;
+  avg_latency_ms_5min: number | null;
+};
+
+export type IntegrationHealthHistoryPoint = {
+  id: string;
+  source_id: string;
+  source_name: string | null;
+  recorded_at: string;
+  status: IntegrationHealthStatus;
+  events_received_5min: number;
+  events_processed_5min: number;
+  events_failed_5min: number;
+  avg_latency_ms_5min: number | null;
+  extra_metrics: Record<string, unknown> | null;
+};
+
+export type ApprovalSummary = {
+  id: string;
+  case_id: string;
+  requested_action: string;
+  action_category: string;
+  requested_by_workflow: string;
+  timeout_at: string;
+  created_at: string;
+};
+
+/** SOC dashboard summary returned by /operational/dashboard/summary.
+ * Distinct from the case-management DashboardSummary above; that one is
+ * scoped to the existing /metrics page. */
+export type SocDashboardSummary = {
+  severity_counters: Record<string, number>;
+  kpis: DashboardKPIs;
+  recent_events: DashboardRecentEvent[];
+  integration_health: IntegrationHealthSummary[] | null;
+  pending_approvals_count: number | null;
+  pending_approvals: ApprovalSummary[] | null;
+  generated_at: string;
+};
+
+export type AuditSource = "activity" | "audit" | "inbound_event";
+
+export type AuditEvent = {
+  source_table: AuditSource | string;
+  event_id: string;
+  occurred_at: string;
+  case_id: string | null;
+  actor_id: string | null;
+  summary: string;
+  extra: Record<string, unknown> | null;
+};
+
+export type AuditQueryResultDTO = {
+  events: AuditEvent[];
+  total: number;
+};
+
+export type AuditExplorerFilters = {
+  case_id?: string | null;
+  date_from?: string | null;
+  date_to?: string | null;
+  sources?: AuditSource[];
+  search?: string | null;
+  limit?: number;
+  offset?: number;
+};
+
+// Approvals inbox row shape (richer than ApprovalSummary — includes
+// status/decision fields that the standalone inbox page needs).
+export type ApprovalInboxRow = {
+  id: string;
+  case_id: string;
+  playbook_run_id: string | null;
+  requested_action: string;
+  action_category: string;
+  requested_by_workflow: string;
+  status: "pending" | "approved" | "rejected" | "timeout" | "cancelled";
+  approver_user_id: string | null;
+  decided_at: string | null;
+  decided_reason: string | null;
+  timeout_at: string;
+  resume_succeeded: boolean;
+  created_at: string;
+  context_payload: Record<string, unknown>;
+};
+
+
 export interface InboundEvent {
   id: string;
   source_id: string;
