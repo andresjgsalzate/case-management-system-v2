@@ -6,7 +6,7 @@ import type { ApiResponse, SocDashboardSummary } from "@/lib/types";
 
 const BASE = "/operational/dashboard/summary";
 
-export function useSocDashboardSummary(periodHours: number = 24) {
+export function useDashboardSummary(periodHours: number = 24) {
   return useQuery<SocDashboardSummary>({
     queryKey: ["dashboard-summary", periodHours],
     queryFn: async () => {
