@@ -338,3 +338,133 @@ async def test_destructive_governance_approval_for_wrong_case_denied():
             n8n_run_id="run-1", approval_request_id="appr-1",
             case_id="c1", artifact=artifact,
         )
+
+
+def _make_fake_hunt(*, status: str = "running", launched_by: str = "u1"):
+    h = MagicMock()
+    h.id = "hunt-1"
+    h.status = status
+    h.velo_hunt_id = "H.abc"
+    h.velo_org_id = "O.test"
+    h.launched_by_user_id = launched_by
+    h.completed_at = None
+    h.error = None
+    return h
+
+
+@pytest.mark.asyncio
+async def test_cancel_hunt_invalid_status_raises():
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    uc = ForensicUseCases(db=AsyncMock())
+    with patch.object(
+        uc, "_load_hunt_for_update",
+        new=AsyncMock(return_value=_make_fake_hunt(status="completed")),
+    ):
+        actor = MagicMock(user_id="u1")
+        with pytest.raises(ValidationError, match="status='completed'"):
+            await uc.cancel_hunt(actor=actor, hunt_id="hunt-1")
+
+
+@pytest.mark.asyncio
+async def test_cancel_hunt_owner_checks_cancel_own_perm():
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    mock_db = AsyncMock()
+    uc = ForensicUseCases(db=mock_db)
+    hunt = _make_fake_hunt(status="running", launched_by="u1")
+
+    with patch.object(
+        uc, "_load_hunt_for_update", new=AsyncMock(return_value=hunt),
+    ), patch(
+        "backend.src.modules.forensic.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ) as mock_hp, patch(
+        "backend.src.modules.forensic.application.use_cases.get_velo_client"
+    ) as mock_get_velo:
+        mock_get_velo.return_value = MagicMock(cancel_hunt=AsyncMock())
+        actor = MagicMock(user_id="u1", role_id="r1")
+        result = await uc.cancel_hunt(actor=actor, hunt_id="hunt-1")
+
+    assert result.status == "cancelled"
+    mock_hp.assert_called_once()
+    assert mock_hp.call_args.args[2:] == ("forensic", "cancel_own")
+
+
+@pytest.mark.asyncio
+async def test_cancel_hunt_non_owner_checks_cancel_any_perm():
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    uc = ForensicUseCases(db=AsyncMock())
+    hunt = _make_fake_hunt(status="running", launched_by="other-user")
+
+    with patch.object(
+        uc, "_load_hunt_for_update", new=AsyncMock(return_value=hunt),
+    ), patch(
+        "backend.src.modules.forensic.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ) as mock_hp, patch(
+        "backend.src.modules.forensic.application.use_cases.get_velo_client"
+    ) as mock_get_velo:
+        mock_get_velo.return_value = MagicMock(cancel_hunt=AsyncMock())
+        actor = MagicMock(user_id="u1", role_id="r1")
+        await uc.cancel_hunt(actor=actor, hunt_id="hunt-1")
+
+    assert mock_hp.call_args.args[2:] == ("forensic", "cancel_any")
+
+
+@pytest.mark.asyncio
+async def test_cancel_hunt_velo_failure_still_marks_cancelled():
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    uc = ForensicUseCases(db=AsyncMock())
+    hunt = _make_fake_hunt(status="running", launched_by="u1")
+
+    with patch.object(
+        uc, "_load_hunt_for_update", new=AsyncMock(return_value=hunt),
+    ), patch(
+        "backend.src.modules.forensic.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "backend.src.modules.forensic.application.use_cases.get_velo_client"
+    ) as mock_get_velo:
+        mock_velo = MagicMock()
+        mock_velo.cancel_hunt = AsyncMock(side_effect=RuntimeError("velo down"))
+        mock_get_velo.return_value = mock_velo
+        actor = MagicMock(user_id="u1", role_id="r1")
+        result = await uc.cancel_hunt(
+            actor=actor, hunt_id="hunt-1", reason="cleanup",
+        )
+
+    assert result.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_hunt_records_reason_in_error():
+    from backend.src.modules.forensic.application.use_cases import (
+        ForensicUseCases,
+    )
+    uc = ForensicUseCases(db=AsyncMock())
+    hunt = _make_fake_hunt(status="running", launched_by="u1")
+
+    with patch.object(
+        uc, "_load_hunt_for_update", new=AsyncMock(return_value=hunt),
+    ), patch(
+        "backend.src.modules.forensic.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "backend.src.modules.forensic.application.use_cases.get_velo_client"
+    ) as mock_get_velo:
+        mock_get_velo.return_value = MagicMock(cancel_hunt=AsyncMock())
+        actor = MagicMock(user_id="u1", role_id="r1", full_name="Alice")
+        result = await uc.cancel_hunt(
+            actor=actor, hunt_id="hunt-1", reason="false alarm",
+        )
+
+    assert "false alarm" in (result.error or "")
+    assert "Alice" in (result.error or "")

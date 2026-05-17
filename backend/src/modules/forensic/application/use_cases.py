@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.src.core.exceptions import (
     BusinessRuleError, NotFoundError, OperationalError, PermissionDeniedError,
+    ValidationError,
 )
 from backend.src.core.middleware.permission_checker import has_permission
 from backend.src.modules.forensic.application.dtos import ClientSummary
@@ -309,3 +310,67 @@ class ForensicUseCases:
             raise PermissionDeniedError(
                 f"Approval {approval_request_id} not for case {case_id}"
             )
+
+    async def cancel_hunt(
+        self,
+        *,
+        actor,
+        hunt_id: str,
+        reason: str | None = None,
+    ) -> ForensicHuntModel:
+        """Cancel an in-flight hunt.
+
+        Permissions tier: owners need ``forensic.cancel_own``; anyone else
+        needs ``forensic.cancel_any``. If the Velo round-trip fails, the
+        CMS row is still marked ``cancelled`` (and a warning logged) — the
+        CMS is the source of truth for the operator. Velo will reap the
+        orphan hunt on its own timeout.
+        """
+        hunt = await self._load_hunt_for_update(hunt_id)
+        if hunt.status not in ("pending", "starting", "running"):
+            raise ValidationError(
+                f"Hunt is in status='{hunt.status}', cannot cancel"
+            )
+
+        if hunt.launched_by_user_id == actor.user_id:
+            await self._require_perm(actor, "forensic", "cancel_own")
+        else:
+            await self._require_perm(actor, "forensic", "cancel_any")
+
+        if hunt.velo_hunt_id:
+            velo_client = get_velo_client()
+            try:
+                await velo_client.cancel_hunt(
+                    org_id=hunt.velo_org_id,
+                    hunt_id=hunt.velo_hunt_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Velo cancel failed for hunt %s: %s — marking cancelled "
+                    "in CMS anyway",
+                    hunt.id, e,
+                )
+
+        hunt.status = "cancelled"
+        hunt.completed_at = datetime.now(timezone.utc)
+        if reason:
+            display = getattr(actor, "full_name", None) or actor.user_id
+            hunt.error = f"Cancelled by {display}: {reason}"
+        await self.db.commit()
+        return hunt
+
+    async def _load_hunt_for_update(self, hunt_id: str) -> ForensicHuntModel:
+        """Fetch a hunt row with ``SELECT ... FOR UPDATE``.
+
+        Pessimistic lock prevents two concurrent ``cancel_hunt`` calls from
+        racing on the same hunt (and double-calling Velo).
+        """
+        result = await self.db.execute(
+            select(ForensicHuntModel)
+            .where(ForensicHuntModel.id == hunt_id)
+            .with_for_update()
+        )
+        hunt = result.scalar_one_or_none()
+        if not hunt:
+            raise NotFoundError(f"Hunt {hunt_id} not found")
+        return hunt
