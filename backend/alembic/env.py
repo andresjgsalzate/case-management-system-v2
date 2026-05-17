@@ -75,6 +75,11 @@ from backend.src.modules.n8n_bridge.infrastructure.models import (
 from backend.src.modules.operational_center.infrastructure.models import (
     IntegrationHealthModel,
 )
+# SOC Sub-spec 07
+from backend.src.modules.forensic.infrastructure.models import (
+    ForensicArtifactModel, ForensicHuntModel,
+    ForensicHuntResultModel, ForensicHuntAttachmentModel,
+)
 
 # Alembic Config object
 config = context.config
