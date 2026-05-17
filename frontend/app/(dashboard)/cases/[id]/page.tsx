@@ -27,6 +27,7 @@ import { CaseTimeTracker } from "@/components/organisms/CaseTimeTracker";
 import { CaseClassification } from "@/components/organisms/CaseClassification";
 import { CaseActivity } from "@/components/organisms/CaseActivity";
 import { PriorityCalculationBreakdown } from "@/components/organisms/PriorityCalculationBreakdown";
+import { SeguridadTabsLayout } from "@/components/organisms/case_detail/tabs/seguridad/SeguridadTabsLayout";
 import { CaseAttachments } from "@/components/organisms/CaseAttachments";
 import { RelatedKBArticlesSection } from "@/components/organisms/RelatedKBArticlesSection";
 import { CaseCustomValuesCard } from "@/components/organisms/ServiceCatalog/CaseCustomValuesCard";
@@ -40,7 +41,7 @@ import { getCurrentUserId } from "@/lib/apiClient";
 import { formatDate, formatRelative, parseSolution, serializeSolution, type SolutionData } from "@/lib/utils";
 import type { CaseStatus } from "@/lib/types";
 
-type Tab = "details" | "notes" | "chat" | "tiempo" | "clasificacion" | "priorizacion" | "actividad";
+type Tab = "details" | "notes" | "chat" | "tiempo" | "clasificacion" | "priorizacion" | "seguridad" | "actividad";
 
 export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const confirm = useConfirm();
@@ -86,6 +87,7 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
     ...(canViewTimer  ? [{ key: "tiempo"       as Tab, label: "Tiempo" }]        : []),
     ...(canClassify   ? [{ key: "clasificacion" as Tab, label: "Clasificación" }] : []),
     ...(canViewPriorityCalcs ? [{ key: "priorizacion" as Tab, label: "Priorización" }] : []),
+    { key: "seguridad", label: "Seguridad" },
     { key: "actividad", label: "Actividad" },
   ];
 
@@ -461,6 +463,11 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
         {tab === "priorizacion" && canViewPriorityCalcs && (
           <div className="flex-1 overflow-y-auto min-h-0">
             <PriorityCalculationBreakdown caseId={params.id} />
+          </div>
+        )}
+        {tab === "seguridad" && (
+          <div className="flex-1 overflow-y-auto min-h-0 p-3">
+            <SeguridadTabsLayout caseId={params.id} />
           </div>
         )}
         {tab === "actividad" && (
