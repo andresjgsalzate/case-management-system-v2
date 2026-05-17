@@ -1,5 +1,6 @@
 """Forensic module unit tests."""
 import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -52,3 +53,64 @@ def test_forensic_permissions_seeded():
     assert actions == expected, (
         f"Missing: {expected - actions}, Extra: {actions - expected}"
     )
+
+
+@pytest.mark.asyncio
+async def test_velo_client_list_artifacts_passes_org_id():
+    from backend.src.modules.forensic.infrastructure.velo_client import (
+        VelociraptorClient,
+    )
+    client = VelociraptorClient(
+        endpoint="grpc://velo.local:8001",
+        api_config_path="/tmp/api.config.yaml",
+    )
+    with patch.object(client, "_query_vql", new=AsyncMock(return_value=[
+        {"name": "Windows.Detection.Yara.Process", "type": "CLIENT",
+         "description": "x", "parameters": []}
+    ])) as mock_q:
+        artifacts = await client.list_artifacts(org_id="O.test")
+    assert len(artifacts) == 1
+    call_kwargs = mock_q.call_args.kwargs
+    assert call_kwargs.get("org_id") == "O.test"
+
+
+@pytest.mark.asyncio
+async def test_velo_client_create_hunt_returns_hunt_id():
+    from backend.src.modules.forensic.infrastructure.velo_client import (
+        VelociraptorClient,
+    )
+    client = VelociraptorClient(
+        endpoint="grpc://velo.local:8001",
+        api_config_path="/tmp/api.config.yaml",
+    )
+    with patch.object(client, "_query_vql", new=AsyncMock(return_value=[
+        {"hunt_id": "H.abc123"}
+    ])):
+        hunt_id = await client.create_hunt(
+            org_id="O.test",
+            artifact_name="Windows.Detection.Yara.Process",
+            parameters={"YaraRules": "rule x { ... }"},
+            client_ids=["C.host1"],
+        )
+    assert hunt_id == "H.abc123"
+
+
+@pytest.mark.asyncio
+async def test_velo_client_health_check_returns_metrics():
+    from backend.src.modules.forensic.infrastructure.velo_client import (
+        VelociraptorClient,
+    )
+    client = VelociraptorClient(
+        endpoint="grpc://velo.local:8001",
+        api_config_path="/tmp/api.config.yaml",
+    )
+    with patch.object(client, "_query_vql", new=AsyncMock(side_effect=[
+        [{"online": 142, "total": 150}],
+        [{"active_hunts": 1}],
+        [{"version": {"version": "0.74.1"}}],
+    ])):
+        h = await client.health_check()
+    assert h["online_clients"] == 142
+    assert h["total_clients"] == 150
+    assert h["active_hunts"] == 1
+    assert h["version"] == "0.74.1"

@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     # to call back. Override in production with the externally-reachable host.
     CMS_BASE_URL: str = "http://localhost:8000"
 
+    # Velociraptor (Sub-spec 07) — DFIR integration
+    # Endpoint is for diagnostics/logging; the actual gRPC connection
+    # string comes from `api.config.yaml` so the cert SAN matches.
+    VELOCIRAPTOR_ENDPOINT: str | None = None
+    # Path to api.config.yaml (mTLS credentials for the Velociraptor API)
+    VELOCIRAPTOR_API_CONFIG_PATH: str | None = None
+
     # Email (optional)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
