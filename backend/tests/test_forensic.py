@@ -627,3 +627,48 @@ async def test_check_hunt_timeouts_skips_velo_when_no_velo_hunt_id():
 
     assert h.status == "timeout"
     mock_velo.cancel_hunt.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_velociraptor_health_probe_returns_metrics():
+    from backend.src.modules.forensic.application.health import (
+        velociraptor_health_probe,
+    )
+    source = MagicMock(id="src-1", source_type="velociraptor")
+    with patch(
+        "backend.src.modules.forensic.application.health.get_velo_client"
+    ) as mock_get:
+        mock_velo = MagicMock()
+        mock_velo.health_check = AsyncMock(return_value={
+            "online_clients": 142,
+            "total_clients": 150,
+            "active_hunts": 1,
+            "version": "0.74.1",
+        })
+        mock_get.return_value = mock_velo
+        metrics = await velociraptor_health_probe(source)
+
+    assert metrics["online_clients"] == 142
+    assert metrics["total_clients"] == 150
+    assert metrics["active_hunts"] == 1
+    assert metrics["version"] == "0.74.1"
+
+
+@pytest.mark.asyncio
+async def test_velociraptor_health_probe_velo_unreachable_returns_error():
+    from backend.src.modules.forensic.application.health import (
+        velociraptor_health_probe,
+    )
+    source = MagicMock(id="src-1", source_type="velociraptor")
+    with patch(
+        "backend.src.modules.forensic.application.health.get_velo_client"
+    ) as mock_get:
+        mock_velo = MagicMock()
+        mock_velo.health_check = AsyncMock(
+            side_effect=RuntimeError("conn refused")
+        )
+        mock_get.return_value = mock_velo
+        metrics = await velociraptor_health_probe(source)
+
+    assert "error" in metrics
+    assert "conn refused" in metrics["error"]
