@@ -80,6 +80,11 @@ from backend.src.modules.forensic.infrastructure.models import (
     ForensicArtifactModel, ForensicHuntModel,
     ForensicHuntResultModel, ForensicHuntAttachmentModel,
 )
+# SOC Sub-spec 08
+from backend.src.modules.alert_reports.infrastructure.models import (
+    AlertReportTemplateModel, AlertReportTemplateVersionModel,
+    CaseGeneratedReportModel,
+)
 
 # Alembic Config object
 config = context.config
