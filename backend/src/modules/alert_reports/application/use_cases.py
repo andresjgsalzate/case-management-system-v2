@@ -862,3 +862,79 @@ class AlertReportGenerationUseCases:
         )
         self.db.add(entry)
         await self.db.flush()
+
+    # ── Task 10: preview (no persistence) ────────────────────────────────
+
+    async def preview_template(
+        self,
+        *,
+        actor,
+        template_id: str,
+        sample_case_id: str,
+        blocks_override: list[dict] | None = None,
+        header_override: dict | None = None,
+        footer_override: dict | None = None,
+    ) -> bytes:
+        """Render a PDF preview without persisting anything.
+
+        Used by the template editor (Task 16) for live preview: the admin
+        edits blocks/header/footer in the UI and POSTs the in-progress state
+        here; the response is a PDF buffer the editor renders inline.
+
+        Returns PDF bytes. Does NOT touch ``case_generated_reports`` /
+        ``case_attachments`` / ``activity_entries`` / event bus.
+        """
+        if not await has_permission(
+            self.db, actor.role_id, "alert_reports", "read"
+        ):
+            raise PermissionDeniedError(
+                "Permission denied: alert_reports.read"
+            )
+
+        template = await self.db.get(AlertReportTemplateModel, template_id)
+        if not template:
+            raise NotFoundError(f"Template {template_id} not found")
+
+        version = await self.db.get(
+            AlertReportTemplateVersionModel, template.current_version_id
+        )
+        if not version:
+            raise BusinessRuleError(
+                f"Template {template_id} has no current_version_id set"
+            )
+
+        case = await self._load_case(sample_case_id)
+        self._require_case_access(actor, case)
+        snapshot = await build_data_snapshot(self.db, case)
+
+        blocks = (
+            blocks_override if blocks_override is not None else version.blocks
+        )
+        header = (
+            header_override
+            if header_override is not None
+            else version.header_config
+        )
+        footer = (
+            footer_override
+            if footer_override is not None
+            else version.footer_config
+        )
+
+        if blocks_override is not None:
+            validate_blocks(blocks_override)
+
+        html = self.renderer.render(
+            blocks=blocks,
+            snapshot=snapshot,
+            header_config=header,
+            footer_config=footer,
+        )
+        pdf_bytes = await html_to_pdf(
+            html=html,
+            header_config=header,
+            footer_config=footer,
+            snapshot=snapshot,
+            css_overrides=version.css_overrides,
+        )
+        return pdf_bytes

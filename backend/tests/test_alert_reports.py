@@ -982,3 +982,134 @@ async def test_delete_report_soft_deletes_attachment_and_logs_audit():
     mock_db.delete.assert_called_once_with(report)
     assert captured.get("reason") == "False positive — duplicado"
     assert captured.get("report_id") == "rep-1"
+
+
+# ── preview_template (Task 10) ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preview_returns_pdf_without_persisting():
+    """preview_template returns bytes and never touches db.add/commit/delete."""
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+    template = MagicMock(
+        id="tpl-1", tenant_id="t1", current_version_id="v-1",
+    )
+    version = MagicMock(
+        id="v-1", version=1,
+        blocks=[{"type": "alert_metadata", "params": {}}],
+        header_config={"title_template": "STD"},
+        footer_config={},
+        css_overrides=None,
+    )
+    case = MagicMock(id="c1", tenant_id="t1")
+    fake_pdf = b"%PDF-1.4\npreview"
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(side_effect=[template, version, case])
+
+    actor = MagicMock(
+        user_id="u1", role_id="r1", tenant_id="t1", is_global=False,
+    )
+
+    async def fake_build_snapshot(db, c):
+        return {"case": {"id": c.id, "tlp": "WHITE"}}
+
+    async def fake_html_to_pdf(**kwargs):
+        return fake_pdf
+
+    uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "backend.src.modules.alert_reports.application.use_cases.build_data_snapshot",
+        new=fake_build_snapshot,
+    ), patch(
+        "backend.src.modules.alert_reports.application.use_cases.html_to_pdf",
+        new=fake_html_to_pdf,
+    ), patch.object(
+        uc.renderer, "render", return_value="<html>...</html>",
+    ):
+        pdf = await uc.preview_template(
+            actor=actor,
+            template_id="tpl-1",
+            sample_case_id="c1",
+        )
+
+    assert pdf == fake_pdf
+    # The preview must not write to the DB
+    mock_db.add.assert_not_called()
+    mock_db.commit.assert_not_called()
+    mock_db.delete.assert_not_called()
+    mock_db.flush.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_preview_uses_overrides_instead_of_stored_version():
+    """Overrides supplied by editor take precedence over version snapshot."""
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+    template = MagicMock(
+        id="tpl-1", tenant_id="t1", current_version_id="v-1",
+    )
+    version = MagicMock(
+        id="v-1",
+        blocks=[{"type": "alert_metadata", "params": {}}],
+        header_config={"title_template": "ORIGINAL"},
+        footer_config={"footer_text": "old"},
+        css_overrides=None,
+    )
+    case = MagicMock(id="c1", tenant_id="t1")
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(side_effect=[template, version, case])
+
+    actor = MagicMock(
+        user_id="u1", role_id="r1", tenant_id="t1", is_global=False,
+    )
+
+    captured: dict = {}
+
+    async def fake_build_snapshot(db, c):
+        return {"case": {"id": c.id, "tlp": "WHITE"}}
+
+    async def fake_html_to_pdf(**kwargs):
+        captured["header"] = kwargs["header_config"]
+        captured["footer"] = kwargs["footer_config"]
+        return b"%PDF-1.4\nx"
+
+    def fake_render(**kwargs):
+        captured["blocks"] = kwargs["blocks"]
+        return "<html>...</html>"
+
+    uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "backend.src.modules.alert_reports.application.use_cases.build_data_snapshot",
+        new=fake_build_snapshot,
+    ), patch(
+        "backend.src.modules.alert_reports.application.use_cases.html_to_pdf",
+        new=fake_html_to_pdf,
+    ), patch.object(
+        uc.renderer, "render", side_effect=fake_render,
+    ):
+        await uc.preview_template(
+            actor=actor,
+            template_id="tpl-1",
+            sample_case_id="c1",
+            blocks_override=[
+                {"type": "text", "params": {"content_template": "OVERRIDE"}},
+            ],
+            header_override={"title_template": "OVERRIDDEN"},
+            footer_override={"footer_text": "new footer"},
+        )
+
+    assert captured["blocks"] == [
+        {"type": "text", "params": {"content_template": "OVERRIDE"}},
+    ]
+    assert captured["header"]["title_template"] == "OVERRIDDEN"
+    assert captured["footer"]["footer_text"] == "new footer"
