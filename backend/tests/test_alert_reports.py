@@ -759,10 +759,13 @@ async def test_generate_report_actor_sets_manual_ui_via():
         new=fake_html_to_pdf,
     ):
         uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
-        # Patch instance helpers that talk to FS / template-resolution
+        # Patch instance helpers that talk to FS / template-resolution / case-load
         with patch.object(
             uc, "_resolve_template",
             new=AsyncMock(return_value=(template, version)),
+        ), patch.object(
+            uc, "_load_case",
+            new=AsyncMock(return_value=case),
         ), patch.object(
             uc.renderer, "render",
             return_value="<html>...</html>",
@@ -818,6 +821,9 @@ async def test_generate_report_n8n_actor_sets_n8n_api_via():
             uc, "_resolve_template",
             new=AsyncMock(return_value=(template, version)),
         ), patch.object(
+            uc, "_load_case",
+            new=AsyncMock(return_value=case),
+        ), patch.object(
             uc.renderer, "render", return_value="<html>...</html>",
         ), patch.object(
             uc, "_persist_pdf_attachment",
@@ -855,7 +861,7 @@ async def test_verify_integrity_intact_when_bytes_hash_matches():
     attachment = MagicMock(id="att-1", file_path="/fake/path.pdf")
 
     mock_db = AsyncMock()
-    mock_db.get = AsyncMock(side_effect=[report, case, attachment])
+    mock_db.get = AsyncMock(side_effect=[report, attachment])
 
     uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
     actor = MagicMock(
@@ -864,6 +870,9 @@ async def test_verify_integrity_intact_when_bytes_hash_matches():
     with patch(
         "backend.src.modules.alert_reports.application.use_cases.has_permission",
         new=AsyncMock(return_value=True),
+    ), patch.object(
+        uc, "_load_case",
+        new=AsyncMock(return_value=case),
     ), patch.object(
         uc, "_read_attachment_bytes",
         new=AsyncMock(return_value=pdf),
@@ -896,7 +905,7 @@ async def test_verify_integrity_detects_tampered_attachment():
     attachment = MagicMock(id="att-1", file_path="/fake/tampered.pdf")
 
     mock_db = AsyncMock()
-    mock_db.get = AsyncMock(side_effect=[report, case, attachment])
+    mock_db.get = AsyncMock(side_effect=[report, attachment])
 
     uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
     actor = MagicMock(
@@ -905,6 +914,9 @@ async def test_verify_integrity_detects_tampered_attachment():
     with patch(
         "backend.src.modules.alert_reports.application.use_cases.has_permission",
         new=AsyncMock(return_value=True),
+    ), patch.object(
+        uc, "_load_case",
+        new=AsyncMock(return_value=case),
     ), patch.object(
         uc, "_read_attachment_bytes",
         new=AsyncMock(return_value=b"corrupted"),
@@ -954,7 +966,7 @@ async def test_delete_report_soft_deletes_attachment_and_logs_audit():
     attachment = MagicMock(id="att-1", is_deleted=False)
 
     mock_db = AsyncMock()
-    mock_db.get = AsyncMock(side_effect=[report, case, attachment])
+    mock_db.get = AsyncMock(side_effect=[report, attachment])
 
     uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
     actor = MagicMock(
@@ -969,6 +981,9 @@ async def test_delete_report_soft_deletes_attachment_and_logs_audit():
     with patch(
         "backend.src.modules.alert_reports.application.use_cases.has_permission",
         new=AsyncMock(return_value=True),
+    ), patch.object(
+        uc, "_load_case",
+        new=AsyncMock(return_value=case),
     ), patch.object(
         uc, "_audit_log_delete",
         new=AsyncMock(side_effect=fake_audit_log),
@@ -1007,7 +1022,7 @@ async def test_preview_returns_pdf_without_persisting():
     fake_pdf = b"%PDF-1.4\npreview"
 
     mock_db = AsyncMock()
-    mock_db.get = AsyncMock(side_effect=[template, version, case])
+    mock_db.get = AsyncMock(side_effect=[template, version])
 
     actor = MagicMock(
         user_id="u1", role_id="r1", tenant_id="t1", is_global=False,
@@ -1029,6 +1044,8 @@ async def test_preview_returns_pdf_without_persisting():
     ), patch(
         "backend.src.modules.alert_reports.application.use_cases.html_to_pdf",
         new=fake_html_to_pdf,
+    ), patch.object(
+        uc, "_load_case", new=AsyncMock(return_value=case),
     ), patch.object(
         uc.renderer, "render", return_value="<html>...</html>",
     ):
@@ -1064,7 +1081,7 @@ async def test_preview_uses_overrides_instead_of_stored_version():
     )
     case = MagicMock(id="c1", tenant_id="t1")
     mock_db = AsyncMock()
-    mock_db.get = AsyncMock(side_effect=[template, version, case])
+    mock_db.get = AsyncMock(side_effect=[template, version])
 
     actor = MagicMock(
         user_id="u1", role_id="r1", tenant_id="t1", is_global=False,
@@ -1094,6 +1111,8 @@ async def test_preview_uses_overrides_instead_of_stored_version():
     ), patch(
         "backend.src.modules.alert_reports.application.use_cases.html_to_pdf",
         new=fake_html_to_pdf,
+    ), patch.object(
+        uc, "_load_case", new=AsyncMock(return_value=case),
     ), patch.object(
         uc.renderer, "render", side_effect=fake_render,
     ):

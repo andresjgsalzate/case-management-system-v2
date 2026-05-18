@@ -741,10 +741,27 @@ class AlertReportGenerationUseCases:
     # ── case access ────────────────────────────────────────────────────
 
     async def _load_case(self, case_id: str):
+        """Load a case with the relationships ``snapshot_builder`` needs.
+
+        ``selectinload`` triggers separate SELECTs for each relationship at
+        load time — without this, the snapshot builder later accesses
+        ``case.status.slug`` etc. AFTER the await chain has handed off and
+        SQLAlchemy raises ``MissingGreenlet`` on the lazy load.
+        """
+        from sqlalchemy.orm import selectinload
         from backend.src.modules.cases.infrastructure.models import (
             CaseModel,
         )
-        case = await self.db.get(CaseModel, case_id)
+        stmt = (
+            select(CaseModel)
+            .where(CaseModel.id == case_id)
+            .options(
+                selectinload(CaseModel.status),
+                selectinload(CaseModel.priority),
+                selectinload(CaseModel.service_item),
+            )
+        )
+        case = (await self.db.execute(stmt)).scalar_one_or_none()
         if not case:
             raise NotFoundError(f"Case {case_id} not found")
         return case
