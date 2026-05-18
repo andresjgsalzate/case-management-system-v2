@@ -53,3 +53,60 @@ def test_alert_reports_permissions_seeded():
     assert actions == expected, (
         f"Missing: {expected - actions}, Extra: {actions - expected}"
     )
+
+
+def test_validate_blocks_unknown_type_raises():
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.alert_reports.application.blocks_catalog import (
+        validate_blocks,
+    )
+    with pytest.raises(ValidationError, match="unknown"):
+        validate_blocks([{"type": "wat", "params": {}}])
+
+
+def test_validate_text_block_requires_content_template():
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.alert_reports.application.blocks_catalog import (
+        validate_blocks,
+    )
+    with pytest.raises(ValidationError):
+        validate_blocks([{"type": "text", "params": {"title": "X"}}])
+
+
+def test_validate_signature_block_requires_signers():
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.alert_reports.application.blocks_catalog import (
+        validate_blocks,
+    )
+    with pytest.raises(ValidationError):
+        validate_blocks([{"type": "signature", "params": {}}])
+
+
+def test_validate_image_block_requires_attachment_id():
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.alert_reports.application.blocks_catalog import (
+        validate_blocks,
+    )
+    with pytest.raises(ValidationError):
+        validate_blocks([{"type": "image", "params": {}}])
+
+
+def test_validate_blocks_empty_list_passes():
+    from backend.src.modules.alert_reports.application.blocks_catalog import (
+        validate_blocks,
+    )
+    validate_blocks([])  # no exception
+
+
+def test_validate_blocks_valid_payload_passes():
+    from backend.src.modules.alert_reports.application.blocks_catalog import (
+        validate_blocks,
+    )
+    validate_blocks([
+        {"type": "alert_metadata", "params": {}},
+        {"type": "text", "params": {
+            "title": "Análisis", "content_template": "{{ case.title }}",
+        }},
+        {"type": "page_break", "params": {}},
+        {"type": "spacer", "params": {"height_px": 30}},
+    ])  # no exception
