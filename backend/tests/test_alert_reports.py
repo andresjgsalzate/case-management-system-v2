@@ -1306,3 +1306,61 @@ def test_default_soc_template_seeded():
         "mitre_techniques", "recommendations",
     ):
         assert required in block_types, f"missing block '{required}'"
+
+
+# ── router smoke tests (Task 13) ────────────────────────────────────────
+
+
+def test_router_exposes_expected_paths():
+    """All endpoints in spec §5 are registered with the right HTTP verbs."""
+    from backend.src.modules.alert_reports.router import router
+
+    routes = {
+        (r.path, tuple(sorted(r.methods))) for r in router.routes
+    }
+    expected = {
+        # Templates
+        ("/api/v1/alert-report-templates", ("GET",)),
+        ("/api/v1/alert-report-templates", ("POST",)),
+        ("/api/v1/alert-report-templates/{template_id}", ("GET",)),
+        ("/api/v1/alert-report-templates/{template_id}", ("PATCH",)),
+        ("/api/v1/alert-report-templates/{template_id}", ("DELETE",)),
+        (
+            "/api/v1/alert-report-templates/{template_id}/set-default",
+            ("POST",),
+        ),
+        (
+            "/api/v1/alert-report-templates/{template_id}/versions",
+            ("GET",),
+        ),
+        (
+            "/api/v1/alert-report-templates/{template_id}/preview",
+            ("POST",),
+        ),
+        (
+            "/api/v1/alert-report-templates/{template_id}/clone",
+            ("POST",),
+        ),
+        # Generation
+        ("/api/v1/cases/{case_id}/alert-reports", ("GET",)),
+        ("/api/v1/cases/{case_id}/alert-reports", ("POST",)),
+        ("/api/v1/alert-reports/{report_id}", ("GET",)),
+        ("/api/v1/alert-reports/{report_id}", ("DELETE",)),
+        ("/api/v1/alert-reports/{report_id}/download", ("GET",)),
+        ("/api/v1/alert-reports/{report_id}/verify", ("GET",)),
+    }
+    missing = expected - routes
+    assert not missing, f"Missing alert_reports routes: {missing}"
+
+
+def test_main_app_includes_alert_reports_router():
+    """FastAPI app boots with the alert_reports router mounted."""
+    from backend.src.main import create_app
+    app = create_app()
+    paths = {
+        getattr(r, "path", "") for r in app.routes
+        if getattr(r, "path", "").startswith("/api/v1/alert-report")
+        or getattr(r, "path", "").startswith("/api/v1/cases/{case_id}/alert-reports")
+    }
+    assert any("alert-report-templates" in p for p in paths)
+    assert any("cases/{case_id}/alert-reports" in p for p in paths)

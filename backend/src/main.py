@@ -77,6 +77,9 @@ from backend.src.modules.forensic.application.jobs import (
 from backend.src.modules.forensic.application.health import (
     velociraptor_health_probe,
 )
+from backend.src.modules.alert_reports.router import (
+    router as alert_reports_router,
+)
 
 
 @asynccontextmanager
@@ -193,6 +196,7 @@ def create_app() -> FastAPI:
     app.include_router(n8n_admin_router)
     app.include_router(operational_router)
     app.include_router(forensic_router)
+    app.include_router(alert_reports_router)
 
     return app
 
