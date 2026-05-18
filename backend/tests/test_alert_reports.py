@@ -21,11 +21,21 @@ def test_models_import_smoke():
 
 
 def _get_real_url():
-    from dotenv import dotenv_values
-    env = dotenv_values("backend/.env")
-    url = env.get("DATABASE_URL")
+    # `REAL_DATABASE_URL` survives conftest's autouse `set_test_env` fixture
+    # which patches `DATABASE_URL` to a dummy `localhost/db` for the whole
+    # test session. Containerised runs export REAL_DATABASE_URL pointing at
+    # the in-network `postgres` host. Host-based dev still reads from
+    # `backend/.env` when neither env var is set.
+    import os
+    url = os.environ.get("REAL_DATABASE_URL")
     if not url:
-        pytest.skip("DATABASE_URL not in backend/.env")
+        from dotenv import dotenv_values
+        env = dotenv_values("backend/.env")
+        url = env.get("DATABASE_URL")
+    if not url:
+        pytest.skip(
+            "neither REAL_DATABASE_URL nor backend/.env DATABASE_URL set"
+        )
     return url
 
 

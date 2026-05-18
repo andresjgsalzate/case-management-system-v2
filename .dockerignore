@@ -1,0 +1,35 @@
+# Keep build context small + prevent host artifacts polluting the image.
+.git
+.gitignore
+.github
+.vscode
+.kiro
+.qoder
+.gemini
+.opencode.json
+.windsurfrules
+.cursorrules
+AGENTS.md
+GEMINI.md
+QODER.md
+
+# Python virtualenvs (Windows-specific, useless in Linux container)
+backend/venv
+backend/.venv
+backend/.pytest_cache
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# Frontend artifacts (backend image doesn't need them)
+frontend
+node_modules
+**/.next
+
+# Docs + plans (not part of runtime)
+docs
+
+# Local logs / DB dumps
+*.log
+**/tmp
+**/temp

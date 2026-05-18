@@ -45,6 +45,53 @@ services:
       timeout: 3s
       retries: 10
 
+  # ─── Backend API (FastAPI) — opt-in via profile 'backend' ────────────────
+  # Hosts the Python app + WeasyPrint native libs (cairo, pango, gdk-pixbuf,
+  # gobject) that PDF generation needs but are painful to install on Windows.
+  # Local Windows dev can keep using `dev.sh` (no PDF) or switch to this
+  # container when working on alert_reports.
+  #
+  # Usage:
+  #   docker-compose --profile backend up -d backend
+  #
+  # API: http://localhost:8000
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: cms_backend
+    profiles: ["backend", "full"]
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # The host postgres listens on 5433; from inside the docker network the
+      # service hostname is `postgres` and the in-network port is 5432.
+      DATABASE_URL: "postgresql+asyncpg://cms_user:cms_password@postgres:5432/cms_dev"
+      # `REAL_DATABASE_URL` survives conftest's autouse `set_test_env` fixture
+      # (which patches DATABASE_URL to a dummy `localhost/db`). Integration
+      # tests that need to actually hit Postgres read from this var.
+      REAL_DATABASE_URL: "postgresql+asyncpg://cms_user:cms_password@postgres:5432/cms_dev"
+      REDIS_URL: "redis://redis:6379/0"
+      SECRET_KEY: "dev-secret-key-32-chars-minimum-please-change-in-prod"
+      # pydantic-settings parses List[str] env vars as JSON first; the
+      # field validator only sees plain strings. Use JSON array literal.
+      ALLOWED_ORIGINS: '["http://localhost:3000"]'
+    volumes:
+      # Live-reload source from host. .venv-windows is excluded so the
+      # container uses its own site-packages (Linux wheels).
+      - ./backend:/app/backend
+      - ./alembic.ini:/app/alembic.ini:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      uvicorn backend.src.main:app
+      --host 0.0.0.0 --port 8000 --reload
+      --reload-dir /app/backend
+
   # ─── n8n: workflow orchestrator (Sub-spec 05) ─────────────────────────────
   # ~200 MB RAM. Web UI: http://localhost:5678 (admin / cms_n8n_dev).
   # SQLite for dev simplicity; switch to postgres env vars below for prod-like setup.
