@@ -629,3 +629,205 @@ async def test_html_to_pdf_includes_tlp_in_header():
     assert "TLP" in text
     assert "AMBER" in text
     assert "REPORTE SOC" in text
+
+
+# ── generate_report end-to-end (Task 8) ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_resolve_template_uses_explicit_id_when_given():
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+    explicit = MagicMock(id="tpl-explicit", tenant_id="t1", is_default=False)
+    explicit_version = MagicMock(id="v-explicit", version=2)
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(side_effect=[explicit, explicit_version])
+
+    uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+    template, version = await uc._resolve_template(
+        tenant_id="t1", template_id="tpl-explicit",
+        current_version_id_resolver=lambda t: t.id and "v-explicit",
+    )
+    assert template.id == "tpl-explicit"
+    assert version.id == "v-explicit"
+
+
+@pytest.mark.asyncio
+async def test_resolve_template_falls_back_to_global_default():
+    """Tenant has no default → uses tenant_id IS NULL + is_default=True row."""
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+    global_default = MagicMock(
+        id="tpl-global", tenant_id=None, is_default=True,
+        current_version_id="v-global",
+    )
+    global_version = MagicMock(id="v-global", version=1)
+
+    mock_db = AsyncMock()
+    # First execute: tenant default → nothing
+    # Second execute: global default → global row
+    mock_result_empty = MagicMock()
+    mock_result_empty.scalar_one_or_none = MagicMock(return_value=None)
+    mock_result_global = MagicMock()
+    mock_result_global.scalar_one_or_none = MagicMock(return_value=global_default)
+    mock_db.execute = AsyncMock(
+        side_effect=[mock_result_empty, mock_result_global]
+    )
+    mock_db.get = AsyncMock(return_value=global_version)
+
+    uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+    template, version = await uc._resolve_template(
+        tenant_id="t1", template_id=None,
+        current_version_id_resolver=None,
+    )
+    assert template.tenant_id is None
+    assert template.is_default is True
+    assert version.id == "v-global"
+
+
+@pytest.mark.asyncio
+async def test_resolve_template_no_default_anywhere_raises():
+    from backend.src.core.exceptions import BusinessRuleError
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none = MagicMock(return_value=None)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+    with pytest.raises(BusinessRuleError, match="default"):
+        await uc._resolve_template(
+            tenant_id="t1", template_id=None,
+            current_version_id_resolver=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_report_actor_sets_manual_ui_via():
+    """actor present + no n8n_run_id → generated_via='manual_ui'."""
+    import hashlib
+    fake_pdf = b"%PDF-1.4\nfake content"
+    pdf_hash = hashlib.sha256(fake_pdf).hexdigest()
+
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+
+    case = MagicMock(id="c1", tenant_id="t1")
+    template = MagicMock(id="tpl1", tenant_id="t1", current_version_id="v1")
+    version = MagicMock(
+        id="v1", version=3, blocks=[], header_config={}, footer_config={},
+        css_overrides=None, name_snapshot="SOC standard",
+    )
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=case)
+    actor = MagicMock(
+        user_id="u1", role_id="r1", tenant_id="t1", is_global=False,
+    )
+
+    captured: dict = {}
+
+    async def fake_render_html(*args, **kwargs):
+        return "<html>...</html>"
+
+    async def fake_html_to_pdf(**kwargs):
+        return fake_pdf
+
+    async def fake_build_snapshot(db, c):
+        return {"case": {"id": c.id, "tenant_name": "ACME", "tlp": "WHITE"}}
+
+    async def fake_persist_attachment(*, pdf_bytes, filename, case, actor_id):
+        att = MagicMock(id="att-1")
+        captured["filename"] = filename
+        captured["actor_id"] = actor_id
+        return att
+
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "backend.src.modules.alert_reports.application.use_cases.build_data_snapshot",
+        new=fake_build_snapshot,
+    ), patch(
+        "backend.src.modules.alert_reports.application.use_cases.html_to_pdf",
+        new=fake_html_to_pdf,
+    ):
+        uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+        # Patch instance helpers that talk to FS / template-resolution
+        with patch.object(
+            uc, "_resolve_template",
+            new=AsyncMock(return_value=(template, version)),
+        ), patch.object(
+            uc.renderer, "render",
+            return_value="<html>...</html>",
+        ), patch.object(
+            uc, "_persist_pdf_attachment",
+            new=AsyncMock(side_effect=fake_persist_attachment),
+        ):
+            report = await uc.generate_report(
+                actor=actor, case_id="c1",
+                template_id=None, n8n_run_id=None,
+            )
+
+    assert report.generated_via == "manual_ui"
+    assert report.pdf_sha256 == pdf_hash
+    assert report.pdf_size_bytes == len(fake_pdf)
+    assert report.template_id == "tpl1"
+    assert report.template_version_number == 3
+    assert report.generated_by_user_id == "u1"
+    assert report.generated_by_n8n_run_id is None
+
+
+@pytest.mark.asyncio
+async def test_generate_report_n8n_actor_sets_n8n_api_via():
+    """No actor + n8n_run_id → generated_via='n8n_api', user_id NULL."""
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+    case = MagicMock(id="c1", tenant_id="t1")
+    template = MagicMock(id="tpl1", tenant_id="t1")
+    version = MagicMock(
+        id="v1", version=1, blocks=[], header_config={}, footer_config={},
+        css_overrides=None, name_snapshot="SOC standard",
+    )
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=case)
+
+    async def fake_build_snapshot(db, c):
+        return {"case": {"id": c.id, "tlp": "WHITE"}}
+
+    async def fake_html_to_pdf(**kwargs):
+        return b"%PDF-1.4\nx"
+
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.build_data_snapshot",
+        new=fake_build_snapshot,
+    ), patch(
+        "backend.src.modules.alert_reports.application.use_cases.html_to_pdf",
+        new=fake_html_to_pdf,
+    ):
+        uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+        with patch.object(
+            uc, "_resolve_template",
+            new=AsyncMock(return_value=(template, version)),
+        ), patch.object(
+            uc.renderer, "render", return_value="<html>...</html>",
+        ), patch.object(
+            uc, "_persist_pdf_attachment",
+            new=AsyncMock(return_value=MagicMock(id="att-1")),
+        ):
+            report = await uc.generate_report(
+                actor=None, case_id="c1",
+                template_id="tpl1", n8n_run_id="run-42",
+            )
+
+    assert report.generated_via == "n8n_api"
+    assert report.generated_by_user_id is None
+    assert report.generated_by_n8n_run_id == "run-42"

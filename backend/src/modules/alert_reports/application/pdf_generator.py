@@ -19,8 +19,11 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-import weasyprint
-
+# ``weasyprint`` is imported lazily inside ``html_to_pdf`` so this module
+# can be imported safely on hosts that lack the GTK3 native libs (e.g.
+# Windows dev machines). The error surfaces only when an actual PDF
+# render is attempted — at which point the operator gets a clear
+# OSError pointing at the missing libraries.
 logger = logging.getLogger(__name__)
 
 CSS_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -50,7 +53,9 @@ async def html_to_pdf(
     only consulted for ``snapshot['case']['tlp']`` in this generator —
     block-level interpolation already happened in ``block_renderer``.
     """
-    stylesheets: list[weasyprint.CSS] = []
+    import weasyprint
+
+    stylesheets = []
     if DEFAULT_CSS_PATH.exists():
         stylesheets.append(weasyprint.CSS(filename=str(DEFAULT_CSS_PATH)))
 
