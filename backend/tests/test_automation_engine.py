@@ -186,3 +186,114 @@ async def test_archive_closed_cases_noop_when_closed_status_missing():
 
     # Only status lookup attempted; cases query never fired.
     assert mock_db.execute.call_count == 1
+
+
+# ── 3 new actions (automation-expansion plan Task 3) ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_change_status_action_updates_case_status():
+    """change_status sets case.status_id and stamps closed_at when is_final."""
+    from backend.src.modules.automation.application.engine import RuleAction
+    from backend.src.modules.automation.application.use_cases import (
+        AutomationUseCases,
+    )
+
+    target_status = MagicMock(
+        id="status-closed", name="Closed", is_final=True,
+    )
+    case_obj = MagicMock(
+        id="c1", status_id="status-open", closed_at=None,
+    )
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(side_effect=[target_status, case_obj])
+
+    uc = AutomationUseCases(db=mock_db)
+    with patch(
+        "backend.src.modules.automation.application.use_cases.get_event_bus",
+        new=AsyncMock(return_value=AsyncMock()),
+    ):
+        await uc._execute_single_action(
+            RuleAction(
+                action_type="change_status",
+                params={"target_status_id": "status-closed"},
+            ),
+            context={"case_id": "c1", "tenant_id": "t1"},
+            actor_id="system",
+        )
+
+    assert case_obj.status_id == "status-closed"
+    assert case_obj.closed_at is not None  # is_final=True stamped
+
+
+@pytest.mark.asyncio
+async def test_create_todo_action_adds_todo_row_with_title():
+    """create_todo inserts a CaseTodoModel with the supplied title."""
+    from backend.src.modules.automation.application.engine import RuleAction
+    from backend.src.modules.automation.application.use_cases import (
+        AutomationUseCases,
+    )
+
+    case_rec = MagicMock(id="c1", created_by="user-creator")
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=case_rec)
+    added_rows: list = []
+    mock_db.add = MagicMock(side_effect=lambda row: added_rows.append(row))
+
+    uc = AutomationUseCases(db=mock_db)
+    with patch(
+        "backend.src.modules.automation.application.use_cases.get_event_bus",
+        new=AsyncMock(return_value=AsyncMock()),
+    ):
+        await uc._execute_single_action(
+            RuleAction(
+                action_type="create_todo",
+                params={"title": "Revisar logs Wazuh"},
+            ),
+            context={"case_id": "c1", "tenant_id": "t1"},
+            actor_id="system",
+        )
+
+    assert len(added_rows) == 1
+    todo = added_rows[0]
+    assert todo.case_id == "c1"
+    assert todo.title == "Revisar logs Wazuh"
+    # system actor → falls back to case creator
+    assert todo.created_by_id == "user-creator"
+
+
+@pytest.mark.asyncio
+async def test_escalate_priority_swaps_to_next_active_level():
+    """escalate_priority bumps case.priority_id to the next-higher active level."""
+    from backend.src.modules.automation.application.engine import RuleAction
+    from backend.src.modules.automation.application.use_cases import (
+        AutomationUseCases,
+    )
+
+    current = MagicMock(id="pri-medium", level=2, tenant_id="t1")
+    higher = MagicMock(id="pri-high", level=3)
+    case_obj = MagicMock(
+        id="c1", priority_id="pri-medium", tenant_id="t1",
+    )
+
+    mock_higher_result = MagicMock()
+    mock_higher_result.scalar_one_or_none = MagicMock(return_value=higher)
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(side_effect=[case_obj, current])
+    mock_db.execute = AsyncMock(return_value=mock_higher_result)
+
+    uc = AutomationUseCases(db=mock_db)
+    with patch(
+        "backend.src.modules.automation.application.use_cases.get_event_bus",
+        new=AsyncMock(return_value=AsyncMock()),
+    ):
+        await uc._execute_single_action(
+            RuleAction(
+                action_type="escalate_priority", params={},
+            ),
+            context={"case_id": "c1", "tenant_id": "t1"},
+            actor_id="system",
+        )
+
+    assert case_obj.priority_id == "pri-high"
