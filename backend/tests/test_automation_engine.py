@@ -99,3 +99,90 @@ def test_starts_with_and_ends_with():
     ctx = {"title": "Error de VPN"}
     assert evaluate_condition(cond_start, ctx) is True
     assert evaluate_condition(cond_end, ctx) is True
+
+
+# ── archive_closed_cases action (auto-archive plan Task 1) ──────────────
+
+import pytest
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+@pytest.mark.asyncio
+async def test_archive_closed_cases_archives_cases_past_cutoff():
+    """Cases the query returns are archived; cutoff filter is SQL-side."""
+    from backend.src.modules.automation.application.engine import RuleAction
+    from backend.src.modules.automation.application.use_cases import (
+        AutomationUseCases,
+    )
+
+    closed_status = MagicMock(id="status-closed", slug="closed")
+    old_case = MagicMock(
+        id="c-old", is_archived=False,
+        closed_at=datetime.now(timezone.utc) - timedelta(days=40),
+    )
+
+    mock_status_result = MagicMock()
+    mock_status_result.scalar_one_or_none = MagicMock(
+        return_value=closed_status,
+    )
+    mock_cases_result = MagicMock()
+    mock_cases_result.scalars = MagicMock(
+        return_value=MagicMock(all=MagicMock(return_value=[old_case])),
+    )
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(
+        side_effect=[mock_status_result, mock_cases_result],
+    )
+
+    fake_bus = AsyncMock()
+    fake_bus.publish = AsyncMock()
+    uc = AutomationUseCases(db=mock_db)
+    with patch(
+        "backend.src.modules.automation.application.use_cases.get_event_bus",
+        new=AsyncMock(return_value=fake_bus),
+    ):
+        await uc._execute_single_action(
+            RuleAction(
+                action_type="archive_closed_cases",
+                params={"days_after_close": "30"},
+            ),
+            context={"tenant_id": "t1"},
+            actor_id="system",
+        )
+
+    assert old_case.is_archived is True
+    assert old_case.archived_at is not None
+
+
+@pytest.mark.asyncio
+async def test_archive_closed_cases_noop_when_closed_status_missing():
+    """No 'closed' case_status row → early return, no case query."""
+    from backend.src.modules.automation.application.engine import RuleAction
+    from backend.src.modules.automation.application.use_cases import (
+        AutomationUseCases,
+    )
+
+    mock_status_result = MagicMock()
+    mock_status_result.scalar_one_or_none = MagicMock(return_value=None)
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_status_result)
+
+    fake_bus = AsyncMock()
+    uc = AutomationUseCases(db=mock_db)
+    with patch(
+        "backend.src.modules.automation.application.use_cases.get_event_bus",
+        new=AsyncMock(return_value=fake_bus),
+    ):
+        await uc._execute_single_action(
+            RuleAction(
+                action_type="archive_closed_cases",
+                params={"days_after_close": "30"},
+            ),
+            context={"tenant_id": "t1"},
+            actor_id="system",
+        )
+
+    # Only status lookup attempted; cases query never fired.
+    assert mock_db.execute.call_count == 1
