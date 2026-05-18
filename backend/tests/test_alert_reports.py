@@ -546,3 +546,86 @@ def test_render_text_block_markdown_html_sanitized():
     assert "<script>" not in html
     assert "alert(1)" not in html
     assert "<strong>bold</strong>" in html or "bold" in html
+
+
+# ── PDF generator (Task 7) ──────────────────────────────────────────────
+#
+# WeasyPrint runtime needs GTK3 native libs (libcairo2, libpango, gdk-pixbuf,
+# gobject). Host Windows dev does not ship these; tests below run only inside
+# the `backend` Docker container where the libs are baked into the image.
+
+
+def _weasyprint_works() -> bool:
+    """Returns True if WeasyPrint can actually render — checked at import time
+    so tests skip cleanly in environments without GTK3."""
+    try:
+        import weasyprint
+        weasyprint.HTML(string="<p>x</p>").write_pdf()
+        return True
+    except Exception:
+        return False
+
+
+_skip_no_pdf = pytest.mark.skipif(
+    not _weasyprint_works(),
+    reason="WeasyPrint native libs (GTK3) not available — run inside backend container",
+)
+
+
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Concatenate text from every page of a PDF buffer."""
+    import io
+    from pypdf import PdfReader
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    return "\n".join(p.extract_text() or "" for p in reader.pages)
+
+
+@_skip_no_pdf
+@pytest.mark.asyncio
+async def test_html_to_pdf_returns_pdf_bytes_starts_with_magic():
+    from backend.src.modules.alert_reports.application.pdf_generator import (
+        html_to_pdf,
+    )
+    pdf = await html_to_pdf(
+        html="<html><body><p>Test</p></body></html>",
+        header_config={},
+        footer_config={},
+        snapshot={},
+    )
+    assert pdf[:4] == b"%PDF"
+    assert len(pdf) > 200  # not empty
+
+
+@_skip_no_pdf
+@pytest.mark.asyncio
+async def test_html_to_pdf_includes_page_numbers():
+    from backend.src.modules.alert_reports.application.pdf_generator import (
+        html_to_pdf,
+    )
+    pdf = await html_to_pdf(
+        html="<html><body><p>Page content</p></body></html>",
+        header_config={},
+        footer_config={},
+        snapshot={"case": {"tlp": "WHITE"}},
+    )
+    text = _extract_pdf_text(pdf)
+    assert "Página" in text
+    assert " 1 " in text and " de " in text
+
+
+@_skip_no_pdf
+@pytest.mark.asyncio
+async def test_html_to_pdf_includes_tlp_in_header():
+    from backend.src.modules.alert_reports.application.pdf_generator import (
+        html_to_pdf,
+    )
+    pdf = await html_to_pdf(
+        html="<html><body><p>Confidencial</p></body></html>",
+        header_config={"title_template": "REPORTE SOC"},
+        footer_config={},
+        snapshot={"case": {"tlp": "AMBER"}},
+    )
+    text = _extract_pdf_text(pdf)
+    assert "TLP" in text
+    assert "AMBER" in text
+    assert "REPORTE SOC" in text

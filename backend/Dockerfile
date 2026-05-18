@@ -36,7 +36,7 @@ WORKDIR /app
 # Install Python deps first (fewer cache invalidations) then code.
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install -r /app/backend/requirements.txt && \
-    pip install pytest>=8.2 pytest-asyncio>=0.23 anyio
+    pip install pytest>=8.2 pytest-asyncio>=0.23 anyio pypdf>=4
 
 # Source mounted as volume in dev; baked-in in prod.
 COPY backend /app/backend
