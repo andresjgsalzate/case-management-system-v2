@@ -1109,3 +1109,110 @@ export interface LaunchHuntRequest {
   target_clients: string[];
   timeout_seconds?: number;
 }
+
+// ── Alert Reports (Sub-spec 08) ─────────────────────────────────────────
+
+export type AlertReportBlockType =
+  | "alert_metadata"
+  | "priority_calculation"
+  | "text"
+  | "triage_analysis"
+  | "evidence_grid"
+  | "forensic_artifacts_list"
+  | "behavior_relation"
+  | "recommendations"
+  | "mitre_techniques"
+  | "iocs_table"
+  | "signature"
+  | "page_break"
+  | "spacer"
+  | "image";
+
+export interface AlertReportBlock {
+  type: AlertReportBlockType;
+  params: Record<string, unknown>;
+}
+
+export interface AlertReportTemplate {
+  id: string;
+  tenant_id: string | null;
+  name: string;
+  code: string;
+  description: string | null;
+  current_version_id?: string | null;
+  current_version_number: number;
+  is_default: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertReportTemplateVersion {
+  id: string;
+  template_id: string;
+  version: number;
+  name_snapshot: string;
+  header_config: Record<string, unknown>;
+  footer_config: Record<string, unknown>;
+  blocks: AlertReportBlock[];
+  css_overrides: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  change_summary: string | null;
+}
+
+export type GeneratedReportVia = "manual_ui" | "n8n_api";
+
+export interface CaseGeneratedReport {
+  id: string;
+  tenant_id: string;
+  case_id: string;
+  template_id: string;
+  template_version_id: string;
+  template_version_number: number;
+  generated_at: string;
+  generated_by_user_id: string | null;
+  generated_by_n8n_run_id: string | null;
+  generated_via: GeneratedReportVia;
+  attachment_id: string;
+  pdf_sha256: string;
+  pdf_size_bytes: number;
+  data_snapshot?: Record<string, unknown>;
+  generation_context?: Record<string, unknown> | null;
+}
+
+export interface AlertReportIntegrityCheck {
+  report_id: string;
+  expected_sha256: string;
+  actual_sha256: string;
+  is_intact: boolean;
+  verified_at: string;
+  verified_by: string;
+  pdf_size_bytes: number;
+}
+
+export interface AlertReportTemplateCreate {
+  name: string;
+  code: string;
+  header_config: Record<string, unknown>;
+  footer_config: Record<string, unknown>;
+  blocks: AlertReportBlock[];
+  description?: string | null;
+  css_overrides?: string | null;
+  tenant_id?: string | null;
+}
+
+export interface AlertReportTemplateUpdate {
+  name?: string;
+  description?: string | null;
+  header_config?: Record<string, unknown>;
+  footer_config?: Record<string, unknown>;
+  blocks?: AlertReportBlock[];
+  css_overrides?: string | null;
+  change_summary?: string | null;
+}
+
+export interface GenerateAlertReportRequest {
+  template_id?: string | null;
+  n8n_run_id?: string | null;
+}
