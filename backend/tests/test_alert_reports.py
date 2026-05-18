@@ -248,3 +248,95 @@ async def test_set_as_default_clears_previous_then_sets_new():
     # Should have issued an UPDATE to clear other defaults
     mock_db.execute.assert_called()
     mock_db.commit.assert_called()
+
+
+def _make_snapshot_case(case_id: str = "c1"):
+    case = MagicMock()
+    case.id = case_id
+    case.case_number = "EVT-0042"
+    case.case_type = "event"
+    case.title = "Sample event"
+    case.description = "Suspicious login"
+    case.tenant_id = "t1"
+    case.custom_values = {"region": "LATAM"}
+    case.created_at = MagicMock()
+    case.created_at.isoformat = MagicMock(return_value="2026-05-17T10:00:00+00:00")
+    case.closed_at = None
+    case.status = MagicMock(slug="logged", name="Logged")
+    case.priority = MagicMock(slug="high", name="Alta")
+    case.taxonomy = MagicMock(
+        tuic_code="TUIC-001", name="Phishing",
+        tlp_default="amber", mitre_techniques=["T1566"],
+    )
+    case.service_item = MagicMock(name="SOC Service")
+    case.team = MagicMock(name="SOC L2")
+    case.tenant = MagicMock(name="ACME")
+    return case
+
+
+def test_snapshot_case_extracts_expected_fields():
+    from backend.src.modules.alert_reports.application.snapshot_builder import (
+        _snapshot_case,
+    )
+    case = _make_snapshot_case()
+    out = _snapshot_case(case)
+
+    assert out["id"] == "c1"
+    assert out["case_number"] == "EVT-0042"
+    assert out["status_slug"] == "logged"
+    assert out["priority_slug"] == "high"
+    assert out["taxonomy_code"] == "TUIC-001"
+    assert out["tlp"] == "amber"
+    assert out["custom_values"] == {"region": "LATAM"}
+    assert out["closed_at"] is None
+
+
+def test_is_snapshot_too_large_detects_overflow():
+    from backend.src.modules.alert_reports.application.snapshot_builder import (
+        SNAPSHOT_SIZE_LIMIT, is_snapshot_too_large,
+    )
+    assert is_snapshot_too_large({"x": "small"}) is False
+    # Build a payload guaranteed to exceed the 1 MB cap
+    fat = {"big": "a" * (SNAPSHOT_SIZE_LIMIT + 1024)}
+    assert is_snapshot_too_large(fat) is True
+
+
+@pytest.mark.asyncio
+async def test_snapshot_forensic_hunts_returns_empty_when_no_hunts():
+    from backend.src.modules.alert_reports.application.snapshot_builder import (
+        _snapshot_forensic_hunts,
+    )
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalars = MagicMock(
+        return_value=MagicMock(all=MagicMock(return_value=[]))
+    )
+    mock_db.execute = AsyncMock(return_value=mock_result)
+    out = await _snapshot_forensic_hunts(mock_db, "case-without-hunts")
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_build_data_snapshot_assembles_full_shape():
+    from backend.src.modules.alert_reports.application.snapshot_builder import (
+        build_data_snapshot,
+    )
+    case = _make_snapshot_case()
+
+    mock_db = AsyncMock()
+    # Every helper hits db.execute(...).scalars().all() or .scalar_one_or_none()
+    # Wire a generic empty result; the snapshot pulls case-only data from the
+    # case object itself.
+    mock_result = MagicMock()
+    mock_result.scalars = MagicMock(
+        return_value=MagicMock(all=MagicMock(return_value=[]))
+    )
+    mock_result.scalar_one_or_none = MagicMock(return_value=None)
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    snap = await build_data_snapshot(mock_db, case)
+    assert snap["case"]["id"] == "c1"
+    assert snap["priority_calculation"] is None
+    assert snap["forensic_hunts"] == []
+    assert snap["evidence_attachments"] == []
+    assert snap["mitre_techniques"] == ["T1566"]
