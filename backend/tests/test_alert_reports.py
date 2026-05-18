@@ -1113,3 +1113,144 @@ async def test_preview_uses_overrides_instead_of_stored_version():
     ]
     assert captured["header"]["title_template"] == "OVERRIDDEN"
     assert captured["footer"]["footer_text"] == "new footer"
+
+
+# ── tenant isolation + template cloning (Task 11) ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_require_template_access_rejects_cross_tenant_non_global():
+    from backend.src.core.exceptions import PermissionDeniedError
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportTemplateUseCases,
+    )
+    uc = AlertReportTemplateUseCases(db=AsyncMock())
+    template = MagicMock(tenant_id="tenant-A")
+    actor = MagicMock(
+        user_id="u1", tenant_id="tenant-B", is_global=False,
+    )
+    with pytest.raises(PermissionDeniedError, match="otro tenant"):
+        uc._require_template_access(actor, template)
+
+
+@pytest.mark.asyncio
+async def test_require_template_access_allows_global_admin_cross_tenant():
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportTemplateUseCases,
+    )
+    uc = AlertReportTemplateUseCases(db=AsyncMock())
+    template = MagicMock(tenant_id="tenant-A")
+    actor = MagicMock(
+        user_id="u1", tenant_id="tenant-B", is_global=True,
+    )
+    # Should not raise
+    uc._require_template_access(actor, template)
+
+
+@pytest.mark.asyncio
+async def test_require_template_access_allows_anyone_for_global_template():
+    """tenant_id IS NULL template → access granted regardless of actor tenant."""
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportTemplateUseCases,
+    )
+    uc = AlertReportTemplateUseCases(db=AsyncMock())
+    global_template = MagicMock(tenant_id=None)
+    actor = MagicMock(
+        user_id="u1", tenant_id="tenant-A", is_global=False,
+    )
+    uc._require_template_access(actor, global_template)
+
+
+@pytest.mark.asyncio
+async def test_clone_template_copies_current_version_into_new_tenant():
+    """Clone of a global template produces a fresh template + v1 for target tenant."""
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportTemplateUseCases,
+    )
+    source = MagicMock(
+        id="tpl-source", tenant_id=None, current_version_id="v-source",
+        name="SOC estándar", description="Default global",
+        code="soc_standard",
+    )
+    source_version = MagicMock(
+        id="v-source", version=4,
+        name_snapshot="SOC estándar",
+        header_config={"show_logo": True},
+        footer_config={"footer_text": "Confidencial"},
+        blocks=[{"type": "alert_metadata", "params": {}}],
+        css_overrides=None,
+    )
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(side_effect=[source, source_version])
+
+    actor = MagicMock(
+        user_id="u1", role_id="r1", tenant_id="tenant-B",
+        is_global=True,
+    )
+
+    captured: list = []
+
+    def fake_add(obj):
+        captured.append(obj)
+
+    mock_db.add = MagicMock(side_effect=fake_add)
+
+    uc = AlertReportTemplateUseCases(db=mock_db)
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ):
+        cloned = await uc.clone_template_for_tenant(
+            actor=actor,
+            template_id="tpl-source",
+            target_tenant_id="tenant-B",
+            new_code="soc_standard_b",
+        )
+
+    # Should have inserted a new template + v1 version row
+    template_rows = [c for c in captured if hasattr(c, "code")]
+    version_rows = [c for c in captured if hasattr(c, "version")]
+    assert len(template_rows) == 1
+    assert len(version_rows) == 1
+    assert template_rows[0].tenant_id == "tenant-B"
+    assert template_rows[0].code == "soc_standard_b"
+    assert version_rows[0].version == 1
+    assert version_rows[0].blocks == [
+        {"type": "alert_metadata", "params": {}}
+    ]
+    assert version_rows[0].header_config == {"show_logo": True}
+    assert cloned is template_rows[0]
+
+
+@pytest.mark.asyncio
+async def test_clone_template_tenant_admin_cannot_clone_to_other_tenant():
+    """Non-global admin can only clone into own tenant."""
+    from backend.src.core.exceptions import PermissionDeniedError
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportTemplateUseCases,
+    )
+    source = MagicMock(
+        id="tpl-source", tenant_id=None, current_version_id="v-source",
+        code="soc_standard",
+    )
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=source)
+
+    actor = MagicMock(
+        user_id="u1", role_id="r1", tenant_id="tenant-A",
+        is_global=False,
+    )
+
+    uc = AlertReportTemplateUseCases(db=mock_db)
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ):
+        with pytest.raises(PermissionDeniedError, match="global"):
+            await uc.clone_template_for_tenant(
+                actor=actor,
+                template_id="tpl-source",
+                target_tenant_id="tenant-B",  # NOT actor.tenant_id
+                new_code="soc_b",
+            )

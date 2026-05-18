@@ -260,6 +260,77 @@ class AlertReportTemplateUseCases:
         await self.db.commit()
         return template
 
+    async def clone_template_for_tenant(
+        self,
+        *,
+        actor,
+        template_id: str,
+        target_tenant_id: str | None,
+        new_code: str,
+        new_name: str | None = None,
+    ) -> AlertReportTemplateModel:
+        """Clone a template's current version into another (or same) tenant.
+
+        Useful for forking a global SOC template per-tenant: each tenant
+        then evolves its copy independently while the original global
+        template stays untouched (immutable from their perspective).
+
+        Authorization: tenant-scoped admins can only clone INTO their own
+        tenant. Platform admins (``is_global=True``) can clone into any
+        tenant or into the global pool (``target_tenant_id=None``).
+        """
+        await self._require_perm(actor, "alert_reports", "manage_templates")
+
+        is_global = bool(getattr(actor, "is_global", False))
+        if not is_global and target_tenant_id != actor.tenant_id:
+            raise PermissionDeniedError(
+                "Sólo administradores globales pueden clonar plantillas "
+                "fuera de su tenant"
+            )
+
+        source = await self.db.get(AlertReportTemplateModel, template_id)
+        if not source:
+            raise NotFoundError(f"Template {template_id} not found")
+
+        source_version = await self.db.get(
+            AlertReportTemplateVersionModel, source.current_version_id
+        )
+        if not source_version:
+            raise BusinessRuleError(
+                f"Source template {template_id} has no current version"
+            )
+
+        cloned = AlertReportTemplateModel(
+            tenant_id=target_tenant_id,
+            name=new_name or source.name,
+            description=source.description,
+            code=new_code,
+            created_by_user_id=actor.user_id,
+        )
+        self.db.add(cloned)
+        await self.db.flush()
+
+        v1 = AlertReportTemplateVersionModel(
+            template_id=cloned.id,
+            version=1,
+            name_snapshot=cloned.name,
+            header_config=source_version.header_config,
+            footer_config=source_version.footer_config,
+            blocks=source_version.blocks,
+            css_overrides=source_version.css_overrides,
+            created_by_user_id=actor.user_id,
+            change_summary=(
+                f"Clonado desde {source.name} v{source_version.version}"
+            ),
+        )
+        self.db.add(v1)
+        await self.db.flush()
+
+        cloned.current_version_id = v1.id
+        cloned.current_version_number = 1
+        await self.db.commit()
+        return cloned
+
     async def soft_delete(
         self, *, actor, template_id: str
     ) -> None:
