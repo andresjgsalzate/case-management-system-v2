@@ -1254,3 +1254,55 @@ async def test_clone_template_tenant_admin_cannot_clone_to_other_tenant():
                 target_tenant_id="tenant-B",  # NOT actor.tenant_id
                 new_code="soc_b",
             )
+
+
+# ── default SOC template seed (Task 12) ─────────────────────────────────
+
+
+def test_default_soc_template_seeded():
+    """A global template with code='soc_standard' exists and covers the
+    8 sections from master spec §7 acceptance criteria."""
+    from sqlalchemy import text
+
+    async def _check():
+        from sqlalchemy.ext.asyncio import create_async_engine
+        engine = create_async_engine(_get_real_url())
+        try:
+            async with engine.connect() as conn:
+                template_row = (await conn.execute(text(
+                    "SELECT id, current_version_id, is_default, is_active "
+                    "FROM alert_report_templates "
+                    "WHERE code = 'soc_standard' AND tenant_id IS NULL"
+                ))).fetchone()
+                if not template_row:
+                    return None
+                version_row = (await conn.execute(text(
+                    "SELECT version, blocks "
+                    "FROM alert_report_template_versions "
+                    "WHERE id = :vid"
+                ), {"vid": template_row[1]})).fetchone()
+                return {
+                    "is_default": template_row[2],
+                    "is_active": template_row[3],
+                    "version": version_row[0] if version_row else None,
+                    "blocks": version_row[1] if version_row else None,
+                }
+        finally:
+            await engine.dispose()
+
+    info = asyncio.run(_check())
+    assert info is not None, (
+        "Global SOC standard template missing — check seed migration"
+    )
+    assert info["is_default"] is True
+    assert info["is_active"] is True
+    assert info["version"] == 1
+
+    block_types = [b["type"] for b in info["blocks"]]
+    # Master spec §7 acceptance: the 8 sections that operators expect
+    for required in (
+        "alert_metadata", "priority_calculation", "triage_analysis",
+        "evidence_grid", "forensic_artifacts_list", "behavior_relation",
+        "mitre_techniques", "recommendations",
+    ):
+        assert required in block_types, f"missing block '{required}'"
