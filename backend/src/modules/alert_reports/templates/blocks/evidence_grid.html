@@ -1,0 +1,59 @@
+<section class="evidence-grid-section">
+  <h2>EVIDENCIA RECOLECTADA</h2>
+
+  {% if not forensic_hunts and not attachments and not iocs %}
+    <p><em>Sin evidencia adjunta.</em></p>
+  {% endif %}
+
+  {% if forensic_hunts %}
+    <h3>Hunts forenses</h3>
+    <div class="evidence-grid">
+      {% for h in forensic_hunts %}
+        <div class="evidence-card">
+          <div class="font-mono">{{ h.artifact_name }}</div>
+          <div>Target: {{ h.target_label or "—" }}</div>
+          <div>Estado: {{ h.status }}</div>
+          {% if h.result_hash %}
+            <div class="font-mono small">hash: {{ h.result_hash }}</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if attachments %}
+    <h3>Adjuntos del caso</h3>
+    <table>
+      <thead>
+        <tr><th>Archivo</th><th>Tipo</th><th>Tamaño</th></tr>
+      </thead>
+      <tbody>
+        {% for a in attachments %}
+          <tr>
+            <td>{{ a.original_filename }}</td>
+            <td>{{ a.mime_type or "—" }}</td>
+            <td>{{ a.file_size or "—" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  {% if iocs %}
+    <h3>Indicadores de compromiso</h3>
+    <table>
+      <thead>
+        <tr><th>Tipo</th><th>Valor</th><th>Fuente</th></tr>
+      </thead>
+      <tbody>
+        {% for i in iocs %}
+          <tr>
+            <td>{{ i.type or "—" }}</td>
+            <td class="font-mono">{{ i.value or "—" }}</td>
+            <td>{{ i.source or "—" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>

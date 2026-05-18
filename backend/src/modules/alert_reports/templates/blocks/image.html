@@ -1,0 +1,14 @@
+<section class="image-block">
+  {% if params.attachment_id %}
+    {# Image src will be resolved at PDF render time by pdf_generator (Task 7),
+       which converts attachment_id into a file:// URL for WeasyPrint. #}
+    <img
+      src="attachment://{{ params.attachment_id }}"
+      style="max-width: {{ params.max_width_pct or 100 }}%;"
+      alt="{{ params.caption or '' }}"
+    />
+    {% if params.caption %}
+      <p class="caption">{{ params.caption }}</p>
+    {% endif %}
+  {% endif %}
+</section>

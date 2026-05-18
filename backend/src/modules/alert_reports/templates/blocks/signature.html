@@ -1,0 +1,9 @@
+<section class="signature-block">
+  <h2>FIRMAS</h2>
+  {% for signer in signers %}
+    <div class="signature-line">
+      <div>{{ signer.label }}</div>
+      <div class="role">{{ signer.role }}</div>
+    </div>
+  {% endfor %}
+</section>

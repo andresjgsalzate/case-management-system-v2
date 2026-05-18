@@ -27,3 +27,4 @@ pyvelociraptor==0.1.14
 weasyprint>=60.0
 markdown>=3.5
 bleach>=6.1
+jinja2>=3.1

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ snapshot.case.case_number }} — {{ snapshot.case.title }}</title>
+  {% include 'default_css.html' ignore missing %}
+</head>
+<body>
+  {% if header_config.show_classification and snapshot.case.tlp %}
+  <div class="tlp-banner tlp-{{ snapshot.case.tlp | lower }}">
+    TLP:{{ snapshot.case.tlp | upper }}
+  </div>
+  {% endif %}
+
+  {% if header_config.show_case_metadata_table %}
+  <header class="document-header">
+    <h1>{{ header_config.title_template or "INFORMACIÓN DE LA ALERTA" }}</h1>
+    <div class="document-meta">
+      <span>{{ snapshot.case.tenant_name }}</span>
+      <span>{{ snapshot.case.case_number }}</span>
+      <span>{{ snapshot.case.created_at }}</span>
+    </div>
+  </header>
+  {% endif %}
+
+  <main class="document-body">
+    {{ body_html | safe }}
+  </main>
+
+  <footer class="document-footer">
+    {% if footer_config.footer_text %}
+      <p>{{ footer_config.footer_text }}</p>
+    {% endif %}
+    {% if footer_config.show_classification_stamp and snapshot.case.tlp %}
+      <p class="classification-stamp">TLP:{{ snapshot.case.tlp | upper }}</p>
+    {% endif %}
+  </footer>
+</body>
+</html>

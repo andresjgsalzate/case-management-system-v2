@@ -1,0 +1,22 @@
+<section class="mitre-techniques">
+  <h2>TÉCNICAS MITRE ATT&amp;CK</h2>
+  {% if not techniques %}
+    <p><em>Sin técnicas asociadas.</em></p>
+  {% else %}
+    <div class="mitre-list">
+      {% for t in techniques %}
+        <span class="mitre-badge">{{ t }}</span>
+      {% endfor %}
+    </div>
+    {% if params.include_table %}
+      <table>
+        <thead><tr><th>ID</th></tr></thead>
+        <tbody>
+          {% for t in techniques %}
+            <tr><td class="font-mono">{{ t }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  {% endif %}
+</section>

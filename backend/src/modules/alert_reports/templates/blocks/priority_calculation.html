@@ -1,0 +1,22 @@
+<section class="priority-calc">
+  <h2>CÁLCULO DE PRIORIDAD</h2>
+  {% if not calc %}
+    <p><em>Sin cálculo de prioridad registrado para este caso.</em></p>
+  {% else %}
+    {% if params.show_formula_name %}
+      <p><strong>Fórmula:</strong> {{ calc.formula_id }}</p>
+    {% endif %}
+    <p><strong>Score ponderado:</strong> {{ calc.weighted_sum }}</p>
+    <p><strong>Calculado:</strong> {{ calc.calculated_at }}</p>
+    {% if params.show_inputs_table and calc.inputs %}
+      <table>
+        <thead><tr><th>Criterio</th><th>Valor</th></tr></thead>
+        <tbody>
+          {% for key, value in calc.inputs.items() %}
+            <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  {% endif %}
+</section>

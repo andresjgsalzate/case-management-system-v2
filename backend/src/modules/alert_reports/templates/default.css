@@ -1,0 +1,62 @@
+@page {
+  size: A4;
+  margin: 2.5cm 2cm;
+  @top-right { content: "Página " counter(page) " de " counter(pages); }
+}
+
+body {
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.45;
+  color: #222;
+}
+
+h1 { font-size: 18pt; margin: 0 0 0.3em; }
+h2 { font-size: 14pt; margin: 1.2em 0 0.4em; }
+h3 { font-size: 12pt; margin: 0.9em 0 0.3em; }
+
+.tlp-banner {
+  text-align: center;
+  font-weight: bold;
+  padding: 0.5em;
+  margin-bottom: 1em;
+  letter-spacing: 0.1em;
+}
+.tlp-red    { background: #FF3B30; color: #fff; }
+.tlp-amber  { background: #FFB400; color: #000; }
+.tlp-green  { background: #34C759; color: #000; }
+.tlp-white  { background: #fff;    color: #000; border: 1px solid #888; }
+
+.document-header { border-bottom: 2px solid #444; padding-bottom: 0.4em; }
+.document-meta   { display: flex; gap: 1.5em; font-size: 9pt; color: #555; }
+.document-footer { margin-top: 2em; font-size: 8pt; color: #666; text-align: center; }
+.classification-stamp { font-weight: bold; letter-spacing: 0.15em; }
+
+.block { margin-bottom: 1.4em; }
+.block-error { color: #b00; font-style: italic; padding: 0.4em; border: 1px dashed #b00; }
+.page-break  { page-break-after: always; }
+.spacer      { width: 100%; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 0.35em 0.6em; vertical-align: top; }
+th { background: #f3f3f3; text-align: left; }
+
+.evidence-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }
+.evidence-card { border: 1px solid #ddd; padding: 0.6em; border-radius: 4px; }
+
+ul.recommendations { margin: 0; padding-left: 1.4em; }
+ul.recommendations li { margin-bottom: 0.3em; }
+
+.mitre-badge {
+  display: inline-block;
+  background: #007AFF;
+  color: #fff;
+  padding: 0.2em 0.6em;
+  border-radius: 3px;
+  font-size: 9pt;
+  margin: 0 0.3em 0.3em 0;
+  font-family: "Courier New", monospace;
+}
+
+.signature-block { margin-top: 2em; }
+.signature-line  { border-top: 1px solid #444; min-height: 3em; padding-top: 0.3em; }

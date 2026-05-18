@@ -1,0 +1,31 @@
+<section class="forensic-artifacts">
+  <h2>ARTIFACTS FORENSES</h2>
+  {% if not hunts %}
+    <p><em>Sin hunts forenses asociados.</em></p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>Target</th>
+          <th>Filas</th>
+          {% if params.show_chain_of_custody %}<th>SHA-256</th>{% endif %}
+          <th>Completado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in hunts %}
+          <tr>
+            <td class="font-mono">{{ h.artifact_name }}</td>
+            <td>{{ h.target_label or "—" }}</td>
+            <td>{{ (h.result_summary or {}).total_rows or 0 }}</td>
+            {% if params.show_chain_of_custody %}
+              <td class="font-mono small">{{ h.result_hash or "—" }}</td>
+            {% endif %}
+            <td>{{ h.completed_at or "—" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>

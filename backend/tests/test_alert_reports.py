@@ -340,3 +340,199 @@ async def test_build_data_snapshot_assembles_full_shape():
     assert snap["forensic_hunts"] == []
     assert snap["evidence_attachments"] == []
     assert snap["mitre_techniques"] == ["T1566"]
+
+
+def _make_snapshot(case_id: str = "c1") -> dict:
+    return {
+        "case": {
+            "id": case_id,
+            "case_number": "EVT-0042",
+            "title": "Sample event",
+            "tenant_name": "ACME",
+            "taxonomy_code": "TUIC-001",
+            "taxonomy_name": "Phishing",
+            "case_type": "event",
+            "priority_name": "Alta",
+            "service_item_name": "SOC",
+            "team_name": "L2",
+            "created_at": "2026-05-17T10:00:00+00:00",
+            "tlp": "amber",
+        },
+        "priority_calculation": None,
+        "forensic_hunts": [
+            {
+                "hunt_id": "h1",
+                "artifact_name": "Windows.Detection.Yara.Process",
+                "target_label": "PC-X",
+                "status": "completed",
+                "result_hash": "abc123",
+                "result_summary": {"total_rows": 3, "client_count": 1},
+                "completed_at": "2026-05-17T10:30:00+00:00",
+            }
+        ],
+        "evidence_attachments": [],
+        "notes_summary": "",
+        "activity_timeline": [],
+        "recommendations": None,
+        "behavior_relation": None,
+        "iocs": [],
+        "mitre_techniques": ["T1566"],
+    }
+
+
+def test_render_blocks_in_order():
+    from backend.src.modules.alert_reports.application.block_renderer import (
+        BlockRenderer,
+    )
+    renderer = BlockRenderer()
+    html = renderer.render(
+        blocks=[
+            {"type": "page_break", "params": {}},
+            {"type": "spacer", "params": {"height_px": 50}},
+            {"type": "alert_metadata", "params": {}},
+        ],
+        snapshot=_make_snapshot(),
+        header_config={},
+        footer_config={},
+    )
+    pos_pb = html.find("page-break")
+    pos_sp = html.find('height: 50px')
+    pos_meta = html.find("alert-metadata")
+    assert pos_pb < pos_sp < pos_meta
+
+
+def test_render_unknown_block_renders_placeholder():
+    from backend.src.modules.alert_reports.application.block_renderer import (
+        BlockRenderer,
+    )
+    renderer = BlockRenderer()
+    html = renderer.render(
+        blocks=[{"type": "wat", "params": {}}],
+        snapshot=_make_snapshot(),
+        header_config={},
+        footer_config={},
+    )
+    assert 'class="block-error"' in html
+    assert "wat" in html
+
+
+def test_render_alert_metadata_uses_snapshot():
+    from backend.src.modules.alert_reports.application.block_renderer import (
+        BlockRenderer,
+    )
+    renderer = BlockRenderer()
+    html = renderer.render(
+        blocks=[{"type": "alert_metadata", "params": {}}],
+        snapshot=_make_snapshot(),
+        header_config={},
+        footer_config={},
+    )
+    assert "EVT-0042" in html
+    assert "Phishing" in html
+    assert "TUIC-001" in html
+    assert "amber" in html.lower()
+
+
+def test_render_evidence_grid_includes_forensic_hunts_when_param_true():
+    from backend.src.modules.alert_reports.application.block_renderer import (
+        BlockRenderer,
+    )
+    renderer = BlockRenderer()
+    html = renderer.render(
+        blocks=[{
+            "type": "evidence_grid",
+            "params": {"include_forensic_hunts": True},
+        }],
+        snapshot=_make_snapshot(),
+        header_config={},
+        footer_config={},
+    )
+    assert "Windows.Detection.Yara.Process" in html
+
+
+def test_render_evidence_grid_excludes_when_param_false():
+    from backend.src.modules.alert_reports.application.block_renderer import (
+        BlockRenderer,
+    )
+    renderer = BlockRenderer()
+    html = renderer.render(
+        blocks=[{
+            "type": "evidence_grid",
+            "params": {"include_forensic_hunts": False},
+        }],
+        snapshot=_make_snapshot(),
+        header_config={},
+        footer_config={},
+    )
+    assert "Windows.Detection.Yara.Process" not in html
+
+
+def test_render_recommendations_uses_default_when_note_empty():
+    from backend.src.modules.alert_reports.application.block_renderer import (
+        BlockRenderer,
+    )
+    renderer = BlockRenderer()
+    snap = _make_snapshot()
+    html = renderer.render(
+        blocks=[{
+            "type": "recommendations",
+            "params": {
+                "default_recommendations": [
+                    "Aislar el host",
+                    "Rotar credenciales",
+                ],
+            },
+        }],
+        snapshot=snap,
+        header_config={},
+        footer_config={},
+    )
+    assert "Aislar el host" in html
+    assert "Rotar credenciales" in html
+
+
+def test_render_text_block_jinja2_sandbox():
+    """Sandboxed env blocks attribute access to internals."""
+    from jinja2.exceptions import SecurityError
+
+    from backend.src.modules.alert_reports.application.block_renderer import (
+        BlockRenderer,
+    )
+    renderer = BlockRenderer()
+    with pytest.raises(SecurityError):
+        renderer.render(
+            blocks=[{
+                "type": "text",
+                "params": {
+                    "content_template": "{{ ''.__class__.__mro__ }}",
+                },
+            }],
+            snapshot=_make_snapshot(),
+            header_config={},
+            footer_config={},
+        )
+
+
+def test_render_text_block_markdown_html_sanitized():
+    """Markdown render + bleach strips disallowed tags like <script>."""
+    from backend.src.modules.alert_reports.application.block_renderer import (
+        BlockRenderer,
+    )
+    renderer = BlockRenderer()
+    html = renderer.render(
+        blocks=[{
+            "type": "text",
+            "params": {
+                "use_markdown": True,
+                "content_template": (
+                    "Hello\n\n<script>alert(1)</script>\n\n**bold** text"
+                ),
+            },
+        }],
+        snapshot=_make_snapshot(),
+        header_config={},
+        footer_config={},
+    )
+    assert "<script>" not in html
+    assert "alert(1)" not in html
+    assert "<strong>bold</strong>" in html or "bold" in html

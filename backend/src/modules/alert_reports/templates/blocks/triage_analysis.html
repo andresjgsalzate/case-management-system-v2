@@ -1,0 +1,17 @@
+<section class="triage-analysis">
+  <h2>ANÁLISIS Y TRIAGE DE LA ALERTA</h2>
+  {% if params.show_taxonomy_chain and case.taxonomy_code %}
+    <p>
+      <strong>Taxonomía:</strong>
+      {{ case.taxonomy_code }} — {{ case.taxonomy_name }}
+    </p>
+  {% endif %}
+  {% if case.description %}
+    <h3>Descripción</h3>
+    <p>{{ case.description }}</p>
+  {% endif %}
+  {% if notes_summary %}
+    <h3>Notas</h3>
+    <pre class="notes-block">{{ notes_summary }}</pre>
+  {% endif %}
+</section>

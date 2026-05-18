@@ -1,0 +1,12 @@
+<section class="recommendations-block">
+  <h2>RECOMENDACIONES</h2>
+  {% if items %}
+    <ul class="recommendations">
+      {% for r in items %}
+        <li>{{ r }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p><em>Sin recomendaciones para este caso.</em></p>
+  {% endif %}
+</section>

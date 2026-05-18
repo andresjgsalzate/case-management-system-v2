@@ -1,0 +1,19 @@
+<section class="alert-metadata">
+  <h2>INFORMACIÓN DE LA ALERTA</h2>
+  <table>
+    <tr><th>Cliente</th><td>{{ case.tenant_name }}</td></tr>
+    {% if params.show_tlp %}
+    <tr><th>TLP</th><td class="tlp-{{ (case.tlp or 'white') | lower }}">{{ case.tlp or "WHITE" }}</td></tr>
+    {% endif %}
+    <tr><th>Caso</th><td>{{ case.case_number }}</td></tr>
+    <tr><th>Tipo</th><td>{{ case.case_type }}</td></tr>
+    <tr><th>Taxonomía</th><td>{{ case.taxonomy_code }} — {{ case.taxonomy_name }}</td></tr>
+    <tr><th>Prioridad</th><td>{{ case.priority_name }}</td></tr>
+    <tr><th>Servicio</th><td>{{ case.service_item_name }}</td></tr>
+    <tr><th>Equipo</th><td>{{ case.team_name }}</td></tr>
+    <tr><th>Creado</th><td>{{ case.created_at }}</td></tr>
+    {% if case.closed_at %}
+    <tr><th>Cerrado</th><td>{{ case.closed_at }}</td></tr>
+    {% endif %}
+  </table>
+</section>

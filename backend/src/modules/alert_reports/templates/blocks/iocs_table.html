@@ -1,0 +1,25 @@
+<section class="iocs-table">
+  <h2>INDICADORES DE COMPROMISO (IOCs)</h2>
+  {% if not iocs %}
+    <p><em>Sin IOCs registrados.</em></p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          {% for c in columns %}<th>{{ c }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for i in iocs %}
+          <tr>
+            {% for c in columns %}
+              <td class="{% if c == 'value' %}font-mono{% endif %}">
+                {{ i[c] or "—" }}
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
