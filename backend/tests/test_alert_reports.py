@@ -831,3 +831,154 @@ async def test_generate_report_n8n_actor_sets_n8n_api_via():
     assert report.generated_via == "n8n_api"
     assert report.generated_by_user_id is None
     assert report.generated_by_n8n_run_id == "run-42"
+
+
+# ── verify_integrity + delete_report (Task 9) ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_verify_integrity_intact_when_bytes_hash_matches():
+    import hashlib
+
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+
+    pdf = b"%PDF-1.4\nbody bytes that were stored"
+    expected_hash = hashlib.sha256(pdf).hexdigest()
+
+    report = MagicMock(
+        id="rep-1", case_id="c1", attachment_id="att-1",
+        pdf_sha256=expected_hash,
+    )
+    case = MagicMock(id="c1", tenant_id="t1")
+    attachment = MagicMock(id="att-1", file_path="/fake/path.pdf")
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(side_effect=[report, case, attachment])
+
+    uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+    actor = MagicMock(
+        user_id="u1", role_id="r1", tenant_id="t1", is_global=False,
+    )
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ), patch.object(
+        uc, "_read_attachment_bytes",
+        new=AsyncMock(return_value=pdf),
+    ):
+        result = await uc.verify_report_integrity(
+            actor=actor, report_id="rep-1",
+        )
+
+    assert result["is_intact"] is True
+    assert result["expected_sha256"] == expected_hash
+    assert result["actual_sha256"] == expected_hash
+    assert "verified_at" in result
+
+
+@pytest.mark.asyncio
+async def test_verify_integrity_detects_tampered_attachment():
+    """Bytes-on-disk hash differs from stored → is_intact=False."""
+    import hashlib
+
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+
+    stored_hash = hashlib.sha256(b"original").hexdigest()
+    report = MagicMock(
+        id="rep-1", case_id="c1", attachment_id="att-1",
+        pdf_sha256=stored_hash,
+    )
+    case = MagicMock(id="c1", tenant_id="t1")
+    attachment = MagicMock(id="att-1", file_path="/fake/tampered.pdf")
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(side_effect=[report, case, attachment])
+
+    uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+    actor = MagicMock(
+        user_id="u1", role_id="r1", tenant_id="t1", is_global=False,
+    )
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ), patch.object(
+        uc, "_read_attachment_bytes",
+        new=AsyncMock(return_value=b"corrupted"),
+    ):
+        result = await uc.verify_report_integrity(
+            actor=actor, report_id="rep-1",
+        )
+
+    assert result["is_intact"] is False
+    assert result["expected_sha256"] != result["actual_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_delete_report_requires_non_empty_reason():
+    from backend.src.core.exceptions import ValidationError
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+    uc = AlertReportGenerationUseCases(db=AsyncMock(), system_user_id="sys")
+    actor = MagicMock(
+        user_id="u1", role_id="r1", tenant_id="t1", is_global=False,
+    )
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ):
+        with pytest.raises(ValidationError, match="razón"):
+            await uc.delete_report(
+                actor=actor, report_id="rep-1", reason="",
+            )
+        with pytest.raises(ValidationError, match="razón"):
+            await uc.delete_report(
+                actor=actor, report_id="rep-1", reason="   ",
+            )
+
+
+@pytest.mark.asyncio
+async def test_delete_report_soft_deletes_attachment_and_logs_audit():
+    from backend.src.modules.alert_reports.application.use_cases import (
+        AlertReportGenerationUseCases,
+    )
+    report = MagicMock(
+        id="rep-1", case_id="c1", tenant_id="t1",
+        attachment_id="att-1", pdf_sha256="abc123",
+    )
+    case = MagicMock(id="c1", tenant_id="t1")
+    attachment = MagicMock(id="att-1", is_deleted=False)
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(side_effect=[report, case, attachment])
+
+    uc = AlertReportGenerationUseCases(db=mock_db, system_user_id="sys")
+    actor = MagicMock(
+        user_id="u1", role_id="r1", tenant_id="t1", is_global=False,
+    )
+
+    captured: dict = {}
+
+    async def fake_audit_log(**kwargs):
+        captured.update(kwargs)
+
+    with patch(
+        "backend.src.modules.alert_reports.application.use_cases.has_permission",
+        new=AsyncMock(return_value=True),
+    ), patch.object(
+        uc, "_audit_log_delete",
+        new=AsyncMock(side_effect=fake_audit_log),
+    ):
+        await uc.delete_report(
+            actor=actor, report_id="rep-1",
+            reason="False positive — duplicado",
+        )
+
+    assert attachment.is_deleted is True
+    mock_db.delete.assert_called_once_with(report)
+    assert captured.get("reason") == "False positive — duplicado"
+    assert captured.get("report_id") == "rep-1"

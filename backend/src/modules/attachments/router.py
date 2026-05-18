@@ -81,5 +81,28 @@ async def delete_attachment(
     db: DBSession,
     current_user: CurrentUser = Depends(PermissionChecker("attachments", "delete")),
 ):
+    """Soft-delete an attachment.
+
+    Sub-spec 08 ``case_generated_reports.attachment_id`` declares
+    ``ondelete=RESTRICT`` so a hard DELETE on the attachment row would
+    raise ``IntegrityError`` while a report references it. The current
+    soft-delete (``is_deleted=True``) bypasses the FK trigger entirely,
+    but the try/except below future-proofs against any later code path
+    that hard-deletes.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from fastapi import HTTPException
+
     uc = AttachmentUseCases(db=db, upload_dir=get_settings().UPLOAD_DIR)
-    await uc.delete(attachment_id=attachment_id, user_id=current_user.user_id)
+    try:
+        await uc.delete(attachment_id=attachment_id, user_id=current_user.user_id)
+    except IntegrityError as e:
+        if "case_generated_reports" in str(e).lower():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Adjunto referenciado por un reporte generado — "
+                    "no se puede eliminar"
+                ),
+            ) from e
+        raise

@@ -9,9 +9,11 @@
 
 The router (Task 13) calls into these two classes.
 """
+import asyncio
 import hashlib
 import logging
 import uuid as _uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, update
@@ -21,6 +23,7 @@ from backend.src.core.events.base import BaseEvent
 from backend.src.core.events.bus import event_bus as global_event_bus
 from backend.src.core.exceptions import (
     BusinessRuleError, NotFoundError, PermissionDeniedError,
+    ValidationError,
 )
 from backend.src.core.middleware.permission_checker import has_permission
 from backend.src.modules.alert_reports.application.block_renderer import (
@@ -697,3 +700,165 @@ class AlertReportGenerationUseCases:
             for c in case_number
         )
         return f"alert_report_{safe}_v{version.version}.pdf"
+
+    # ── Task 9: list / get / verify / delete ─────────────────────────────
+
+    async def list_reports_for_case(
+        self, *, actor, case_id: str
+    ) -> list[CaseGeneratedReportModel]:
+        if not await has_permission(
+            self.db, actor.role_id, "alert_reports", "read"
+        ):
+            raise PermissionDeniedError(
+                "Permission denied: alert_reports.read"
+            )
+        case = await self._load_case(case_id)
+        self._require_case_access(actor, case)
+        stmt = (
+            select(CaseGeneratedReportModel)
+            .where(CaseGeneratedReportModel.case_id == case_id)
+            .order_by(CaseGeneratedReportModel.generated_at.desc())
+        )
+        return list((await self.db.execute(stmt)).scalars().all())
+
+    async def get_report(
+        self, *, actor, report_id: str
+    ) -> CaseGeneratedReportModel:
+        if not await has_permission(
+            self.db, actor.role_id, "alert_reports", "read"
+        ):
+            raise PermissionDeniedError(
+                "Permission denied: alert_reports.read"
+            )
+        report = await self.db.get(CaseGeneratedReportModel, report_id)
+        if not report:
+            raise NotFoundError(f"Report {report_id} not found")
+        case = await self._load_case(report.case_id)
+        self._require_case_access(actor, case)
+        return report
+
+    async def verify_report_integrity(
+        self, *, actor, report_id: str
+    ) -> dict[str, Any]:
+        """Re-hash the on-disk PDF and compare to the stored SHA-256.
+
+        Returns a dict with ``is_intact``, ``expected_sha256``,
+        ``actual_sha256``, ``verified_at`` and ``verified_by`` — the
+        operator-facing chain-of-custody check.
+        """
+        report = await self.get_report(actor=actor, report_id=report_id)
+        attachment = await self.db.get(
+            CaseAttachmentModel, report.attachment_id
+        )
+        if not attachment:
+            raise NotFoundError(
+                f"Attachment {report.attachment_id} referenced by report "
+                f"{report_id} is missing"
+            )
+        pdf_bytes = await self._read_attachment_bytes(attachment)
+        actual = hashlib.sha256(pdf_bytes).hexdigest()
+        return {
+            "report_id": report_id,
+            "expected_sha256": report.pdf_sha256,
+            "actual_sha256": actual,
+            "is_intact": actual == report.pdf_sha256,
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "verified_by": actor.user_id,
+            "pdf_size_bytes": len(pdf_bytes),
+        }
+
+    async def _read_attachment_bytes(
+        self, attachment: CaseAttachmentModel
+    ) -> bytes:
+        """Read attachment file from disk in a worker thread.
+
+        The repo doesn't ship ``aiofiles``; ``asyncio.to_thread`` keeps the
+        event loop unblocked without adding a dependency.
+        """
+        def _read() -> bytes:
+            with open(attachment.file_path, "rb") as fh:
+                return fh.read()
+        return await asyncio.to_thread(_read)
+
+    async def delete_report(
+        self, *, actor, report_id: str, reason: str
+    ) -> None:
+        """Delete a generated report.
+
+        Requires:
+        - ``alert_reports.delete`` permission.
+        - Non-empty ``reason`` (audit requirement — compliance reports
+          should never disappear silently).
+
+        Side effects:
+        - Soft-deletes the PDF ``CaseAttachmentModel`` (``is_deleted=True``)
+          to preserve the on-disk file for forensic recovery while hiding
+          it from the case UI.
+        - Hard-deletes the ``CaseGeneratedReportModel`` row.
+        - Inserts an ``AuditLogModel`` row with the operator-supplied
+          reason (the SQLAlchemy listener captures the DELETE separately,
+          but it can't capture the reason — explicit log here).
+        """
+        if not await has_permission(
+            self.db, actor.role_id, "alert_reports", "delete"
+        ):
+            raise PermissionDeniedError(
+                "Permission denied: alert_reports.delete"
+            )
+        if not reason or not reason.strip():
+            raise ValidationError(
+                "Debe proporcionar una razón para eliminar un reporte"
+            )
+
+        report = await self.get_report(actor=actor, report_id=report_id)
+        attachment = await self.db.get(
+            CaseAttachmentModel, report.attachment_id
+        )
+        if attachment and not attachment.is_deleted:
+            attachment.is_deleted = True
+
+        await self._audit_log_delete(
+            actor_id=actor.user_id,
+            report_id=report_id,
+            tenant_id=report.tenant_id,
+            pdf_sha256=report.pdf_sha256,
+            reason=reason,
+        )
+        await self.db.delete(report)
+        await self.db.commit()
+
+    async def _audit_log_delete(
+        self,
+        *,
+        actor_id: str,
+        report_id: str,
+        tenant_id: str,
+        pdf_sha256: str,
+        reason: str,
+    ) -> None:
+        """Insert an ``audit_logs`` row capturing the operator's reason.
+
+        ``AuditLogModel.action`` is ``VARCHAR(10)`` — limited to the
+        canonical INSERT/UPDATE/DELETE convention used by the auto-audit
+        middleware. The operator-supplied ``reason`` and the human-readable
+        action label go into the ``changes`` JSON column.
+        """
+        from backend.src.modules.audit.infrastructure.models import (
+            AuditLogModel,
+        )
+        entry = AuditLogModel(
+            id=str(_uuid.uuid4()),
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="DELETE",
+            entity_type="case_generated_reports",
+            entity_id=report_id,
+            changes={
+                "operation": "alert_report_deleted",
+                "report_id": report_id,
+                "pdf_sha256": pdf_sha256,
+                "reason": reason,
+            },
+        )
+        self.db.add(entry)
+        await self.db.flush()
