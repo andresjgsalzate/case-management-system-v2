@@ -1217,3 +1217,38 @@ export interface GenerateAlertReportRequest {
   template_id?: string | null;
   n8n_run_id?: string | null;
 }
+
+// ── n8n workflow catalog ────────────────────────────────────────────────
+
+export interface N8nWorkflow {
+  id: string;
+  tenant_id: string | null;
+  name: string;
+  description: string | null;
+  workflow_url: string;
+  is_active: boolean;
+  requires_approval: boolean;
+  allowed_role_ids: string[] | null;
+  created_at: string;
+  updated_at: string;
+  created_by_user_id: string | null;
+}
+
+export interface CreateN8nWorkflowPayload {
+  tenant_id?: string | null;
+  name: string;
+  description?: string | null;
+  workflow_url: string;
+  is_active?: boolean;
+  requires_approval?: boolean;
+  allowed_role_ids?: string[] | null;
+}
+
+export interface UpdateN8nWorkflowPayload {
+  name?: string;
+  description?: string | null;
+  workflow_url?: string;
+  is_active?: boolean;
+  requires_approval?: boolean;
+  allowed_role_ids?: string[] | null;
+}

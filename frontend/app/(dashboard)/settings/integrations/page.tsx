@@ -7,9 +7,11 @@ import { InboundEventDetailModal } from "@/components/organisms/InboundEventDeta
 import { InboundEventsTable } from "@/components/organisms/InboundEventsTable";
 import { IntegrationSourceCreateModal } from "@/components/organisms/IntegrationSourceCreateModal";
 import { IntegrationSourcesTable } from "@/components/organisms/IntegrationSourcesTable";
-import type { InboundEvent, RotateSecretResponse } from "@/lib/types";
+import { N8nWorkflowFormModal } from "@/components/organisms/N8nWorkflowFormModal";
+import { N8nWorkflowsTable } from "@/components/organisms/N8nWorkflowsTable";
+import type { InboundEvent, N8nWorkflow, RotateSecretResponse } from "@/lib/types";
 
-type Tab = "sources" | "events";
+type Tab = "sources" | "events" | "workflows";
 
 export default function IntegrationsSettingsPage() {
   const [tab, setTab] = useState<Tab>("sources");
@@ -18,13 +20,25 @@ export default function IntegrationsSettingsPage() {
   const [rotated, setRotated] = useState<
     { secret: RotateSecretResponse; name: string } | null
   >(null);
+  const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
+  const [editingWorkflow, setEditingWorkflow] = useState<N8nWorkflow | null>(null);
+
+  function openCreateWorkflow() {
+    setEditingWorkflow(null);
+    setWorkflowModalOpen(true);
+  }
+
+  function openEditWorkflow(wf: N8nWorkflow) {
+    setEditingWorkflow(wf);
+    setWorkflowModalOpen(true);
+  }
 
   return (
     <div className="space-y-4 p-4">
       <header>
         <h1 className="text-xl font-semibold">Integraciones</h1>
         <p className="text-sm text-muted-foreground">
-          Fuentes de eventos (Wazuh, Splunk, …) y bandeja de eventos entrantes.
+          Fuentes de eventos (Wazuh, Splunk, …), bandeja de eventos entrantes y catálogo de workflows n8n.
         </p>
       </header>
 
@@ -35,9 +49,12 @@ export default function IntegrationsSettingsPage() {
         <TabButton active={tab === "events"} onClick={() => setTab("events")}>
           Eventos entrantes
         </TabButton>
+        <TabButton active={tab === "workflows"} onClick={() => setTab("workflows")}>
+          Workflows n8n
+        </TabButton>
       </nav>
 
-      {tab === "sources" ? (
+      {tab === "sources" && (
         <section className="rounded border bg-card">
           <header className="flex items-center justify-between border-b px-3 py-2">
             <h2 className="text-sm font-semibold">Fuentes configuradas</h2>
@@ -55,9 +72,27 @@ export default function IntegrationsSettingsPage() {
             }
           />
         </section>
-      ) : (
+      )}
+
+      {tab === "events" && (
         <section className="rounded border bg-card">
           <InboundEventsTable onSelect={(e) => setSelectedEvent(e)} />
+        </section>
+      )}
+
+      {tab === "workflows" && (
+        <section className="rounded border bg-card">
+          <header className="flex items-center justify-between border-b px-3 py-2">
+            <h2 className="text-sm font-semibold">Catálogo de workflows n8n</h2>
+            <button
+              type="button"
+              onClick={openCreateWorkflow}
+              className="inline-flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700"
+            >
+              <Plus className="h-3.5 w-3.5" /> Nuevo workflow
+            </button>
+          </header>
+          <N8nWorkflowsTable onEdit={openEditWorkflow} />
         </section>
       )}
 
@@ -69,6 +104,12 @@ export default function IntegrationsSettingsPage() {
       <InboundEventDetailModal
         eventId={selectedEvent?.id ?? null}
         onClose={() => setSelectedEvent(null)}
+      />
+
+      <N8nWorkflowFormModal
+        isOpen={workflowModalOpen}
+        initial={editingWorkflow}
+        onClose={() => setWorkflowModalOpen(false)}
       />
 
       {rotated ? (
