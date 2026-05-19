@@ -42,6 +42,12 @@ from backend.src.modules.n8n_bridge.application.dtos import (
 from backend.src.modules.n8n_bridge.application.use_cases import (
     N8nBridgeUseCases,
 )
+from backend.src.modules.n8n_bridge.application.workflow_catalog import (
+    CreateN8nWorkflowDTO,
+    N8nWorkflowCatalogUseCases,
+    N8nWorkflowResponseDTO,
+    UpdateN8nWorkflowDTO,
+)
 from backend.src.modules.n8n_bridge.infrastructure.models import (
     ApprovalRequestModel,
     PlaybookRunCallbackModel,
@@ -59,6 +65,11 @@ TriggerDep = Depends(PermissionChecker("n8n_bridge", "trigger_workflow"))
 ReadRunsDep = Depends(PermissionChecker("n8n_bridge", "read_runs"))
 ApprovalsReadDep = Depends(PermissionChecker("approvals", "read"))
 ApprovalsApproveDep = Depends(PermissionChecker("approvals", "approve"))
+
+WorkflowsReadDep = Depends(PermissionChecker("n8n_workflows", "read"))
+WorkflowsCreateDep = Depends(PermissionChecker("n8n_workflows", "create"))
+WorkflowsUpdateDep = Depends(PermissionChecker("n8n_workflows", "update"))
+WorkflowsDeleteDep = Depends(PermissionChecker("n8n_workflows", "delete"))
 
 
 # ── Public callback ────────────────────────────────────────────────────
@@ -288,3 +299,131 @@ async def decide_approval(
         # Decision persisted but resume POST failed — surface as 502
         raise HTTPException(status_code=502, detail=str(e))
     return SuccessResponse.ok(result)
+
+
+# ── n8n workflow catalog (CRUD) ────────────────────────────────────────
+
+
+from backend.src.core.exceptions import ConflictError  # noqa: E402
+
+
+def _catalog_scope_tenant_id(user: CurrentUser) -> str | None:
+    """Globals (tenant_id NULL) are visible to ``is_global`` users only.
+    Tenant users see globals + their own tenant via the use case logic."""
+    return None if user.is_global else user.tenant_id
+
+
+@admin_router.get(
+    "/n8n-workflows",
+    response_model=SuccessResponse[list[N8nWorkflowResponseDTO]],
+)
+async def list_n8n_workflows(
+    db: DBSession,
+    current_user: CurrentUser = WorkflowsReadDep,
+    only_active: bool = Query(False),
+):
+    uc = N8nWorkflowCatalogUseCases(db)
+    rows = await uc.list(
+        tenant_id=_catalog_scope_tenant_id(current_user),
+        only_active=only_active,
+    )
+    return SuccessResponse.ok(rows)
+
+
+@admin_router.get(
+    "/n8n-workflows/{workflow_id}",
+    response_model=SuccessResponse[N8nWorkflowResponseDTO],
+)
+async def get_n8n_workflow(
+    workflow_id: str,
+    db: DBSession,
+    current_user: CurrentUser = WorkflowsReadDep,
+):
+    uc = N8nWorkflowCatalogUseCases(db)
+    try:
+        wf = await uc.get(workflow_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    # Tenant scoping: deny if row belongs to another tenant.
+    if not current_user.is_global and wf.tenant_id not in (
+        None, current_user.tenant_id,
+    ):
+        raise HTTPException(status_code=404, detail="N8nWorkflow not found")
+    return SuccessResponse.ok(wf)
+
+
+@admin_router.post(
+    "/n8n-workflows",
+    response_model=SuccessResponse[N8nWorkflowResponseDTO],
+    status_code=201,
+)
+async def create_n8n_workflow(
+    payload: CreateN8nWorkflowDTO,
+    db: DBSession,
+    current_user: CurrentUser = WorkflowsCreateDep,
+):
+    # Non-global users may only create rows for their own tenant.
+    if not current_user.is_global:
+        if payload.tenant_id is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Only super-admin can create global workflows",
+            )
+        if payload.tenant_id != current_user.tenant_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot create workflow for another tenant",
+            )
+    uc = N8nWorkflowCatalogUseCases(db)
+    try:
+        wf = await uc.create(payload, created_by_user_id=current_user.user_id)
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return SuccessResponse.ok(wf)
+
+
+@admin_router.patch(
+    "/n8n-workflows/{workflow_id}",
+    response_model=SuccessResponse[N8nWorkflowResponseDTO],
+)
+async def update_n8n_workflow(
+    workflow_id: str,
+    payload: UpdateN8nWorkflowDTO,
+    db: DBSession,
+    current_user: CurrentUser = WorkflowsUpdateDep,
+):
+    uc = N8nWorkflowCatalogUseCases(db)
+    try:
+        existing = await uc.get(workflow_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not current_user.is_global and existing.tenant_id != current_user.tenant_id:
+        # Tenants can't touch globals or other tenants' workflows.
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        wf = await uc.update(workflow_id, payload)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return SuccessResponse.ok(wf)
+
+
+@admin_router.delete(
+    "/n8n-workflows/{workflow_id}",
+    response_model=SuccessResponse[dict],
+)
+async def delete_n8n_workflow(
+    workflow_id: str,
+    db: DBSession,
+    current_user: CurrentUser = WorkflowsDeleteDep,
+):
+    uc = N8nWorkflowCatalogUseCases(db)
+    try:
+        existing = await uc.get(workflow_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not current_user.is_global and existing.tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    await uc.delete(workflow_id)
+    return SuccessResponse.ok({"deleted": True, "id": workflow_id})
