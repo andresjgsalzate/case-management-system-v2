@@ -2,7 +2,7 @@ import Link from "next/link";
 import {
   Users, Shield, Clock, Zap, Bell,
   AlertTriangle, Flag, Layers, Globe, Hash, LayoutGrid, Building2, Mail,
-  BookOpen, Package,
+  BookOpen, Package, Fingerprint, FileText,
 } from "lucide-react";
 
 const SETTINGS_SECTIONS = [
@@ -40,6 +40,13 @@ const SETTINGS_SECTIONS = [
     group: "Base de conocimiento",
     items: [
       { href: "/settings/kb-document-types", icon: BookOpen, color: "text-rose-500", bg: "bg-rose-50 dark:bg-rose-950/40", title: "Tipos de documento", description: "Categorías visuales de artículos del KB (ícono, color, orden)" },
+    ],
+  },
+  {
+    group: "Seguridad / DFIR",
+    items: [
+      { href: "/settings/forensic-artifacts",       icon: Fingerprint, color: "text-pink-500", bg: "bg-pink-50 dark:bg-pink-950/40", title: "Artifacts de Velociraptor", description: "Catálogo de artifacts disponibles para hunts forenses" },
+      { href: "/settings/alert-report-templates",   icon: FileText,    color: "text-lime-500", bg: "bg-lime-50 dark:bg-lime-950/40", title: "Plantillas de Alert Report", description: "Templates de informe de alerta con bloques configurables" },
     ],
   },
 ];

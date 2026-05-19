@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Briefcase,
   Archive,
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/ui.store";
@@ -30,6 +31,7 @@ interface NavItemDef {
 
 const NAV_ITEMS: NavItemDef[] = [
   { href: "/metrics",      label: "Dashboard",            icon: LayoutDashboard, color: "text-blue-500",    permission: { module: "metrics",        action: "read" } },
+  { href: "/soc",          label: "Centro SOC",           icon: Activity,        color: "text-rose-500",    permission: { module: "dashboard_soc",  action: "read" } },
   { href: "/cases",        label: "Casos",                icon: FolderOpen,      color: "text-amber-500",   permission: { module: "cases",          action: "read" } },
   { href: "/dispositions", label: "Disposiciones",        icon: Tag,             color: "text-cyan-500",    permission: { module: "dispositions",    action: "read" } },
   { href: "/kb",           label: "Base de conocimiento", icon: BookOpen,        color: "text-emerald-500", permission: { module: "knowledge_base",  action: "read" } },
