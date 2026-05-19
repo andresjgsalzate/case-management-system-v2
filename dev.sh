@@ -23,15 +23,18 @@ head_() { echo -e "\n${CYAN}═════════════════�
 
 # ── Handler de errores inesperados ────────────────────────────
 on_error() {
+  local exit_code=$?
   local line=$1
+  local cmd=$2
   echo ""
   echo -e "${RED}══════════════════════════════════════${NC}"
-  echo -e "${RED}  ERROR en línea $line${NC}"
+  echo -e "${RED}  ERROR en línea $line (exit $exit_code)${NC}"
+  echo -e "${RED}  Comando: ${cmd}${NC}"
   echo -e "${RED}  Revisa el mensaje de arriba.${NC}"
   echo -e "${RED}══════════════════════════════════════${NC}"
   echo ""
 }
-trap 'on_error $LINENO' ERR
+trap 'on_error $LINENO "$BASH_COMMAND"' ERR
 
 # ── Limpieza al salir (Ctrl+C o fin normal) ───────────────────
 BACKEND_PID=""
@@ -68,6 +71,42 @@ log "Python: $($PYTHON --version)"
 log "Node:   $(node --version)"
 
 # ─────────────────────────────────────────────────────────────
+# 1.1  Detección de sistema operativo
+# ─────────────────────────────────────────────────────────────
+# Detectamos el entorno una sola vez al inicio. Las secciones posteriores
+# (kill-port, zombie killer, venv path) ya tienen branching ad-hoc; esta
+# variable centraliza la decisión y permite mostrar al usuario qué entorno
+# se detectó (útil cuando un bug solo ocurre en uno de los tres).
+#
+# Valores:
+#   linux        — Linux nativo (Ubuntu, Debian, Arch, …)
+#   macos        — macOS (Darwin)
+#   win_gitbash  — Windows con Git Bash / MSYS2 (powershell.exe disponible)
+#   wsl          — Windows Subsystem for Linux (uname -r contiene microsoft)
+OS_KIND="unknown"
+case "$(uname -s)" in
+  Linux*)
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+      OS_KIND="wsl"
+    else
+      OS_KIND="linux"
+    fi
+    ;;
+  Darwin*)  OS_KIND="macos" ;;
+  MINGW*|MSYS*|CYGWIN*)
+    OS_KIND="win_gitbash"
+    ;;
+esac
+
+# Fallback defensivo: si uname no clasificó pero powershell.exe está en PATH,
+# asumimos Git Bash. Cubre el caso de uname devolviendo string raro.
+if [[ "$OS_KIND" == "unknown" ]] && command -v powershell.exe >/dev/null 2>&1; then
+  OS_KIND="win_gitbash"
+fi
+
+log "Entorno detectado: ${BLUE}${OS_KIND}${NC}"
+
+# ─────────────────────────────────────────────────────────────
 # 1.5  Matar procesos backend/frontend de runs previos
 # ─────────────────────────────────────────────────────────────
 # Cierres impuros (Ctrl+C interrumpido, TaskStop, reload roto) dejan workers
@@ -79,25 +118,34 @@ head_ "1.5/6  Limpieza de procesos previos"
 
 _kill_port() {
   local port="$1"
-  if command -v powershell.exe >/dev/null 2>&1; then
-    # Windows: usa Get-NetTCPConnection — captura LISTEN incluso con padre muerto
-    local pids
-    pids="$(powershell.exe -NoProfile -Command \
-      "Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue \
-       | Select-Object -ExpandProperty OwningProcess -Unique" 2>/dev/null | tr -d '\r')"
-    for pid in $pids; do
-      [[ -z "$pid" || "$pid" == "0" ]] && continue
-      powershell.exe -NoProfile -Command "Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue" 2>/dev/null || true
-      log "  killed PID $pid on :$port"
-    done
-  elif command -v lsof >/dev/null 2>&1; then
-    # Linux/macOS
-    local pids
-    pids="$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)"
-    for pid in $pids; do
-      kill -9 "$pid" 2>/dev/null && log "  killed PID $pid on :$port" || true
-    done
-  fi
+  local pids=""
+  case "$OS_KIND" in
+    win_gitbash)
+      # Windows: usa Get-NetTCPConnection — captura LISTEN incluso con padre muerto.
+      # El `|| true` evita que pipefail + set -e maten el script cuando no hay
+      # procesos escuchando (PowerShell puede devolver $LASTEXITCODE=1 en pipelines
+      # vacíos a pesar de -ErrorAction SilentlyContinue).
+      pids="$(powershell.exe -NoProfile -Command \
+        "Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue \
+         | Select-Object -ExpandProperty OwningProcess -Unique" 2>/dev/null | tr -d '\r' || true)"
+      for pid in $pids; do
+        [[ -z "$pid" || "$pid" == "0" ]] && continue
+        powershell.exe -NoProfile -Command "Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue" 2>/dev/null || true
+        log "  killed PID $pid on :$port"
+      done
+      ;;
+    linux|macos|wsl)
+      if command -v lsof >/dev/null 2>&1; then
+        pids="$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+        for pid in $pids; do
+          kill -9 "$pid" 2>/dev/null && log "  killed PID $pid on :$port" || true
+        done
+      elif command -v fuser >/dev/null 2>&1; then
+        # Fallback para distros sin lsof (algunos contenedores minimalistas)
+        fuser -k -n tcp "$port" 2>/dev/null && log "  killed listeners on :$port" || true
+      fi
+      ;;
+  esac
 }
 
 for p in 8000 3000 3001 3002; do _kill_port "$p"; done
@@ -105,7 +153,7 @@ for p in 8000 3000 3001 3002; do _kill_port "$p"; done
 # Matar zombies de multiprocessing.spawn con parent_pid muerto (Windows).
 # uvicorn --reload spawns un worker child; si reloader muere, el worker
 # queda con el socket FD heredado y sigue respondiendo.
-if command -v powershell.exe >/dev/null 2>&1; then
+if [[ "$OS_KIND" == "win_gitbash" ]]; then
   powershell.exe -NoProfile -Command "
     Get-CimInstance Win32_Process -Filter \"Name='python3.13.exe' OR Name='python.exe'\" |
       Where-Object { \$_.CommandLine -match 'multiprocessing.spawn.*parent_pid=(\d+)' } |
