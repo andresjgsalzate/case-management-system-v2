@@ -19,14 +19,24 @@ class CaseNumberSequenceModel(Base):
 
 class CaseNumberRangeModel(Base):
     """
-    Defines a numbered range for a prefix (e.g. REQ 000001–200000).
-    Multiple consecutive ranges can exist per prefix+tenant.
-    The active range is the first non-exhausted one (ordered by range_start).
+    Defines a numbered range for a (case_type, prefix) pair.
+
+    ``case_type`` selects which kind of case consumes the range (request /
+    incident / event). ``prefix`` is admin-configurable per tenant so each
+    tenant can localize labels (e.g. SOL for solicitud, INC for incidencia).
+    Multiple consecutive ranges can exist per (tenant, case_type). The
+    active range is the first non-exhausted one ordered by range_start.
+
+    Invariant: a single prefix MUST belong to one case_type per tenant —
+    case_number uniqueness lives on cases.case_number, so two case_types
+    sharing the same prefix would generate colliding numbers. Validation
+    enforced at create time in the router.
     """
     __tablename__ = "case_number_ranges"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    case_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     prefix: Mapped[str] = mapped_column(String(4), nullable=False)
     range_start: Mapped[int] = mapped_column(Integer, nullable=False)
     range_end: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -35,6 +45,13 @@ class CaseNumberRangeModel(Base):
     current_number: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "case_type IN ('request', 'incident', 'event')",
+            name="ck_case_number_range_case_type",
+        ),
     )
 
 

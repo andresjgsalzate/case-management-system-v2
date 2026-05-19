@@ -5,6 +5,7 @@ Endpoint prefix: /api/v1/case-number-ranges
 import re
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -28,6 +29,7 @@ Manage = Depends(PermissionChecker("cases", "manage"))
 
 class RangeResponseDTO(BaseModel):
     id: str
+    case_type: Literal["request", "incident", "event"]
     prefix: str
     range_start: int
     range_end: int
@@ -42,6 +44,7 @@ class RangeResponseDTO(BaseModel):
 
 
 class CreateRangeDTO(BaseModel):
+    case_type: Literal["request", "incident", "event"]
     prefix: str = Field(min_length=2, max_length=4)
     range_end: int = Field(ge=1)
 
@@ -69,6 +72,7 @@ def _to_dto(rng: CaseNumberRangeModel, status: str) -> RangeResponseDTO:
     used = rng.current_number - (rng.range_start - 1)
     return RangeResponseDTO(
         id=rng.id,
+        case_type=rng.case_type,  # type: ignore[arg-type]  # constrained by DB CHECK
         prefix=rng.prefix,
         range_start=rng.range_start,
         range_end=rng.range_end,
@@ -90,24 +94,27 @@ async def list_ranges(
     db: DBSession,
     current_user: CurrentUser = Manage,
 ):
-    """Returns all ranges for the tenant, ordered by prefix then range_start."""
+    """Returns all ranges for the tenant, ordered by case_type then range_start."""
     result = await db.execute(
         select(CaseNumberRangeModel)
         .where(CaseNumberRangeModel.tenant_id == current_user.tenant_id)
-        .order_by(CaseNumberRangeModel.prefix.asc(), CaseNumberRangeModel.range_start.asc())
+        .order_by(
+            CaseNumberRangeModel.case_type.asc(),
+            CaseNumberRangeModel.range_start.asc(),
+        )
     )
     ranges = result.scalars().all()
 
-    # Determine which range is "active" per prefix (first non-exhausted)
+    # Determine which range is "active" per case_type (first non-exhausted)
     seen_active: set[str] = set()
     dtos: list[RangeResponseDTO] = []
     for rng in ranges:
         is_first_available = (
-            rng.prefix not in seen_active
+            rng.case_type not in seen_active
             and rng.current_number < rng.range_end
         )
         if is_first_available:
-            seen_active.add(rng.prefix)
+            seen_active.add(rng.case_type)
         status = _compute_status(rng, is_first_available)
         dtos.append(_to_dto(rng, status))
 
@@ -121,18 +128,43 @@ async def create_range(
     current_user: CurrentUser = Manage,
 ):
     """
-    Creates a new numbered range for a prefix.
-    - For a new prefix: range_start = 1
-    - For an existing prefix: range_start = max(range_end) + 1 of existing ranges
+    Creates a new numbered range for a (case_type, prefix) pair.
+
+    Rules:
+    - For a new (tenant, case_type): range_start = 1
+    - For an existing (tenant, case_type): range_start = max(range_end) + 1
     - range_end must be >= range_start
+    - The same prefix cannot be reused across different case_types in the
+      same tenant — case_number uniqueness on cases.case_number would
+      collide otherwise.
     """
     prefix = dto.prefix  # already uppercased by validator
 
-    # Find max range_end for this prefix+tenant to enforce consecutiveness
+    # Cross-type prefix collision check (must come before consecutiveness
+    # computation so the user gets a friendly error first).
+    collision_result = await db.execute(
+        select(CaseNumberRangeModel.case_type).where(
+            CaseNumberRangeModel.tenant_id == current_user.tenant_id,
+            CaseNumberRangeModel.prefix == prefix,
+            CaseNumberRangeModel.case_type != dto.case_type,
+        ).limit(1)
+    )
+    colliding_type = collision_result.scalar_one_or_none()
+    if colliding_type is not None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"El prefijo '{prefix}' ya está en uso por el tipo "
+                f"'{colliding_type}'. Cada prefijo debe ser único entre "
+                "tipos de caso para evitar colisiones de numeración."
+            ),
+        )
+
+    # Find max range_end for (tenant, case_type) to enforce consecutiveness.
     max_end_result = await db.execute(
         select(func.max(CaseNumberRangeModel.range_end)).where(
             CaseNumberRangeModel.tenant_id == current_user.tenant_id,
-            CaseNumberRangeModel.prefix == prefix,
+            CaseNumberRangeModel.case_type == dto.case_type,
         )
     )
     max_end: int | None = max_end_result.scalar_one_or_none()
@@ -144,7 +176,7 @@ async def create_range(
             status_code=422,
             detail=(
                 f"El rango debe terminar en al menos {range_start:,} "
-                f"(el prefijo {prefix} ya llega hasta {max_end:,})."
+                f"(el tipo '{dto.case_type}' ya llega hasta {max_end:,})."
                 if max_end is not None
                 else f"El rango debe terminar en al menos {range_start:,}."
             ),
@@ -153,6 +185,7 @@ async def create_range(
     rng = CaseNumberRangeModel(
         id=str(uuid.uuid4()),
         tenant_id=current_user.tenant_id,
+        case_type=dto.case_type,
         prefix=prefix,
         range_start=range_start,
         range_end=dto.range_end,
@@ -162,11 +195,12 @@ async def create_range(
     db.add(rng)
     await db.flush()
 
-    # Determine status: active if it's the only/first non-exhausted for this prefix
+    # Determine status: active if no other non-exhausted range exists for
+    # this (tenant, case_type) pair.
     prev_active_result = await db.execute(
         select(CaseNumberRangeModel).where(
             CaseNumberRangeModel.tenant_id == current_user.tenant_id,
-            CaseNumberRangeModel.prefix == prefix,
+            CaseNumberRangeModel.case_type == dto.case_type,
             CaseNumberRangeModel.current_number < CaseNumberRangeModel.range_end,
             CaseNumberRangeModel.id != rng.id,
         ).limit(1)

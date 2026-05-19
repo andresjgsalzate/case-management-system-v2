@@ -10,8 +10,11 @@ import type { ApiResponse } from "@/lib/types";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+type CaseType = "request" | "incident" | "event";
+
 interface NumberRange {
   id: string;
+  case_type: CaseType;
   prefix: string;
   range_start: number;
   range_end: number;
@@ -23,6 +26,16 @@ interface NumberRange {
   preview_first: string;
   preview_last: string;
   created_at: string;
+}
+
+const CASE_TYPE_OPTIONS: { value: CaseType; label: string; shortLabel: string; suggestedPrefix: string }[] = [
+  { value: "request", label: "Solicitud", shortLabel: "Solicitud", suggestedPrefix: "REQ" },
+  { value: "incident", label: "Incidencia", shortLabel: "Incidencia", suggestedPrefix: "INC" },
+  { value: "event", label: "Evento", shortLabel: "Evento", suggestedPrefix: "EVT" },
+];
+
+function caseTypeLabel(t: CaseType): string {
+  return CASE_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? t;
 }
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -105,28 +118,36 @@ function CreateRangeForm({
   error,
 }: {
   ranges: NumberRange[];
-  onSave: (body: { prefix: string; range_end: number }) => void;
+  onSave: (body: { case_type: CaseType; prefix: string; range_end: number }) => void;
   onCancel: () => void;
   isPending: boolean;
   error: string;
 }) {
+  const [caseType, setCaseType] = useState<CaseType>("request");
   const [prefix, setPrefix] = useState("");
   const [rangeEnd, setRangeEnd] = useState<number | "">(200000);
 
-  // If prefix already exists, auto-compute range_start
-  const existingForPrefix = ranges
-    .filter((r) => r.prefix === prefix.toUpperCase())
+  const suggestedPrefix =
+    CASE_TYPE_OPTIONS.find((o) => o.value === caseType)?.suggestedPrefix ?? "REQ";
+
+  // Existing ranges for this (tenant, case_type) — drives consecutive start computation
+  const existingForType = ranges
+    .filter((r) => r.case_type === caseType)
     .sort((a, b) => b.range_end - a.range_end);
 
-  const maxEnd = existingForPrefix[0]?.range_end ?? 0;
+  const maxEnd = existingForType[0]?.range_end ?? 0;
   const rangeStart = maxEnd + 1;
-  const isNewPrefix = existingForPrefix.length === 0;
+  const isNewType = existingForType.length === 0;
+
+  // Lock prefix when case_type already has ranges — must stay consistent
+  const lockedPrefix = !isNewType ? existingForType[0]?.prefix : null;
+  const effectivePrefix = lockedPrefix ?? prefix;
 
   const endNum = Number(rangeEnd) || 0;
   const valid =
-    prefix.length >= 2 &&
-    prefix.length <= 4 &&
-    /^[A-Za-z]+$/.test(prefix) &&
+    effectivePrefix.length >= 2 &&
+    effectivePrefix.length <= 4 &&
+    /^[A-Za-z]+$/.test(effectivePrefix) &&
     endNum >= rangeStart;
 
   return (
@@ -137,30 +158,56 @@ function CreateRangeForm({
       <div className="flex items-center gap-3 p-3 rounded-md bg-muted/50 font-mono text-sm">
         <Hash className="h-4 w-4 text-muted-foreground shrink-0" />
         <span className="text-muted-foreground">
-          {previewNumber(prefix || "REQ", rangeStart)}
+          {previewNumber(effectivePrefix || suggestedPrefix, rangeStart)}
         </span>
         <span className="text-muted-foreground mx-1">→</span>
         <span className="font-bold text-foreground">
-          {previewNumber(prefix || "REQ", endNum || rangeStart)}
+          {previewNumber(effectivePrefix || suggestedPrefix, endNum || rangeStart)}
         </span>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        {/* Prefix */}
+        {/* Case type */}
+        <div className="flex flex-col gap-1.5 col-span-2">
+          <label className="text-xs font-medium text-muted-foreground">
+            Tipo de caso
+          </label>
+          <select
+            className="px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+            value={caseType}
+            onChange={(e) => setCaseType(e.target.value as CaseType)}
+          >
+            {CASE_TYPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            Define qué tipo de caso consumirá este rango. Cada tipo (Solicitud / Incidencia / Evento) tiene su propia secuencia.
+          </p>
+        </div>
+
+        {/* Prefix — free per-tenant (locked once a case_type has ranges) */}
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-muted-foreground">
             Prefijo <span className="font-normal">(2–4 letras)</span>
           </label>
           <input
-            className="px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary uppercase font-mono"
-            value={prefix}
+            className="px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary uppercase font-mono disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
+            value={effectivePrefix}
             maxLength={4}
-            placeholder="REQ"
+            placeholder={suggestedPrefix}
+            disabled={lockedPrefix !== null}
             onChange={(e) =>
               setPrefix(e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))
             }
           />
-          <p className="text-xs text-muted-foreground">Ej: REQ, INC, SOL, TICK</p>
+          <p className="text-xs text-muted-foreground">
+            {lockedPrefix
+              ? `Bloqueado: continuación del prefijo ${lockedPrefix}`
+              : `Sugerido: ${suggestedPrefix} — puedes usar otro (ej. SOL, EVE, TICK)`}
+          </p>
         </div>
 
         {/* Range start — readonly, auto-computed */}
@@ -174,9 +221,9 @@ function CreateRangeForm({
             value={fmt(rangeStart)}
           />
           <p className="text-xs text-muted-foreground">
-            {isNewPrefix
-              ? "Nuevo prefijo — comienza en 000001"
-              : `Continuación desde ${previewNumber(prefix, maxEnd)}`}
+            {isNewType
+              ? `Nuevo tipo — comienza en 000001`
+              : `Continuación desde ${previewNumber(effectivePrefix, maxEnd)}`}
           </p>
         </div>
 
@@ -195,7 +242,7 @@ function CreateRangeForm({
           {endNum > 0 && endNum >= rangeStart && (
             <p className="text-xs text-muted-foreground">
               Capacidad: <span className="font-semibold text-foreground">{(endNum - rangeStart + 1).toLocaleString()}</span> números
-              ({previewNumber(prefix || "REQ", rangeStart)} — {previewNumber(prefix || "REQ", endNum)})
+              ({previewNumber(effectivePrefix || suggestedPrefix, rangeStart)} — {previewNumber(effectivePrefix || suggestedPrefix, endNum)})
             </p>
           )}
           {endNum > 0 && endNum < rangeStart && (
@@ -219,7 +266,13 @@ function CreateRangeForm({
         <button
           type="button"
           disabled={!valid || isPending}
-          onClick={() => onSave({ prefix: prefix.toUpperCase(), range_end: endNum })}
+          onClick={() =>
+            onSave({
+              case_type: caseType,
+              prefix: effectivePrefix.toUpperCase(),
+              range_end: endNum,
+            })
+          }
           className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
         >
           <Plus className="h-4 w-4" />
@@ -248,8 +301,13 @@ function RangeCard({
             <Hash className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono font-bold text-foreground">{rng.prefix}</span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-semibold text-foreground">
+                {caseTypeLabel(rng.case_type)}
+              </span>
+              <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded text-foreground">
+                {rng.prefix}
+              </span>
               <StatusBadge status={rng.status} />
             </div>
             <p className="text-xs text-muted-foreground font-mono mt-0.5">
@@ -307,7 +365,7 @@ export default function CaseNumbersSettingsPage() {
   const [formError, setFormError] = useState("");
 
   const createMutation = useMutation({
-    mutationFn: (body: { prefix: string; range_end: number }) =>
+    mutationFn: (body: { case_type: CaseType; prefix: string; range_end: number }) =>
       apiClient.post("/case-number-ranges", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["case-number-ranges"] });
@@ -331,12 +389,17 @@ export default function CaseNumbersSettingsPage() {
     },
   });
 
-  // Group ranges by prefix
-  const byPrefix = ranges.reduce<Record<string, NumberRange[]>>((acc, r) => {
-    acc[r.prefix] = acc[r.prefix] ?? [];
-    acc[r.prefix].push(r);
-    return acc;
-  }, {});
+  // Group ranges by case_type (the user-facing concept).
+  // Within each case_type, ranges share the same prefix and are listed
+  // in range_start order — the active one is first non-exhausted.
+  const byType = ranges.reduce<Record<CaseType, NumberRange[]>>(
+    (acc, r) => {
+      acc[r.case_type] = acc[r.case_type] ?? [];
+      acc[r.case_type].push(r);
+      return acc;
+    },
+    { request: [], incident: [], event: [] },
+  );
 
   if (isLoading) {
     return (
@@ -378,14 +441,14 @@ export default function CaseNumbersSettingsPage() {
         />
       )}
 
-      {/* Ranges grouped by prefix */}
-      {Object.keys(byPrefix).length === 0 && !showForm && (
+      {/* Ranges grouped by case_type */}
+      {ranges.length === 0 && !showForm && (
         <div className="rounded-lg border border-dashed border-border bg-card p-8 flex flex-col items-center gap-3 text-center">
           <Hash className="h-8 w-8 text-muted-foreground/50" />
           <div>
             <p className="text-sm font-medium text-foreground">Sin rangos configurados</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Crea un rango para que los agentes puedan crear casos.
+              Crea un rango por tipo (Solicitud, Incidencia, Evento) para que los agentes puedan crear casos.
             </p>
           </div>
           <button
@@ -399,44 +462,51 @@ export default function CaseNumbersSettingsPage() {
         </div>
       )}
 
-      {Object.entries(byPrefix).map(([prefix, prefixRanges]) => (
-        <div key={prefix} className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              Prefijo
-            </span>
-            <span className="font-mono font-bold text-foreground">{prefix}</span>
-            <span className="text-xs text-muted-foreground">
-              — {prefixRanges.length} rango{prefixRanges.length !== 1 ? "s" : ""}
-            </span>
+      {CASE_TYPE_OPTIONS.map((typeOpt) => {
+        const typeRanges = byType[typeOpt.value];
+        if (typeRanges.length === 0) return null;
+        const prefix = typeRanges[0].prefix;
+        return (
+          <div key={typeOpt.value} className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                {typeOpt.label}
+              </span>
+              <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">{prefix}</span>
+              <span className="text-xs text-muted-foreground">
+                — {typeRanges.length} rango{typeRanges.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+            <div className="flex flex-col gap-2">
+              {typeRanges.map((rng) => (
+                <RangeCard
+                  key={rng.id}
+                  rng={rng}
+                  onDelete={async (id) => {
+                    const ok = await confirm({
+                      title: "¿Eliminar rango?",
+                      description: `Se eliminará el rango ${rng.preview_first} → ${rng.preview_last}. Esta acción no se puede deshacer.`,
+                      confirmLabel: "Eliminar",
+                    });
+                    if (ok) deleteMutation.mutate(id);
+                  }}
+                />
+              ))}
+            </div>
           </div>
-          <div className="flex flex-col gap-2">
-            {prefixRanges.map((rng) => (
-              <RangeCard
-                key={rng.id}
-                rng={rng}
-                onDelete={async (id) => {
-                  const ok = await confirm({
-                    title: "¿Eliminar rango?",
-                    description: `Se eliminará el rango ${rng.preview_first} → ${rng.preview_last}. Esta acción no se puede deshacer.`,
-                    confirmLabel: "Eliminar",
-                  });
-                  if (ok) deleteMutation.mutate(id);
-                }}
-              />
-            ))}
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       {/* Info note */}
       <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-4">
         <p className="text-sm text-amber-800 dark:text-amber-200 font-medium">Cómo funciona</p>
         <ul className="text-xs text-amber-700 dark:text-amber-300 mt-1 space-y-1 list-disc list-inside">
-          <li>El rango <strong>Activo</strong> es el que se usa para los próximos casos.</li>
+          <li>Cada <strong>tipo de caso</strong> (Solicitud / Incidencia / Evento) tiene su propia secuencia independiente.</li>
+          <li>Configura un prefijo por tipo — sugerido REQ/INC/EVT pero puedes usar SOL, TICK, etc. (2–4 letras).</li>
+          <li>Un mismo prefijo no puede reutilizarse entre tipos distintos (evita colisiones de numeración).</li>
+          <li>El rango <strong>Activo</strong> es el que se usa para los próximos casos del tipo.</li>
           <li>Los rangos <strong>Pendientes</strong> se activarán cuando el activo se agote.</li>
-          <li>Puedes tener varios prefijos (REQ, INC, SOL…) con sus propios rangos independientes.</li>
-          <li>Al agregar un segundo rango del mismo prefijo, el número inicial se calcula automáticamente para garantizar consecutividad.</li>
+          <li>Al agregar un segundo rango del mismo tipo, el número inicial se calcula automáticamente para garantizar consecutividad.</li>
           <li>Solo se pueden eliminar rangos que aún no han generado ningún número.</li>
         </ul>
       </div>

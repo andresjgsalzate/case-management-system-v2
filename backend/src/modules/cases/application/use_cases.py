@@ -13,7 +13,6 @@ from backend.src.modules.case_statuses.application.use_cases import (
     validate_transition,
     CaseStatusUseCases,
 )
-from backend.src.modules.cases.application.number_service import next_case_number
 from backend.src.modules.cases.application.dtos import (
     CreateCaseDTO,
     UpdateCaseDTO,
@@ -34,12 +33,9 @@ class CaseUseCases:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    # Mapping from case_type → case number prefix
-    _PREFIX_BY_TYPE: dict[str, str] = {
-        "request": "REQ",
-        "incident": "INC",
-        "event": "EVT",
-    }
+    # Valid case types. The prefix is no longer hardcoded here — admins
+    # configure it per tenant in case_number_ranges.
+    _VALID_CASE_TYPES: set[str] = {"request", "incident", "event"}
 
     # Default initial status slug per case_type
     _DEFAULT_STATUS_SLUG: dict[str, str] = {
@@ -64,14 +60,14 @@ class CaseUseCases:
         # Validate case_type (Pydantic Literal already does this, but guard for
         # callers that bypass the DTO, e.g. direct use_case calls in tests)
         case_type = dto.case_type
-        if case_type not in self._PREFIX_BY_TYPE:
+        if case_type not in self._VALID_CASE_TYPES:
             raise ValidationError(
-                f"Invalid case_type '{case_type}'. Must be one of: {list(self._PREFIX_BY_TYPE)}"
+                f"Invalid case_type '{case_type}'. Must be one of: {sorted(self._VALID_CASE_TYPES)}"
             )
 
-        # Generate case number using the per-type prefix
-        prefix = self._PREFIX_BY_TYPE[case_type]
-        case_number = await self._next_case_number(tenant_id, prefix)
+        # Generate case number — prefix comes from the active range row,
+        # configurable per tenant in case_number_ranges.
+        case_number = await self._next_case_number(tenant_id, case_type)
 
         # Resolve initial status: explicit slug overrides default per type
         status_slug = dto.initial_status_slug or self._DEFAULT_STATUS_SLUG[case_type]
@@ -459,8 +455,9 @@ class CaseUseCases:
         if case.promoted_at is not None:
             raise ValidationError("Case already promoted. Cannot promote again.")
 
-        # 4. Generate new INC number
-        new_number = await self._next_case_number(case.tenant_id, "INC")
+        # 4. Generate new incident number (prefix comes from the tenant's
+        #    incident range — typically INC, but admin may have localized it)
+        new_number = await self._next_case_number(case.tenant_id, "incident")
 
         # 5. Preserve promotion history
         case.original_case_number = case.case_number
@@ -616,14 +613,16 @@ class CaseUseCases:
         )
         return result.scalar_one_or_none()
 
-    async def _next_case_number(self, tenant_id, prefix: str) -> str:
-        """Atomically increment the active range for (tenant_id, prefix) and return
+    async def _next_case_number(self, tenant_id, case_type: str) -> str:
+        """Atomically increment the active range for (tenant_id, case_type) and return
         a formatted case number like 'INC-2026-000047'.
 
-        Uses SELECT FOR UPDATE to serialize concurrent calls at the DB row level.
-        The first transaction that acquires the lock reads the latest current_number,
-        increments it, and flushes — subsequent concurrent transactions wait and then
-        see the already-incremented value, guaranteeing uniqueness.
+        The prefix is read from the active range row (admin-configurable per tenant),
+        no longer hardcoded. Uses SELECT FOR UPDATE to serialize concurrent calls at
+        the DB row level. The first transaction that acquires the lock reads the
+        latest current_number, increments it, and flushes — subsequent concurrent
+        transactions wait and then see the already-incremented value, guaranteeing
+        uniqueness.
         """
         from backend.src.modules.cases.infrastructure.models import CaseNumberRangeModel
 
@@ -637,7 +636,7 @@ class CaseUseCases:
             select(CaseNumberRangeModel)
             .where(
                 tenant_clause,
-                CaseNumberRangeModel.prefix == prefix,
+                CaseNumberRangeModel.case_type == case_type,
                 CaseNumberRangeModel.current_number < CaseNumberRangeModel.range_end,
             )
             .order_by(CaseNumberRangeModel.range_start)
@@ -647,14 +646,14 @@ class CaseUseCases:
         range_row = result.scalar_one_or_none()
         if range_row is None:
             raise ValueError(
-                f"No active number range for {prefix} in tenant {tenant_id}. "
-                "Create a new range or extend the existing one."
+                f"No active number range for case_type '{case_type}' in tenant {tenant_id}. "
+                "Create a range in Configuración → Numeración de Casos."
             )
 
         range_row.current_number += 1
         await self.db.flush()
         year = datetime.now(timezone.utc).year
-        return f"{prefix}-{year}-{range_row.current_number:06d}"
+        return f"{range_row.prefix}-{year}-{range_row.current_number:06d}"
 
     def _to_dto(self, model: CaseModel) -> CaseResponseDTO:
         # service_item y su category vienen via selectinload — accedemos sin lazy
