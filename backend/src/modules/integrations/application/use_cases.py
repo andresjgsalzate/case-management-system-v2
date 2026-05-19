@@ -285,18 +285,31 @@ class IntegrationsUseCases:
                     # operator can recalc manually from the case detail panel.
                     pass
 
-            # 7. Delegate to n8n if requested
+            # 7. Delegate to n8n if requested.
+            #
+            # `taxonomy.delegated_workflow_id` is the UUID of a row in the
+            # n8n_workflows catalog — we look it up to obtain the actual
+            # webhook URL, then hand the URL to the bridge. trigger_workflow
+            # only accepts `workflow_url` (not `workflow_id`), so resolving
+            # here keeps the bridge interface narrow.
             if (
                 taxonomy
                 and taxonomy.triage_mode == "delegate_to_n8n"
                 and self.n8n_bridge_uc
                 and getattr(taxonomy, "delegated_workflow_id", None)
             ):
-                await self.n8n_bridge_uc.trigger_workflow(
-                    case_id=case.id,
-                    workflow_id=taxonomy.delegated_workflow_id,
-                    triggered_by="auto_triage",
+                from backend.src.modules.n8n_bridge.infrastructure.models import (
+                    N8nWorkflowModel,
                 )
+                catalog_wf = await self.db.get(
+                    N8nWorkflowModel, taxonomy.delegated_workflow_id,
+                )
+                if catalog_wf and catalog_wf.is_active:
+                    await self.n8n_bridge_uc.trigger_workflow(
+                        case_id=case.id,
+                        workflow_url=catalog_wf.workflow_url,
+                        triggered_by="auto_triage",
+                    )
 
             # 8. Run automation rules (existing automation module)
             if self.automation_uc:

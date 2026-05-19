@@ -2,7 +2,7 @@ import Link from "next/link";
 import {
   Users, Shield, Clock, Zap, Bell,
   AlertTriangle, Flag, Layers, Globe, Hash, LayoutGrid, Building2, Mail,
-  BookOpen, Package, Fingerprint, FileText,
+  BookOpen, Package, Fingerprint, FileText, ListTree,
 } from "lucide-react";
 
 const SETTINGS_SECTIONS = [
@@ -45,8 +45,9 @@ const SETTINGS_SECTIONS = [
   {
     group: "Seguridad / DFIR",
     items: [
-      { href: "/settings/forensic-artifacts",       icon: Fingerprint, color: "text-pink-500", bg: "bg-pink-50 dark:bg-pink-950/40", title: "Artifacts de Velociraptor", description: "Catálogo de artifacts disponibles para hunts forenses" },
-      { href: "/settings/alert-report-templates",   icon: FileText,    color: "text-lime-500", bg: "bg-lime-50 dark:bg-lime-950/40", title: "Plantillas de Alert Report", description: "Templates de informe de alerta con bloques configurables" },
+      { href: "/settings/taxonomies",               icon: ListTree,    color: "text-indigo-500", bg: "bg-indigo-50 dark:bg-indigo-950/40", title: "Taxonomías de seguridad", description: "Árbol de clasificación TUIC + modo de triage (auto / delegate_to_n8n) + mapeos a catálogo de servicios" },
+      { href: "/settings/forensic-artifacts",       icon: Fingerprint, color: "text-pink-500",   bg: "bg-pink-50 dark:bg-pink-950/40",     title: "Artifacts de Velociraptor", description: "Catálogo de artifacts disponibles para hunts forenses" },
+      { href: "/settings/alert-report-templates",   icon: FileText,    color: "text-lime-500",   bg: "bg-lime-50 dark:bg-lime-950/40",     title: "Plantillas de Alert Report", description: "Templates de informe de alerta con bloques configurables" },
     ],
   },
 ];

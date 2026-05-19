@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { useN8nWorkflows } from "@/hooks/useN8nWorkflows";
 import {
   useCreateTaxonomy,
   useUpdateTaxonomy,
@@ -431,6 +432,9 @@ function Step2Classification({ form, setForm }: StepProps) {
 }
 
 function Step3Operation({ form, setForm }: StepProps) {
+  // Active workflows for the delegated_workflow_id dropdown. React Query
+  // dedupes if parent components also subscribe to this key.
+  const { data: catalogWorkflows } = useN8nWorkflows({ only_active: true });
   return (
     <>
       <Field label="Tipo de caso default" required>
@@ -477,21 +481,35 @@ function Step3Operation({ form, setForm }: StepProps) {
       </Field>
       {form.triage_mode === "delegate_to_n8n" ? (
         <Field
-          label="Workflow ID delegado"
+          label="Workflow delegado"
           required
-          hint="Requerido cuando triage_mode = delegate_to_n8n"
+          hint="Selecciona del catálogo registrado en /settings/integrations → Workflows n8n"
         >
-          <input
-            type="text"
+          <select
             value={form.delegated_workflow_id}
             onChange={(e) =>
               setForm((f) => ({
                 ...f, delegated_workflow_id: e.target.value,
               }))
             }
-            className="w-full rounded border bg-background p-1 text-sm font-mono"
-            placeholder="wf_phishing_triage_v2"
-          />
+            className="w-full rounded border bg-background p-1 text-sm"
+          >
+            <option value="">— Selecciona un workflow —</option>
+            {catalogWorkflows?.map((wf) => (
+              <option key={wf.id} value={wf.id}>
+                {wf.tenant_id === null ? "[global] " : ""}
+                {wf.name}
+                {wf.requires_approval ? " · requiere aprobación" : ""}
+              </option>
+            ))}
+          </select>
+          {catalogWorkflows && catalogWorkflows.length === 0 ? (
+            <p className="mt-1 text-xs text-amber-600">
+              Sin workflows en el catálogo. Regístralos primero en{" "}
+              <span className="font-mono">/settings/integrations</span> &gt;
+              Workflows n8n.
+            </p>
+          ) : null}
         </Field>
       ) : null}
       <Field label="Timeout triage (segundos)">
