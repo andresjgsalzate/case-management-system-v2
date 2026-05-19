@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -194,4 +195,67 @@ class PlaybookRunCallbackModel(Base):
 
     __table_args__ = (
         Index("ix_callback_run_received", "playbook_run_id", "received_at"),
+    )
+
+
+class N8nWorkflowModel(Base):
+    """Catalog of n8n workflows operators can trigger.
+
+    Decouples the *static* workflow definition (name, URL, who can run it)
+    from the *runtime* execution log (PlaybookRunModel). Without this
+    catalog, operators must paste workflow_url manually each time.
+
+    tenant_id NULL = global workflow (visible to every tenant). Otherwise
+    scoped to that tenant.
+    """
+    __tablename__ = "n8n_workflows"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4()),
+    )
+    tenant_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=True, index=True,
+    )
+
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    workflow_url: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true",
+    )
+    requires_approval: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false",
+    )
+    # NULL = anyone with permission n8n_workflows:trigger can run it.
+    # Otherwise list of role IDs allowed to trigger.
+    allowed_role_ids: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        # Per-tenant (or global when tenant_id IS NULL) unique workflow names.
+        # Postgres treats NULL as distinct, so two global workflows can share
+        # a name unless we add a partial unique index — punted for v1.
+        UniqueConstraint("tenant_id", "name", name="uq_n8n_workflow_tenant_name"),
+        Index("ix_n8n_workflow_tenant_active", "tenant_id", "is_active"),
     )
