@@ -18,6 +18,10 @@ class UpdateTenantDTO(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=200)
     description: str | None = None
     is_active: bool | None = None
+    # Velociraptor multi-tenancy mapping. None clears the mapping; absent
+    # field (default sentinel) leaves it unchanged. Using "" as sentinel
+    # would collide with valid clearing semantics, so callers send `null`.
+    velo_org_id: str | None = Field(default=None, max_length=80)
 
 
 class TenantResponseDTO(BaseModel):
@@ -26,6 +30,7 @@ class TenantResponseDTO(BaseModel):
     slug: str
     description: str | None
     is_active: bool
+    velo_org_id: str | None
     created_at: str
 
 
@@ -89,6 +94,10 @@ class TenantUseCases:
             tenant.description = dto.description
         if dto.is_active is not None:
             tenant.is_active = dto.is_active
+        if dto.velo_org_id is not None:
+            # Empty string clears the mapping (column is unique + nullable;
+            # storing "" would block any future tenant from using empty).
+            tenant.velo_org_id = dto.velo_org_id or None
 
         await self.db.commit()
         await self.db.refresh(tenant)
@@ -108,5 +117,6 @@ class TenantUseCases:
             slug=model.slug,
             description=model.description,
             is_active=model.is_active,
+            velo_org_id=model.velo_org_id,
             created_at=model.created_at.isoformat(),
         )

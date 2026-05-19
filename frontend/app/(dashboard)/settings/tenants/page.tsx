@@ -15,6 +15,7 @@ interface Tenant {
   slug: string;
   description: string | null;
   is_active: boolean;
+  velo_org_id: string | null;
   created_at: string;
 }
 
@@ -48,7 +49,7 @@ export default function TenantsSettingsPage() {
   const [error, setError] = useState("");
 
   const [editId, setEditId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", description: "" });
+  const [editForm, setEditForm] = useState({ name: "", description: "", velo_org_id: "" });
 
   const createMutation = useMutation({
     mutationFn: (body: { name: string; slug: string; description?: string }) =>
@@ -66,8 +67,10 @@ export default function TenantsSettingsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: { name?: string; description?: string } }) =>
-      apiClient.patch(`/tenants/${id}`, body),
+    mutationFn: ({ id, body }: {
+      id: string;
+      body: { name?: string; description?: string; velo_org_id?: string };
+    }) => apiClient.patch(`/tenants/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tenants"] });
       setEditId(null);
@@ -223,6 +226,12 @@ export default function TenantsSettingsPage() {
                         onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
                         placeholder="Descripción"
                       />
+                      <input
+                        className={`${inputCls} font-mono`}
+                        value={editForm.velo_org_id}
+                        onChange={(e) => setEditForm((f) => ({ ...f, velo_org_id: e.target.value }))}
+                        placeholder="Velociraptor Org ID (vacío = sin mapeo)"
+                      />
                     </div>
                   </td>
                   <td className="px-4 py-2" />
@@ -238,6 +247,8 @@ export default function TenantsSettingsPage() {
                             body: {
                               name: editForm.name.trim(),
                               description: editForm.description.trim() || undefined,
+                              // Always send velo_org_id so empty string clears the mapping.
+                              velo_org_id: editForm.velo_org_id.trim(),
                             },
                           })
                         }
@@ -264,6 +275,13 @@ export default function TenantsSettingsPage() {
                         <p className="font-medium text-foreground">{t.name}</p>
                         {t.description && (
                           <p className="text-xs text-muted-foreground">{t.description}</p>
+                        )}
+                        {t.velo_org_id && (
+                          <p className="text-[10px] text-muted-foreground mt-0.5">
+                            <span className="font-mono bg-muted px-1.5 py-0.5 rounded">
+                              velo:{t.velo_org_id}
+                            </span>
+                          </p>
                         )}
                       </div>
                     </div>
@@ -295,7 +313,11 @@ export default function TenantsSettingsPage() {
                         type="button"
                         onClick={() => {
                           setEditId(t.id);
-                          setEditForm({ name: t.name, description: t.description ?? "" });
+                          setEditForm({
+                            name: t.name,
+                            description: t.description ?? "",
+                            velo_org_id: t.velo_org_id ?? "",
+                          });
                         }}
                         className="text-muted-foreground hover:text-foreground transition-colors"
                       >
