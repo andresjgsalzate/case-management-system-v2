@@ -17,7 +17,7 @@ interface Props {
 
 const SOURCE_TYPES: SourceType[] = [
   "wazuh", "splunk", "sentinel", "crowdstrike",
-  "qradar", "wazuh_velociraptor", "custom",
+  "qradar", "wazuh_velociraptor", "n8n", "custom",
 ];
 
 const AUTH_METHODS: AuthMethod[] = ["hmac", "api_key", "bearer", "none"];

@@ -717,6 +717,7 @@ export type SourceType =
   | "crowdstrike"
   | "qradar"
   | "wazuh_velociraptor"
+  | "n8n"
   | "custom";
 
 export type AuthMethod = "hmac" | "api_key" | "bearer" | "none";
