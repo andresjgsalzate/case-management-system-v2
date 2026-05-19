@@ -602,6 +602,22 @@ class SecurityTaxonomyUseCases:
         await self.db.delete(mapping)
         await self.db.flush()
 
+    async def list_catalog_mappings(
+        self, taxonomy_id: str
+    ) -> list[TaxonomyCatalogMappingModel]:
+        """Return every catalog mapping for a taxonomy ordered by
+        (is_default desc, priority_order asc). Read-only — caller still
+        needs the taxonomy:read permission via the router dep."""
+        result = await self.db.execute(
+            select(TaxonomyCatalogMappingModel)
+            .where(TaxonomyCatalogMappingModel.taxonomy_id == taxonomy_id)
+            .order_by(
+                TaxonomyCatalogMappingModel.is_default.desc(),
+                TaxonomyCatalogMappingModel.priority_order.asc(),
+            )
+        )
+        return list(result.scalars().all())
+
     async def _unset_default_mappings(
         self, taxonomy_id: str, *, exclude_mapping_id: str | None
     ) -> None:

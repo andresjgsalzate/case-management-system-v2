@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import { TLPBadge } from "@/components/molecules/TLPBadge";
 import { TaxonomyAuditLogModal } from "@/components/organisms/TaxonomyAuditLogModal";
+import { TaxonomyCatalogMappingsEditor } from "@/components/organisms/TaxonomyCatalogMappingsEditor";
 import { TaxonomyDriftWarning } from "@/components/organisms/TaxonomyDriftWarning";
 import {
   useSoftDeleteTaxonomy,
@@ -152,6 +153,8 @@ export function TaxonomyDetailPanel({
         />
 
         <DetailGrid taxonomy={taxonomy} />
+
+        <TaxonomyCatalogMappingsEditor taxonomyId={taxonomy.id} />
 
         {showDeleteConfirm ? (
           <div className="rounded border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30">

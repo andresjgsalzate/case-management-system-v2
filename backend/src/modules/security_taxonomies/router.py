@@ -269,6 +269,29 @@ async def remove_notification(
 
 # ── Catalog mappings ─────────────────────────────────────────────────────
 
+@router.get(
+    "/{taxonomy_id}/catalog-mappings",
+    response_model=SuccessResponse[list[dict]],
+)
+async def list_catalog_mappings(
+    taxonomy_id: str,
+    db: DBSession,
+    current_user: CurrentUser = Read,
+):
+    uc = SecurityTaxonomyUseCases(db=db)
+    mappings = await uc.list_catalog_mappings(taxonomy_id)
+    return SuccessResponse.ok([
+        {
+            "id": m.id,
+            "taxonomy_id": m.taxonomy_id,
+            "service_catalog_item_id": m.service_catalog_item_id,
+            "is_default": m.is_default,
+            "priority_order": m.priority_order,
+        }
+        for m in mappings
+    ])
+
+
 @router.post(
     "/{taxonomy_id}/catalog-mappings",
     response_model=SuccessResponse[dict], status_code=201,

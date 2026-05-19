@@ -214,6 +214,21 @@ export function useRemoveNotification() {
   });
 }
 
+export function useTaxonomyCatalogMappings(
+  taxonomyId: string | null | undefined,
+) {
+  return useQuery<TaxonomyCatalogMapping[]>({
+    queryKey: [...keys.detail(taxonomyId ?? ""), "catalog-mappings"],
+    enabled: Boolean(taxonomyId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<
+        ApiResponse<TaxonomyCatalogMapping[]>
+      >(`${BASE}/${taxonomyId}/catalog-mappings`);
+      return data.data;
+    },
+  });
+}
+
 export function useAddCatalogMapping() {
   const qc = useQueryClient();
   return useMutation({
