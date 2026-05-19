@@ -182,12 +182,17 @@ async def transition_case(
     )
 
 
-@router.get("/{case_id}/export/csv")
-async def export_case_csv(
-    case_id: str,
+@router.get("/export/csv")
+async def export_cases_csv(
     db: DBSession,
     current_user: CurrentUser = CasesExport,
 ):
+    """Export all non-archived cases for the current tenant as CSV.
+
+    Path was previously /{case_id}/export/csv but the use case ignored
+    case_id (always returns all tenant cases). Renamed to match real
+    behavior; audit showed zero callers of the old path.
+    """
     uc = CaseUseCases(db)
     csv_content = await uc.export_csv(current_user.tenant_id)
     return Response(

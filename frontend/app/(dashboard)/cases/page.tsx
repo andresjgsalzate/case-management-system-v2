@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Download, Plus } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { CaseTable } from "@/components/organisms/CaseTable";
 import { useCases, useCasePriorities } from "@/hooks/useCases";
+import { apiClient } from "@/lib/apiClient";
 import type { Case, CaseType } from "@/lib/types";
 
 const STATUS_TABS = [
@@ -29,6 +30,24 @@ export default function CasesPage() {
   const [activePriority, setActivePriority] = useState("");
   const [activeType, setActiveType] = useState<"" | CaseType>("");
   const [queue, setQueue] = useState<"mine" | "team" | "all">("mine");
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExportCsv() {
+    setExporting(true);
+    try {
+      const res = await apiClient.get("/cases/export/csv", { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `cases-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const { data: cases = [], isLoading } = useCases({
     ...(activeStatus ? { status: activeStatus } : {}),
@@ -56,12 +75,23 @@ export default function CasesPage() {
             {isLoading ? "Cargando…" : `${filtered.length} caso${filtered.length !== 1 ? "s" : ""}`}
           </p>
         </div>
-        <Link href="/cases/new">
-          <Button size="sm">
-            <Plus className="h-4 w-4" />
-            Nuevo caso
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleExportCsv}
+            disabled={exporting}
+          >
+            <Download className="h-4 w-4" />
+            {exporting ? "Exportando…" : "Exportar CSV"}
           </Button>
-        </Link>
+          <Link href="/cases/new">
+            <Button size="sm">
+              <Plus className="h-4 w-4" />
+              Nuevo caso
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Queue tabs */}
