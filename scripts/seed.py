@@ -483,24 +483,26 @@ async def seed_case_number_ranges(session, tenant_id) -> None:
     """
     from sqlalchemy import select
 
+    # (case_type, prefix, range_start, range_end)
     canonical_ranges = [
-        ("REQ", 1,       200000),
-        ("INC", 1,       100000),
-        ("EVT", 1,      1000000),
+        ("request",  "REQ", 1,  200000),
+        ("incident", "INC", 1,  100000),
+        ("event",    "EVT", 1, 1000000),
     ]
     inserted = 0
-    for prefix, start, end in canonical_ranges:
+    for case_type, prefix, start, end in canonical_ranges:
         existing = await session.execute(
             select(CaseNumberRangeModel).where(
                 CaseNumberRangeModel.tenant_id == tenant_id,
-                CaseNumberRangeModel.prefix == prefix,
+                CaseNumberRangeModel.case_type == case_type,
             )
         )
         if existing.scalar_one_or_none() is not None:
-            continue  # already exists, skip
+            continue  # already exists for this type, skip
         row = CaseNumberRangeModel(
             id=str(uuid.uuid4()),
             tenant_id=tenant_id,
+            case_type=case_type,
             prefix=prefix,
             range_start=start,
             range_end=end,
@@ -667,17 +669,33 @@ async def seed_phase_4(session) -> None:
 
 
 async def main() -> None:
+    """Minimal seed — only what's needed to bootstrap a fresh deploy.
+
+    Scope (post 2026-05-19 refactor):
+    - Ensures default roles exist (Super Admin, Admin, Manager, Reporter, Agent)
+    - Repairs the permission set for those roles (keeps the permission catalog
+      in sync with code-defined modules/actions)
+
+    Explicitly NOT seeded — clients configure these themselves:
+    - Case statuses / priorities / number ranges
+    - SLA policies / holidays / work schedules
+    - Classification criteria / rules / thresholds
+    - Origins / applications / service catalog
+    - Any operational data
+
+    The skipped seed_phase_2 / seed_phase_3 / seed_phase_4 functions remain in
+    this file for emergency restore or test fixtures. Call them explicitly if
+    needed (``python -m scripts.seed --include-reference-data`` is the
+    intended UX but not implemented here yet).
+    """
     if not await verify_connection():
         sys.exit(1)
 
-    print("Starting seed...")
+    print("Starting seed (bootstrap-only mode)...")
     async with AsyncSessionLocal() as session:
-        await repair_permissions(session)   # siempre primero: repara datos existentes
+        await repair_permissions(session)
         await seed_phase_1(session)
-        await seed_phase_2(session)
-        await seed_phase_3(session)
-        await seed_phase_4(session)
-    print("OK Seed complete!")
+    print("OK Bootstrap seed complete. Reference data left for client config.")
 
 
 if __name__ == "__main__":
