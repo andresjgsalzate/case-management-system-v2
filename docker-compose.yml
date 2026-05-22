@@ -45,6 +45,110 @@ services:
       timeout: 3s
       retries: 10
 
+  # ─── Keycloak: IdP for CMS + n8n SSO (Sub-spec 09) ────────────────────────
+  # Single source of OIDC identity. Realm `cms` is auto-imported from
+  # ./keycloak/realm-export.json on first boot (only with an empty volume —
+  # see docs/INFRA.md for re-import procedure).
+  #
+  # Admin console: https://cms.local/auth/admin  (user from .env)
+  # OIDC discovery: https://cms.local/auth/realms/cms/.well-known/openid-configuration
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: cms_keycloak
+    restart: unless-stopped
+    environment:
+      # Bootstrap admin — used to log into the master realm.
+      KEYCLOAK_ADMIN: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:?KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD must be set in .env}
+      # Reverse-proxy awareness — TLS is terminated by nginx; Keycloak
+      # serves plain HTTP internally and trusts the X-Forwarded-* set by nginx.
+      KC_PROXY: edge
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME: cms.local
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_RELATIVE_PATH: /auth
+      # Default H2 storage for dev. Production should switch to KC_DB=postgres
+      # and point KC_DB_URL at a managed Postgres instance.
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+    command:
+      - start-dev
+      - --import-realm
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      # KC 24 exposes /health/ready when KC_HEALTH_ENABLED=true.
+      test:
+        - CMD-SHELL
+        - "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /auth/health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  # ─── oauth2-proxy in front of n8n (Sub-spec 09) ───────────────────────────
+  # Validates Keycloak sessions and forwards X-Forwarded-User to n8n.
+  # Required because n8n Community can't do OIDC natively — Enterprise
+  # later enables OIDC directly and oauth2-proxy can be removed.
+  #
+  # extra_hosts maps cms.local → host so the back-channel call to
+  # Keycloak (over the nginx-terminated TLS at cms.local) resolves.
+  # Without this the OIDC discovery probe fails (DNS error).
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    container_name: cms_oauth2_proxy
+    restart: unless-stopped
+    command:
+      - --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+    environment:
+      OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_PROXY_CLIENT_SECRET:?OAUTH2_PROXY_CLIENT_SECRET must be set in .env}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:?OAUTH2_PROXY_COOKIE_SECRET must be set in .env}
+    volumes:
+      - ./oauth2-proxy/oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro
+    extra_hosts:
+      - "cms.local:host-gateway"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      n8n:
+        condition: service_started
+
+  # ─── nginx reverse proxy (Sub-spec 09) ────────────────────────────────────
+  # Single entry point for the dev stack. Routes by path under one origin
+  # (cms.local) so the n8n iframe can share the browser session cookie:
+  #   /              → host.docker.internal:3000  (frontend, run by dev.sh)
+  #   /api/*         → host.docker.internal:8000  (backend,  run by dev.sh)
+  #   /auth/*        → keycloak:8080
+  #   /n8n/*         → oauth2-proxy:4180 → n8n:5678
+  #   /webhook/*     → n8n:5678 (no auth; HMAC at app layer)
+  #
+  # TLS: self-signed cert in nginx/certs (regenerate with dev/generate-dev-certs.sh).
+  # Hosts: cms.local must resolve to 127.0.0.1 (dev/hosts-setup.sh).
+  nginx:
+    image: nginx:1.25
+    container_name: cms_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    # `host-gateway` makes host.docker.internal resolve on Linux too.
+    # Docker Desktop (Win/macOS) already provides this name automatically;
+    # the line is a no-op there.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # nginx alone — no curl in the base image; use the built-in stub.
+      test: ["CMD", "service", "nginx", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # ─── Backend API (FastAPI) — opt-in via profile 'backend' ────────────────
   # Hosts the Python app + WeasyPrint native libs (cairo, pango, gdk-pixbuf,
   # gobject) that PDF generation needs but are painful to install on Windows.
@@ -92,23 +196,28 @@ services:
       --host 0.0.0.0 --port 8000 --reload
       --reload-dir /app/backend
 
-  # ─── n8n: workflow orchestrator (Sub-spec 05) ─────────────────────────────
-  # ~200 MB RAM. Web UI: http://localhost:5678 (admin / cms_n8n_dev).
+  # ─── n8n: workflow orchestrator (Sub-spec 05 + 09) ────────────────────────
+  # ~200 MB RAM. Reachable ONLY through nginx at https://cms.local/n8n/
+  # (auth via oauth2-proxy) or /webhook/ (no auth, HMAC at app layer).
+  # The direct host port 5678 was removed when sub-spec 09 introduced
+  # the reverse proxy — exposing it would bypass oauth2-proxy and break
+  # the single-admin compensating control while on n8n Free.
+  #
   # SQLite for dev simplicity; switch to postgres env vars below for prod-like setup.
   n8n:
     image: n8nio/n8n:1.65.0
     container_name: cms_n8n
     restart: unless-stopped
-    ports:
-      - "5678:5678"
     environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=cms_n8n_dev
-      - N8N_HOST=localhost
+      # Auth is handled by oauth2-proxy upstream — n8n basic-auth removed.
+      - N8N_HOST=cms.local
       - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - WEBHOOK_URL=http://localhost:5678/
+      - N8N_PROTOCOL=https
+      - N8N_PATH=/n8n/
+      - WEBHOOK_URL=https://cms.local/webhook/
+      - N8N_PROXY_HOPS=1               # nginx is the one trusted hop
+      - N8N_USER_MANAGEMENT_DISABLED=true  # Free plan: single-admin mode
+      - N8N_DIAGNOSTICS_ENABLED=false
       - GENERIC_TIMEZONE=America/Bogota
       - DB_TYPE=sqlite
       # For postgres-backed n8n (prod-like), uncomment:
@@ -229,6 +338,7 @@ services:
 volumes:
   postgres_data:
   n8n_data:
+  keycloak_data:
   # Wazuh persistent volumes (only mounted when profile 'wazuh' active)
   wazuh_api_configuration:
   wazuh_etc:

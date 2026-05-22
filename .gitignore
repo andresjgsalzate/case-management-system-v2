@@ -55,6 +55,10 @@ coverage.xml
 #docs
 *.md
 !README.md
+!docs/**/*.md
+
+# nginx dev TLS material — self-signed certs regenerated on demand
+nginx/certs/
 
 # Agent / IDE local config — never commit personal machine state
 .claude/
