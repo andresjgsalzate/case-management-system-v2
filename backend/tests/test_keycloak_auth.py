@@ -120,3 +120,77 @@ async def test_validator_extracts_roles_from_realm_access(rsa_key):
     assert payload["sub"] == "abc-123"
     assert payload["email"] == "user@example.com"
     assert payload["realm_access"]["roles"] == ["super_admin", "admin"]
+
+
+# ─────────────────────────────────────────────────────────────
+#  Task 2.2 — PermissionChecker accepts Keycloak-validated tokens
+# ─────────────────────────────────────────────────────────────
+
+from fastapi.security import HTTPAuthorizationCredentials
+
+
+def _mock_db_session(role, permission, team_id=None):
+    """AsyncSession stub that returns the given role/permission/team_id
+    in the order PermissionChecker queries them."""
+    role_result = MagicMock()
+    role_result.scalar_one_or_none = MagicMock(return_value=role)
+
+    perm_result = MagicMock()
+    perm_result.scalar_one_or_none = MagicMock(return_value=permission)
+
+    team_result = MagicMock()
+    team_result.scalar_one_or_none = MagicMock(return_value=team_id)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[role_result, perm_result, team_result])
+    return db
+
+
+async def test_permission_checker_accepts_keycloak_token(monkeypatch):
+    """PermissionChecker must build CurrentUser from a Keycloak-validated
+    payload, resolving the highest-level realm role into a CMS role_id."""
+    from backend.src.core.middleware import permission_checker as pc_module
+    from backend.src.core.middleware.permission_checker import (
+        PermissionChecker, CurrentUser,
+    )
+
+    fake_validator = AsyncMock()
+    fake_validator.validate = AsyncMock(return_value={
+        "sub": "user-123",
+        "email": "alice@example.com",
+        "tenant_id": "tenant-A",
+        "realm_access": {"roles": ["admin", "agent"]},
+    })
+    monkeypatch.setattr(
+        pc_module, "get_keycloak_validator", lambda: fake_validator
+    )
+    # Silence the audit-actor side effect — module under test imports it lazily.
+    monkeypatch.setattr(
+        "backend.src.modules.audit.application.middleware.set_current_actor",
+        lambda _u: None,
+    )
+
+    fake_role = MagicMock(
+        id="role-admin-uuid", level=5, is_global=False, name="admin",
+    )
+    fake_perm = MagicMock(
+        scope="tenant", role_id="role-admin-uuid",
+        module="cases", action="read",
+    )
+    db = _mock_db_session(fake_role, fake_perm, team_id=None)
+
+    creds = HTTPAuthorizationCredentials(
+        scheme="Bearer", credentials="some.keycloak.jwt"
+    )
+    checker = PermissionChecker(module="cases", action="read")
+
+    current = await checker(credentials=creds, db=db)
+
+    assert isinstance(current, CurrentUser)
+    assert current.user_id == "user-123"
+    assert current.email == "alice@example.com"
+    assert current.tenant_id == "tenant-A"
+    assert current.role_id == "role-admin-uuid"
+    assert current.role_level == 5
+    assert current.scope == "tenant"
+    fake_validator.validate.assert_awaited_once_with("some.keycloak.jwt")

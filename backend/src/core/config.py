@@ -23,6 +23,18 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # Keycloak (Sub-spec 09) — token validation source for PermissionChecker.
+    # JWKS URL is reachable from the backend process: in dev the backend runs
+    # on the host (dev.sh) and Keycloak is reached via the host-exposed port;
+    # in prod replace with the in-network URL of the Keycloak service.
+    # The issuer must match the `iss` claim Keycloak puts on tokens (driven
+    # by KC_HOSTNAME in docker-compose), independently of where JWKS is fetched.
+    KEYCLOAK_JWKS_URL: str = (
+        "http://localhost:8080/auth/realms/cms/protocol/openid-connect/certs"
+    )
+    KEYCLOAK_ISSUER: str = "https://cms.local/auth/realms/cms"
+    KEYCLOAK_AUDIENCE: str = "cms-frontend"
+
     @field_validator("SECRET_KEY")
     @classmethod
     def validate_secret_key(cls, v: str) -> str:

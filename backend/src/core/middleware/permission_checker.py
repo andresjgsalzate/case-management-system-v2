@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 from typing import Callable
+
 from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.src.core.auth import get_keycloak_validator
 from backend.src.core.database import get_db
-from backend.src.core.security import decode_access_token
 from backend.src.core.exceptions import UnauthorizedError, PermissionDeniedError
 from backend.src.modules.roles.infrastructure.models import PermissionModel, RoleModel
 
@@ -29,6 +31,12 @@ class PermissionChecker:
     FastAPI dependency that verifies the authenticated user has the
     required permission (module, action).
 
+    As of sub-spec 09 the bearer token is a Keycloak-issued RS256 JWT,
+    validated against the realm JWKS. The realm role names from
+    `realm_access.roles` are mapped to the highest-`level` matching
+    CMS role (so a user with both `admin` and `agent` in their token
+    is treated as `admin`).
+
     Usage:
         @router.get("/cases", dependencies=[Depends(PermissionChecker("cases", "read"))])
 
@@ -49,45 +57,55 @@ class PermissionChecker:
         if not credentials:
             raise UnauthorizedError("No authentication token provided")
 
-        payload = decode_access_token(credentials.credentials)
+        validator = get_keycloak_validator()
+        payload = await validator.validate(credentials.credentials)
+
         user_id = payload.get("sub")
-        role_id = payload.get("role_id")
-        tenant_id = payload.get("tenant_id", "default")
-        email = payload.get("email", "")
-        token_role_level = payload.get("role_level")
-
         if not user_id:
-            raise UnauthorizedError("Invalid token payload")
+            raise UnauthorizedError("Invalid token payload (missing sub)")
 
-        if not role_id:
-            raise PermissionDeniedError("User has no role assigned")
+        email = payload.get("email", "")
+        tenant_id = payload.get("tenant_id") or "default"
+        realm_roles = payload.get("realm_access", {}).get("roles") or []
+        if not realm_roles:
+            raise PermissionDeniedError("User has no realm role")
 
-        result = await db.execute(
-            select(PermissionModel).where(
-                PermissionModel.role_id == role_id,
-                PermissionModel.module == self.module,
-                PermissionModel.action == self.action,
+        # Pick the highest-level CMS role that matches a name in the token.
+        # Users with multiple realm roles get the most privileged one.
+        role_row = (
+            await db.execute(
+                select(RoleModel)
+                .where(RoleModel.name.in_(realm_roles))
+                .order_by(RoleModel.level.desc())
+                .limit(1)
             )
-        )
-        permission = result.scalar_one_or_none()
+        ).scalar_one_or_none()
+        if not role_row:
+            raise PermissionDeniedError(
+                f"No CMS role matches token roles: {realm_roles}"
+            )
+
+        permission = (
+            await db.execute(
+                select(PermissionModel).where(
+                    PermissionModel.role_id == role_row.id,
+                    PermissionModel.module == self.module,
+                    PermissionModel.action == self.action,
+                )
+            )
+        ).scalar_one_or_none()
 
         if not permission:
             raise PermissionDeniedError(
                 f"Permission denied: {self.module}.{self.action}"
             )
 
-        role_result = await db.execute(
-            select(RoleModel.is_global, RoleModel.level).where(RoleModel.id == role_id)
-        )
-        role_row = role_result.one_or_none()
-        is_global = bool(role_row.is_global) if role_row else False
-        role_level = int(role_row.level) if role_row else 1
-
         from backend.src.modules.users.infrastructure.models import UserModel
-        user_row = await db.execute(
-            select(UserModel.team_id).where(UserModel.id == user_id)
-        )
-        team_id = user_row.scalar_one_or_none()
+        team_id = (
+            await db.execute(
+                select(UserModel.team_id).where(UserModel.id == user_id)
+            )
+        ).scalar_one_or_none()
 
         from backend.src.modules.audit.application.middleware import set_current_actor
         set_current_actor(user_id)
@@ -95,11 +113,11 @@ class PermissionChecker:
         return CurrentUser(
             user_id=user_id,
             email=email,
-            role_id=role_id,
+            role_id=role_row.id,
             tenant_id=tenant_id,
             scope=permission.scope,
-            is_global=is_global,
-            role_level=int(token_role_level) if token_role_level is not None else role_level,
+            is_global=bool(role_row.is_global),
+            role_level=int(role_row.level),
             team_id=team_id,
         )
 

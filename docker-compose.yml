@@ -56,6 +56,13 @@ services:
     image: quay.io/keycloak/keycloak:24.0
     container_name: cms_keycloak
     restart: unless-stopped
+    # Internal HTTP only — TLS terminated by nginx upstream. The port is
+    # exposed to the host so the backend (running on host via dev.sh) can
+    # fetch JWKS at http://localhost:8080/auth/realms/cms/protocol/openid-connect/certs.
+    # In prod the backend lives on the same docker network and uses
+    # http://keycloak:8080/... — this mapping becomes redundant.
+    ports:
+      - "8080:8080"
     environment:
       # Bootstrap admin — used to log into the master realm.
       KEYCLOAK_ADMIN: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-admin}
