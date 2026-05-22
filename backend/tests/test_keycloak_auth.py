@@ -194,3 +194,28 @@ async def test_permission_checker_accepts_keycloak_token(monkeypatch):
     assert current.role_level == 5
     assert current.scope == "tenant"
     fake_validator.validate.assert_awaited_once_with("some.keycloak.jwt")
+
+
+# ─────────────────────────────────────────────────────────────
+#  Task 2.3 — Backend auth router redirects to Keycloak
+# ─────────────────────────────────────────────────────────────
+
+
+async def test_login_redirects_to_keycloak(client):
+    """GET /auth/login should issue a 302/307 redirect to the Keycloak
+    authorization endpoint with PKCE parameters and a signed state cookie."""
+    response = await client.get("/api/v1/auth/login", follow_redirects=False)
+
+    assert response.status_code in (302, 307)
+
+    location = response.headers.get("location", "")
+    assert "/auth/realms/cms/protocol/openid-connect/auth" in location
+    assert "client_id=cms-frontend" in location
+    assert "response_type=code" in location
+    assert "code_challenge=" in location
+    assert "code_challenge_method=S256" in location
+    assert "state=" in location
+
+    # Signed state cookie carries the PKCE verifier across to /callback.
+    raw_cookies = response.headers.get("set-cookie", "")
+    assert "oidc_state=" in raw_cookies

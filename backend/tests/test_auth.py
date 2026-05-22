@@ -28,15 +28,6 @@ def test_hash_refresh_token_deterministic():
     assert len(_hash_refresh_token(token)) == 64  # SHA-256 hex = 64 chars
 
 
-@pytest.mark.asyncio
-async def test_login_wrong_credentials_raises_unauthorized(client):
-    response = await client.post("/api/v1/auth/login", json={
-        "email": "noexiste@test.com",
-        "password": "wrong"
-    })
-    assert response.status_code == 401
-
-
 def test_login_includes_role_level_claim(monkeypatch):
     """create_access_token should be called with role_level in extra_claims."""
     from backend.src.modules.auth.application import use_cases as auth_uc

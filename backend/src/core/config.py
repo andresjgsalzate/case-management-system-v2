@@ -24,16 +24,25 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # Keycloak (Sub-spec 09) — token validation source for PermissionChecker.
-    # JWKS URL is reachable from the backend process: in dev the backend runs
-    # on the host (dev.sh) and Keycloak is reached via the host-exposed port;
-    # in prod replace with the in-network URL of the Keycloak service.
+    # JWKS / token / logout URLs are back-channel calls the backend makes;
+    # in dev the backend runs on the host (dev.sh) and reaches Keycloak via
+    # the host-exposed port. In prod the backend lives on the docker network
+    # and uses `http://keycloak:8080/...`.
     # The issuer must match the `iss` claim Keycloak puts on tokens (driven
-    # by KC_HOSTNAME in docker-compose), independently of where JWKS is fetched.
+    # by KC_HOSTNAME in docker-compose), independently of where the back-
+    # channel hits Keycloak. ISSUER is also the URL the browser is redirected
+    # to for login.
     KEYCLOAK_JWKS_URL: str = (
         "http://localhost:8080/auth/realms/cms/protocol/openid-connect/certs"
     )
+    KEYCLOAK_INTERNAL_URL: str = "http://localhost:8080/auth/realms/cms"
     KEYCLOAK_ISSUER: str = "https://cms.local/auth/realms/cms"
     KEYCLOAK_AUDIENCE: str = "cms-frontend"
+    KEYCLOAK_FRONTEND_CLIENT_ID: str = "cms-frontend"
+
+    # Public origin for the user-facing application. Used to compose the
+    # backend's OIDC callback URL and the post-login landing page.
+    CMS_FRONTEND_URL: str = "https://cms.local"
 
     @field_validator("SECRET_KEY")
     @classmethod
