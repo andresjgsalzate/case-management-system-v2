@@ -1,12 +1,13 @@
 "use client";
 
-import { X } from "lucide-react";
+import { AlertCircle, CheckCircle2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
   useCreateN8nWorkflow,
   useUpdateN8nWorkflow,
 } from "@/hooks/useN8nWorkflows";
+import { useN8nWorkflowWebhooks } from "@/hooks/useN8nWorkflowWebhooks";
 import type {
   CreateN8nWorkflowPayload,
   N8nWorkflow,
@@ -45,7 +46,19 @@ export function N8nWorkflowFormModal({
   const [isActive, setIsActive] = useState(true);
   const [requiresApproval, setRequiresApproval] = useState(false);
   const [n8nWorkflowId, setN8nWorkflowId] = useState("");
+  // Tracks whether the URL field has been touched by the user. When
+  // auto-discovery returns a webhook for an orphan registration, we
+  // only pre-fill if the user hasn't typed anything yet.
+  const [urlTouched, setUrlTouched] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Discover webhook entry points for the linked n8n workflow. Only
+  // fires in create mode when we have an n8n_workflow_id (i.e. the
+  // operator is registering an orphan from the inventory).
+  const discoveryEnabled =
+    !initial && !!n8nWorkflowId && !!prefill?.n8n_workflow_id;
+  const { data: webhooks, isLoading: webhooksLoading } =
+    useN8nWorkflowWebhooks(discoveryEnabled ? n8nWorkflowId : null);
 
   // Reset form when initial / prefill changes or modal opens. `initial`
   // wins (edit mode); otherwise `prefill` seeds the create form.
@@ -58,9 +71,18 @@ export function N8nWorkflowFormModal({
       setRequiresApproval(initial?.requires_approval ?? false);
       // Locked when prefilled from an orphan (preserves the link).
       setN8nWorkflowId(prefill?.n8n_workflow_id ?? "");
+      setUrlTouched(!!initial?.workflow_url);
       setErrorMsg(null);
     }
   }, [isOpen, initial, prefill]);
+
+  // Auto-fill URL the moment discovery returns exactly one webhook
+  // (and the user hasn't typed anything yet). With multiple matches
+  // we render a dropdown below so the operator can pick.
+  useEffect(() => {
+    if (urlTouched || !webhooks || webhooks.length !== 1) return;
+    setWorkflowUrl(webhooks[0].url);
+  }, [webhooks, urlTouched]);
 
   if (!isOpen) return null;
 
@@ -160,13 +182,29 @@ export function N8nWorkflowFormModal({
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">URL del workflow (webhook n8n)</label>
+            <label className="text-xs text-muted-foreground">
+              URL del workflow (webhook n8n)
+            </label>
             <input
               className={`${inputCls} font-mono text-xs`}
               value={workflowUrl}
-              onChange={(e) => setWorkflowUrl(e.target.value)}
-              placeholder="https://n8n.example.com/webhook/..."
+              onChange={(e) => {
+                setUrlTouched(true);
+                setWorkflowUrl(e.target.value);
+              }}
+              placeholder="https://cms.local/webhook/..."
             />
+            {discoveryEnabled && (
+              <DiscoveryHint
+                loading={webhooksLoading}
+                webhooks={webhooks}
+                currentUrl={workflowUrl}
+                onPick={(url) => {
+                  setUrlTouched(true);
+                  setWorkflowUrl(url);
+                }}
+              />
+            )}
           </div>
 
           <div className="flex flex-col gap-1">
@@ -226,6 +264,70 @@ export function N8nWorkflowFormModal({
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+// ── Discovery hint: shows the auto-detect status under the URL input ─
+
+function DiscoveryHint({
+  loading, webhooks, currentUrl, onPick,
+}: {
+  loading: boolean;
+  webhooks: { path: string; url: string; http_method: string; node_name: string }[] | undefined;
+  currentUrl: string;
+  onPick: (url: string) => void;
+}) {
+  if (loading) {
+    return (
+      <p className="text-[11px] text-muted-foreground mt-1">
+        Buscando webhooks en n8n…
+      </p>
+    );
+  }
+  if (!webhooks) return null;
+
+  if (webhooks.length === 0) {
+    return (
+      <div className="mt-1 flex items-start gap-1 text-[11px] text-amber-600">
+        <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
+        <span>
+          Este workflow no expone webhooks. Si igual querés registrarlo,
+          tipeá una URL placeholder (no podrá ser disparado por HTTP).
+        </span>
+      </div>
+    );
+  }
+
+  if (webhooks.length === 1) {
+    return (
+      <div className="mt-1 flex items-start gap-1 text-[11px] text-emerald-600">
+        <CheckCircle2 className="h-3 w-3 mt-0.5 shrink-0" />
+        <span>
+          Webhook auto-detectado desde n8n ({webhooks[0].http_method} ·{" "}
+          nodo &quot;{webhooks[0].node_name}&quot;).
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1 space-y-1">
+      <p className="text-[11px] text-muted-foreground">
+        Este workflow tiene {webhooks.length} webhooks. Elegí cuál usar:
+      </p>
+      <select
+        value={currentUrl}
+        onChange={(e) => onPick(e.target.value)}
+        className={`${inputCls} text-xs`}
+      >
+        <option value="">— elegir webhook —</option>
+        {webhooks.map((w) => (
+          <option key={w.path} value={w.url}>
+            {w.http_method} · {w.node_name} · /{w.path}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
