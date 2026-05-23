@@ -83,6 +83,31 @@ apiClient.interceptors.response.use(
     };
 
     if (error.response?.status !== 401 || originalRequest._retry) {
+      // Surface the server-side message so React Query callers see
+      // "tuic_code 'X' already exists" instead of the generic
+      // "Request failed with status code 400". Three known shapes:
+      //   - App envelope:  { success: false, error, message }   <- ours
+      //   - FastAPI HTTPException: { detail: "..." }
+      //   - Pydantic 422:  { detail: [{loc, msg, type}, ...] }
+      const data = error.response?.data;
+      const fromAppEnvelope =
+        data && typeof data === "object" && typeof data.message === "string"
+          ? data.message
+          : null;
+      const detail = data?.detail;
+      const fromDetail =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail
+                .map((e: { msg?: string; loc?: unknown[] }) =>
+                  e.loc ? `${e.loc.join(".")}: ${e.msg}` : e.msg,
+                )
+                .filter(Boolean)
+                .join("; ")
+            : null;
+      const better = fromAppEnvelope ?? fromDetail;
+      if (better) error.message = better;
       return Promise.reject(error);
     }
 
