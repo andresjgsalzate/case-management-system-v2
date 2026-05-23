@@ -2,6 +2,11 @@
 // Reconnects with exponential backoff up to 30s; tracks staleness as the
 // elapsed time since last heartbeat so the UI can show a "stream stalled"
 // banner without dropping the connection.
+//
+// We use `fetch` + a manual SSE parser instead of the native EventSource
+// because the latter has no way to attach an Authorization header --
+// PermissionChecker on the backend requires Bearer auth, so EventSource
+// would always 401. The notifications stream uses the same trick.
 import { useEffect, useRef, useState } from "react";
 
 const KNOWN_EVENT_TYPES = [
@@ -36,10 +41,8 @@ export function useDashboardStream(
 ): DashboardStreamState {
   const [connected, setConnected] = useState(false);
   const [staleMs, setStaleMs] = useState(0);
-  const sourceRef = useRef<EventSource | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const lastHeartbeatRef = useRef<number>(Date.now());
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onEventRef = useRef(onEvent);
 
   // Keep latest callback in ref so we don't re-subscribe when caller passes
@@ -49,43 +52,93 @@ export function useDashboardStream(
   }, [onEvent]);
 
   useEffect(() => {
-    function connect() {
-      const source = new EventSource(
-        "/api/v1/operational/dashboard/stream",
-        { withCredentials: true },
-      );
-      sourceRef.current = source;
+    let aborted = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let controller = new AbortController();
 
-      source.addEventListener("connected", () => {
+    function scheduleReconnect() {
+      const attempt = reconnectAttemptsRef.current;
+      const delay = Math.min(30_000, 1000 * Math.pow(2, attempt));
+      reconnectAttemptsRef.current = attempt + 1;
+      reconnectTimer = setTimeout(() => {
+        controller = new AbortController();
+        connect();
+      }, delay);
+    }
+
+    function dispatch(eventType: string | null, dataLines: string[]) {
+      if (!eventType) return;
+      lastHeartbeatRef.current = Date.now();
+      if (eventType === "connected") {
         setConnected(true);
         reconnectAttemptsRef.current = 0;
-        lastHeartbeatRef.current = Date.now();
-      });
+        return;
+      }
+      if (eventType === "heartbeat") return;
+      if (!(KNOWN_EVENT_TYPES as readonly string[]).includes(eventType)) return;
+      const raw = dataLines.join("\n");
+      try {
+        onEventRef.current(eventType, JSON.parse(raw));
+      } catch {
+        onEventRef.current(eventType, raw);
+      }
+    }
 
-      source.addEventListener("heartbeat", () => {
-        lastHeartbeatRef.current = Date.now();
-      });
+    async function connect() {
+      const token =
+        typeof window !== "undefined"
+          ? localStorage.getItem("access_token")
+          : null;
+      if (!token || aborted) return;
 
-      for (const type of KNOWN_EVENT_TYPES) {
-        source.addEventListener(type, (e: MessageEvent) => {
-          lastHeartbeatRef.current = Date.now();
-          try {
-            const payload = JSON.parse(e.data);
-            onEventRef.current(type, payload);
-          } catch {
-            onEventRef.current(type, e.data);
-          }
+      try {
+        const res = await fetch("/api/v1/operational/dashboard/stream", {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
         });
+        if (!res.ok || !res.body) {
+          // 401 = bad / expired token; don't reconnect in a tight loop.
+          if (res.status === 401) return;
+          if (!aborted) scheduleReconnect();
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let currentEvent: string | null = null;
+        let currentData: string[] = [];
+
+        while (!aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          // SSE frames end on a blank line. Split on \n; the last fragment
+          // is the still-unfinished line we keep for the next chunk.
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (line === "") {
+              dispatch(currentEvent, currentData);
+              currentEvent = null;
+              currentData = [];
+            } else if (line.startsWith("event:")) {
+              currentEvent = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              currentData.push(line.slice(5).trim());
+            }
+            // SSE spec also has `id:`, `retry:`, comments (`:foo`).
+            // We ignore them -- not used by the backend dashboard stream.
+          }
+        }
+      } catch {
+        // Abort on unmount throws — fall through.
       }
 
-      source.onerror = () => {
-        source.close();
-        setConnected(false);
-        const attempt = reconnectAttemptsRef.current;
-        const delay = Math.min(30_000, 1000 * Math.pow(2, attempt));
-        reconnectAttemptsRef.current = attempt + 1;
-        reconnectTimerRef.current = setTimeout(connect, delay);
-      };
+      setConnected(false);
+      if (!aborted) scheduleReconnect();
     }
 
     connect();
@@ -94,10 +147,9 @@ export function useDashboardStream(
     }, 1000);
 
     return () => {
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-      }
-      sourceRef.current?.close();
+      aborted = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      controller.abort();
       clearInterval(staleInterval);
     };
   }, []);

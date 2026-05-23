@@ -85,7 +85,7 @@ export function useNotificationStream(onNotification?: (n: Notification) => void
       if (!token || aborted) return;
 
       try {
-        const res = await fetch("/api/notifications/stream", {
+        const res = await fetch("/api/v1/notifications/stream", {
           headers: { Authorization: `Bearer ${token}` },
           signal: controller.signal,
         });
