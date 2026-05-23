@@ -219,3 +219,65 @@ async def test_login_redirects_to_keycloak(client):
     # Signed state cookie carries the PKCE verifier across to /callback.
     raw_cookies = response.headers.get("set-cookie", "")
     assert "oidc_state=" in raw_cookies
+
+
+# ─────────────────────────────────────────────────────────────
+#  Task 2.4 — User migration helpers
+# ─────────────────────────────────────────────────────────────
+
+
+def test_split_full_name_two_parts():
+    from backend.scripts.migrate_users_to_keycloak import split_full_name
+    assert split_full_name("Alice Smith") == ("Alice", "Smith")
+
+
+def test_split_full_name_single():
+    from backend.scripts.migrate_users_to_keycloak import split_full_name
+    assert split_full_name("Cher") == ("Cher", "")
+
+
+def test_split_full_name_multi_word_lastname():
+    from backend.scripts.migrate_users_to_keycloak import split_full_name
+    assert split_full_name("Maria del Pilar Lopez") == (
+        "Maria",
+        "del Pilar Lopez",
+    )
+
+
+def test_build_user_payload_maps_fields():
+    from backend.scripts.migrate_users_to_keycloak import build_user_payload
+
+    user = MagicMock(
+        id="user-uuid-1",
+        email="alice@example.com",
+        full_name="Alice Smith",
+        is_active=True,
+        tenant_id="tenant-a",
+    )
+    payload = build_user_payload(user)
+
+    assert payload["id"] == "user-uuid-1"
+    assert payload["username"] == "alice@example.com"
+    assert payload["email"] == "alice@example.com"
+    assert payload["firstName"] == "Alice"
+    assert payload["lastName"] == "Smith"
+    assert payload["enabled"] is True
+    assert payload["emailVerified"] is True
+    assert payload["attributes"]["tenant_id"] == ["tenant-a"]
+
+
+def test_build_user_payload_defaults_tenant_when_null():
+    from backend.scripts.migrate_users_to_keycloak import build_user_payload
+
+    user = MagicMock(
+        id="u2",
+        email="b@x.com",
+        full_name="Bob",
+        is_active=False,
+        tenant_id=None,
+    )
+    payload = build_user_payload(user)
+
+    assert payload["enabled"] is False
+    assert payload["attributes"]["tenant_id"] == ["default"]
+    assert payload["lastName"] == ""

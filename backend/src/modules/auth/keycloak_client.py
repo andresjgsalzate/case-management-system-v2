@@ -113,10 +113,19 @@ class KeycloakOAuthClient:
 
 
 class KeycloakAdminClient:
-    """Admin REST wrapper — populated by the user-migration script (Task 2.4).
+    """Admin REST wrapper used by the user-migration script (Task 2.4).
 
-    Authenticates via the client_credentials grant against the
-    ``cms-backend`` confidential client declared in the realm export.
+    Two authentication modes:
+
+    * Service account via the ``cms-backend`` confidential client
+      (``client_credentials`` grant). Lighter footprint, requires the
+      service account to be granted ``realm-management`` roles.
+    * Master-realm bootstrap admin via the ``admin-cli`` client
+      (``password`` grant). Heavier privileges, used by the
+      migration script which needs full user-creation rights.
+
+    Prefer ``from_admin_password`` for one-off scripts and the default
+    constructor for long-running back-end code.
     """
 
     def __init__(
@@ -124,8 +133,10 @@ class KeycloakAdminClient:
         server_url: str,
         realm: str,
         client_id: str,
-        client_secret: str,
+        client_secret: str | None = None,
         *,
+        admin_user: str | None = None,
+        admin_password: str | None = None,
         http_client: httpx.AsyncClient | None = None,
         verify_ssl: bool = True,
     ) -> None:
@@ -133,39 +144,165 @@ class KeycloakAdminClient:
         self.realm = realm
         self.client_id = client_id
         self.client_secret = client_secret
+        self.admin_user = admin_user
+        self.admin_password = admin_password
         self._http = http_client
         self._owns_http = http_client is None
         self._verify_ssl = verify_ssl
         self._token: str | None = None
+
+    # ─── factories ──────────────────────────────────────────────
+
+    @classmethod
+    def from_admin_password(
+        cls,
+        *,
+        server_url: str,
+        realm: str,
+        admin_user: str,
+        admin_password: str,
+        http_client: httpx.AsyncClient | None = None,
+        verify_ssl: bool = True,
+    ) -> "KeycloakAdminClient":
+        return cls(
+            server_url=server_url,
+            realm=realm,
+            client_id="admin-cli",
+            admin_user=admin_user,
+            admin_password=admin_password,
+            http_client=http_client,
+            verify_ssl=verify_ssl,
+        )
+
+    # ─── URL helpers ────────────────────────────────────────────
 
     @property
     def admin_base(self) -> str:
         return f"{self.server_url}/admin/realms/{self.realm}"
 
     @property
-    def token_endpoint(self) -> str:
-        return f"{self.server_url}/realms/{self.realm}/protocol/openid-connect/token"
+    def master_token_endpoint(self) -> str:
+        return (
+            f"{self.server_url}/realms/master/protocol/openid-connect/token"
+        )
+
+    @property
+    def realm_token_endpoint(self) -> str:
+        return (
+            f"{self.server_url}/realms/{self.realm}"
+            "/protocol/openid-connect/token"
+        )
+
+    # ─── token + admin operations ───────────────────────────────
 
     async def get_admin_token(self) -> str:
-        """Cache-then-fetch service-account access token."""
+        """Cache-then-fetch an admin access token."""
         if self._token:
             return self._token
 
-        form = {
-            "grant_type": "client_credentials",
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-        }
         http = await self._ensure_http()
-        response = await http.post(self.token_endpoint, data=form, timeout=5)
+        if self.admin_user and self.admin_password:
+            # Master-realm password grant (bootstrap admin path).
+            form = {
+                "grant_type": "password",
+                "client_id": "admin-cli",
+                "username": self.admin_user,
+                "password": self.admin_password,
+            }
+            response = await http.post(
+                self.master_token_endpoint, data=form, timeout=10
+            )
+        else:
+            # Service-account path (cms-backend confidential client).
+            assert self.client_secret, (
+                "client_secret required when admin credentials are absent"
+            )
+            form = {
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+            }
+            response = await http.post(
+                self.realm_token_endpoint, data=form, timeout=10
+            )
+
         response.raise_for_status()
         self._token = str(response.json()["access_token"])
         return self._token
+
+    async def list_realm_roles(self) -> list[dict[str, Any]]:
+        """Return all realm roles in the target realm."""
+        headers = await self._auth_headers()
+        http = await self._ensure_http()
+        response = await http.get(
+            f"{self.admin_base}/roles", headers=headers, timeout=10
+        )
+        response.raise_for_status()
+        roles: list[dict[str, Any]] = response.json()
+        return roles
+
+    async def create_user(self, payload: dict[str, Any]) -> str:
+        """Provision a new user; returns the Keycloak user id.
+
+        Keycloak's create endpoint returns 201 with a `Location` header
+        of the form `/admin/realms/{realm}/users/{id}`. If the realm
+        accepts the ``id`` field on POST (newer versions do), the
+        returned id will match `payload["id"]`.
+        """
+        headers = await self._auth_headers()
+        http = await self._ensure_http()
+        response = await http.post(
+            f"{self.admin_base}/users",
+            json=payload,
+            headers=headers,
+            timeout=15,
+        )
+        response.raise_for_status()
+        location = response.headers.get("location", "")
+        return location.rstrip("/").rsplit("/", 1)[-1] or str(payload.get("id", ""))
+
+    async def assign_realm_roles(
+        self, user_id: str, roles: list[dict[str, Any]]
+    ) -> None:
+        """Assign realm roles to an existing user."""
+        headers = await self._auth_headers()
+        http = await self._ensure_http()
+        response = await http.post(
+            f"{self.admin_base}/users/{user_id}/role-mappings/realm",
+            json=roles,
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+
+    async def send_password_reset(
+        self, user_id: str, *, lifespan_seconds: int = 86400
+    ) -> None:
+        """Trigger Keycloak's ``UPDATE_PASSWORD`` required-action email."""
+        headers = await self._auth_headers()
+        http = await self._ensure_http()
+        response = await http.put(
+            f"{self.admin_base}/users/{user_id}/execute-actions-email",
+            params={"lifespan": lifespan_seconds},
+            json=["UPDATE_PASSWORD"],
+            headers=headers,
+            timeout=15,
+        )
+        response.raise_for_status()
 
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:
             await self._http.aclose()
             self._http = None
+
+    # ─── internals ──────────────────────────────────────────────
+
+    async def _auth_headers(self) -> dict[str, str]:
+        token = await self.get_admin_token()
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
 
     async def _ensure_http(self) -> httpx.AsyncClient:
         if self._http is None:
