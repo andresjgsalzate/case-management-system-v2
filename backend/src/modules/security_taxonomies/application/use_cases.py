@@ -677,8 +677,12 @@ class SecurityTaxonomyUseCases:
     async def _tuic_code_exists(
         self, tenant_id: str | None, tuic_code: str
     ) -> bool:
+        # Only active rows count for uniqueness -- soft-deleted taxonomies
+        # release their tuic_code so it can be reused. Mirrors the partial
+        # unique index uq_taxonomy_tenant_tuic_active (Alembic d9a8c1f6e4b2).
         stmt = select(SecurityTaxonomyModel.id).where(
             SecurityTaxonomyModel.tuic_code == tuic_code,
+            SecurityTaxonomyModel.is_active.is_(True),
         )
         if tenant_id is None:
             stmt = stmt.where(SecurityTaxonomyModel.tenant_id.is_(None))

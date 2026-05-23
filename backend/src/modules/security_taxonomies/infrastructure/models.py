@@ -125,7 +125,16 @@ class SecurityTaxonomyModel(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("tenant_id", "tuic_code", name="uq_taxonomy_tenant_tuic"),
+        # Soft-deleted rows must not occupy the tuic_code slot, so the
+        # uniqueness is enforced via a partial index (see Alembic rev
+        # d9a8c1f6e4b2). Declared here as an Index with the same name
+        # so SQLAlchemy reflection / metadata stay in sync.
+        Index(
+            "uq_taxonomy_tenant_tuic_active",
+            "tenant_id", "tuic_code",
+            unique=True,
+            postgresql_where=text("is_active = TRUE"),
+        ),
         CheckConstraint(
             "default_case_type IN ('event', 'incident')",
             name="ck_taxonomy_default_case_type",
