@@ -1,8 +1,23 @@
 """Pydantic DTOs for the security_taxonomies module."""
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+# Fixed severity/disposition values for the impact context columns.
+# Stored in the Text columns as slugs; the UI maps to human labels.
+# Existing free-text rows that pre-date this constraint are not coerced
+# at read-time -- they round-trip as-is and the picker shows "no
+# seleccionado" until a user re-picks.
+ImpactLevel = Literal[
+    "bajo",
+    "medio",
+    "alto",
+    "critico",
+    "informativo",
+    "falso_positivo",
+]
 
 
 class TaxonomyCreatePayload(BaseModel):
@@ -20,8 +35,8 @@ class TaxonomyCreatePayload(BaseModel):
 
     attack_type: str | None = None
     attack_subtype: str | None = None
-    internal_impact_context: str | None = None
-    external_impact_context: str | None = None
+    internal_impact_context: ImpactLevel | None = None
+    external_impact_context: ImpactLevel | None = None
 
     managed_by_team_id: str | None = None
     default_case_type: str = "event"  # 'event' | 'incident'
@@ -43,8 +58,8 @@ class TaxonomyUpdatePayload(BaseModel):
     parent_id: str | None = None
     attack_type: str | None = None
     attack_subtype: str | None = None
-    internal_impact_context: str | None = None
-    external_impact_context: str | None = None
+    internal_impact_context: ImpactLevel | None = None
+    external_impact_context: ImpactLevel | None = None
     managed_by_team_id: str | None = None
     default_case_type: str | None = None
     requires_ticket: bool | None = None

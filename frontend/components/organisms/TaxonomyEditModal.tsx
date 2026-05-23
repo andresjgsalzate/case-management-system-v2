@@ -23,6 +23,17 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+// Mirrors backend `ImpactLevel` Literal (dtos.py).
+// Tuple of [slug stored in DB, human label rendered in the picker].
+const IMPACT_LEVELS: ReadonlyArray<readonly [string, string]> = [
+  ["bajo", "Bajo"],
+  ["medio", "Medio"],
+  ["alto", "Alto"],
+  ["critico", "Crítico"],
+  ["informativo", "Informativo"],
+  ["falso_positivo", "Falso positivo"],
+];
+
 interface TaxonomyEditModalProps {
   isOpen: boolean;
   /** When set, modal is in edit mode; otherwise create mode. */
@@ -399,24 +410,50 @@ function Step2Classification({ form, setForm }: StepProps) {
         />
       </Field>
       <Field label="Contexto de impacto interno">
-        <textarea
+        <select
           value={form.internal_impact_context}
           onChange={(e) =>
             setForm((f) => ({ ...f, internal_impact_context: e.target.value }))
           }
-          rows={2}
           className="w-full rounded border bg-background p-1 text-sm"
-        />
+        >
+          <option value="">— sin asignar —</option>
+          {IMPACT_LEVELS.map(([slug, label]) => (
+            <option key={slug} value={slug}>
+              {label}
+            </option>
+          ))}
+          {/* Legacy free-text values: surface them as a read-only option so
+              existing rows don't silently lose their value when re-saved. */}
+          {form.internal_impact_context &&
+            !IMPACT_LEVELS.some(([s]) => s === form.internal_impact_context) && (
+              <option value={form.internal_impact_context}>
+                (legacy) {form.internal_impact_context}
+              </option>
+            )}
+        </select>
       </Field>
       <Field label="Contexto de impacto externo">
-        <textarea
+        <select
           value={form.external_impact_context}
           onChange={(e) =>
             setForm((f) => ({ ...f, external_impact_context: e.target.value }))
           }
-          rows={2}
           className="w-full rounded border bg-background p-1 text-sm"
-        />
+        >
+          <option value="">— sin asignar —</option>
+          {IMPACT_LEVELS.map(([slug, label]) => (
+            <option key={slug} value={slug}>
+              {label}
+            </option>
+          ))}
+          {form.external_impact_context &&
+            !IMPACT_LEVELS.some(([s]) => s === form.external_impact_context) && (
+              <option value={form.external_impact_context}>
+                (legacy) {form.external_impact_context}
+              </option>
+            )}
+        </select>
       </Field>
       <Field
         label="MITRE ATT&CK Techniques"
