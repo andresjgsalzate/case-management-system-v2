@@ -225,6 +225,30 @@ async def list_audit_log(
 
 # ── Notifications ────────────────────────────────────────────────────────
 
+@router.get(
+    "/{taxonomy_id}/notifications",
+    response_model=SuccessResponse[list[dict]],
+)
+async def list_notifications(
+    taxonomy_id: str,
+    db: DBSession,
+    current_user: CurrentUser = Read,
+):
+    uc = SecurityTaxonomyUseCases(db=db)
+    notifs = await uc.list_notifications(taxonomy_id)
+    return SuccessResponse.ok([
+        {
+            "id": n.id,
+            "taxonomy_id": n.taxonomy_id,
+            "team_id": n.team_id,
+            "notify_phase": n.notify_phase,
+            "notify_channel": n.notify_channel,
+            "escalation_minutes": n.escalation_minutes,
+        }
+        for n in notifs
+    ])
+
+
 @router.post(
     "/{taxonomy_id}/notifications",
     response_model=SuccessResponse[dict], status_code=201,

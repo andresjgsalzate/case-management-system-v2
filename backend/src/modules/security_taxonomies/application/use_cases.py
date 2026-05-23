@@ -479,6 +479,22 @@ class SecurityTaxonomyUseCases:
 
     # ── WRITE: notifications + catalog mappings sub-ops ──────────────────
 
+    async def list_notifications(
+        self, taxonomy_id: str
+    ) -> list[TaxonomyNotificationModel]:
+        # Ordered by phase then team_id for a deterministic UI render.
+        # Permission is enforced at the router level via the same Read
+        # gate used for the taxonomy detail itself.
+        stmt = (
+            select(TaxonomyNotificationModel)
+            .where(TaxonomyNotificationModel.taxonomy_id == taxonomy_id)
+            .order_by(
+                TaxonomyNotificationModel.notify_phase,
+                TaxonomyNotificationModel.team_id,
+            )
+        )
+        return list((await self.db.execute(stmt)).scalars().all())
+
     async def add_notification(
         self, *, actor, taxonomy_id: str, payload: NotificationCreatePayload
     ) -> TaxonomyNotificationModel:
