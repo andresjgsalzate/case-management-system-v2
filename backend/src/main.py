@@ -57,6 +57,9 @@ from backend.src.modules.n8n_bridge.router import (
     webhook_router as n8n_webhook_router,
     admin_router as n8n_admin_router,
 )
+from backend.src.modules.workflow_change_requests.router import (
+    router as workflow_change_requests_router,
+)
 from backend.src.modules.n8n_bridge.application.jobs import (
     start_n8n_jobs,
     stop_n8n_jobs,
@@ -194,6 +197,7 @@ def create_app() -> FastAPI:
     app.include_router(integrations_admin_router)
     app.include_router(n8n_webhook_router)
     app.include_router(n8n_admin_router)
+    app.include_router(workflow_change_requests_router, prefix="/api/v1")
     app.include_router(operational_router)
     app.include_router(forensic_router)
     app.include_router(alert_reports_router)

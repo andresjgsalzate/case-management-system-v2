@@ -38,6 +38,11 @@ from backend.src.modules.auth.keycloak_client import (
     KeycloakOAuthClient,
     build_authorize_url,
 )
+# Side-effect import: register `UserSessionModel` with the SQLAlchemy
+# Base registry. Task 2.3 stopped using AuthUseCases (which previously
+# pulled the model in transitively) so UserModel's `sessions` relationship
+# would fail to resolve names at first mapper init without this line.
+from backend.src.modules.auth.infrastructure import models as _auth_models  # noqa: F401
 
 
 _bearer = HTTPBearer(auto_error=False)
