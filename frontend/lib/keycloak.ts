@@ -53,11 +53,16 @@ function buildSettings(): UserManagerSettings {
       typeof window !== "undefined"
         ? new WebStorageStateStore({ store: window.localStorage })
         : undefined,
-    // Disable monitorSession + automaticSilentRenew for now — silent
-    // renewal lands in a follow-up; the SPA falls back to re-login when
-    // the access token expires.
     monitorSession: false,
-    automaticSilentRenew: false,
+    // Refresh the access token automatically via the refresh_token
+    // grant (oidc-client-ts uses POST to Keycloak's token endpoint --
+    // no iframe required because we have the refresh_token). Without
+    // this, the access token (Keycloak default: 15 min) expires and
+    // the apiClient 401 handler forces a full /login redirect cycle.
+    automaticSilentRenew: true,
+    // Fire the renewal 60s before expiry so the next API call always
+    // carries a valid token even under clock skew.
+    accessTokenExpiringNotificationTimeInSeconds: 60,
   };
 }
 
@@ -66,6 +71,28 @@ let instance: UserManager | null = null;
 export function getUserManager(): UserManager {
   if (!instance) {
     instance = new UserManager(buildSettings());
+    // Keep localStorage `access_token` / `refresh_token` (read by
+    // apiClient.ts) in sync with whatever oidc-client-ts has cached.
+    // Fires on initial sign-in AND on every silent renew, so the
+    // axios interceptor always reads the freshest token.
+    instance.events.addUserLoaded((user) => {
+      if (typeof window === "undefined") return;
+      if (user.access_token) {
+        window.localStorage.setItem("access_token", user.access_token);
+      }
+      if (user.refresh_token) {
+        window.localStorage.setItem("refresh_token", user.refresh_token);
+      }
+    });
+    // If a scheduled silent renew fails (refresh token expired, IdP
+    // unreachable), fall back to a clean /login bounce. Without this
+    // the user is left with a stale token and every API call 401s.
+    instance.events.addSilentRenewError(() => {
+      if (typeof window === "undefined") return;
+      window.localStorage.removeItem("access_token");
+      window.localStorage.removeItem("refresh_token");
+      window.location.href = "/login";
+    });
   }
   return instance;
 }

@@ -1,5 +1,7 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
 
+import { getUserManager } from "@/lib/keycloak";
+
 // nginx terminates TLS at cms.local:443 and routes /api/* directly to
 // the backend (FastAPI), so the browser can target /api/v1/* without
 // going through the legacy Next.js proxy under /api/proxy. The proxy
@@ -22,11 +24,6 @@ function setAccessToken(token: string): void {
 function clearTokens(): void {
   localStorage.removeItem("access_token");
   localStorage.removeItem("refresh_token");
-}
-
-function getRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("refresh_token");
 }
 
 export function getCurrentUserId(): string | null {
@@ -126,18 +123,18 @@ apiClient.interceptors.response.use(
     originalRequest._retry = true;
     isRefreshing = true;
 
-    const refreshToken = getRefreshToken();
-    if (!refreshToken) {
-      clearTokens();
-      window.location.href = "/login";
-      return Promise.reject(error);
-    }
-
+    // Ask oidc-client-ts to refresh via Keycloak's token endpoint
+    // (uses the refresh_token grant, no iframe). The userManager's
+    // `addUserLoaded` handler mirrors the new tokens to localStorage.
+    // If the scheduled silent renew already ran in the background,
+    // signinSilent is a near no-op and resolves quickly.
     try {
-      const { data } = await axios.post(`${BASE_URL}/auth/refresh`, {
-        refresh_token: refreshToken,
-      });
-      const newToken: string = data.data.access_token;
+      const um = getUserManager();
+      const user = await um.signinSilent();
+      const newToken = user?.access_token;
+      if (!newToken) {
+        throw new Error("signinSilent returned no access_token");
+      }
       setAccessToken(newToken);
       processQueue(null, newToken);
       originalRequest.headers = {
@@ -148,6 +145,13 @@ apiClient.interceptors.response.use(
     } catch (refreshError) {
       processQueue(refreshError, null);
       clearTokens();
+      // Best-effort clear of oidc-client-ts's own store too, so the
+      // next /login auto-redirect starts from a clean slate.
+      try {
+        await getUserManager().removeUser();
+      } catch {
+        // ignore -- we're already on the failure path
+      }
       window.location.href = "/login";
       return Promise.reject(refreshError);
     } finally {
