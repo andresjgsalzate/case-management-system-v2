@@ -28,7 +28,10 @@ export function WorkflowChangeRequestReviewModal({ wcr, onClose }: Props) {
   const [implWorkflowUrl, setImplWorkflowUrl] = useState("");
   const [error, setError] = useState("");
 
-  // Reset local state every time a different WCR opens.
+  // Reset local state only when a different WCR opens (id changes),
+  // not on every refetch -- otherwise a successful transition would
+  // wipe the reviewer's in-flight notes.
+  const wcrId = wcr?.id;
   useEffect(() => {
     if (wcr) {
       setReviewNotes(wcr.review_notes ?? "");
@@ -36,7 +39,10 @@ export function WorkflowChangeRequestReviewModal({ wcr, onClose }: Props) {
       setImplWorkflowUrl("");
       setError("");
     }
-  }, [wcr?.id]);
+    // We intentionally depend on the id, not the whole wcr object --
+    // refetches keep the same id and shouldn't clobber the form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wcrId]);
 
   if (!wcr) return null;
 
