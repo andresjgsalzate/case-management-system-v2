@@ -109,7 +109,7 @@ export function TaxonomyDetailPanel({
                 <span className="text-sm font-medium">{parent.name}</span>
               </div>
               {parent.description ? (
-                <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
+                <p className="mt-0.5 text-xs text-muted-foreground whitespace-pre-wrap">
                   {parent.description}
                 </p>
               ) : null}
