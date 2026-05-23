@@ -32,7 +32,7 @@ SOURCE_URL = (
     "enterprise-attack/enterprise-attack.json"
 )
 
-CACHE_KEY = "mitre:enterprise:techniques:v1"
+CACHE_KEY = "mitre:enterprise:techniques:v2"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 
 BUNDLED_SNAPSHOT = (
@@ -78,8 +78,23 @@ def _project_bundle(bundle: dict) -> list[dict[str, Any]]:
                 "name": obj.get("name", ""),
                 "tactics": _extract_tactics(obj),
                 "is_subtechnique": bool(obj.get("x_mitre_is_subtechnique")),
+                # Filled in below once we have the full id -> name map.
+                "parent_id": None,
+                "parent_name": None,
             }
         )
+
+    # MITRE encodes the parent->child relation in the dotted-id convention
+    # (T1003 -> T1003.001). Materialise it as an explicit field so callers
+    # don't have to re-derive it (and so the picker can show a hierarchy
+    # without an extra lookup roundtrip).
+    name_by_id = {t["id"]: t["name"] for t in out}
+    for t in out:
+        if t["is_subtechnique"] and "." in t["id"]:
+            pid = t["id"].split(".", 1)[0]
+            t["parent_id"] = pid
+            t["parent_name"] = name_by_id.get(pid)
+
     out.sort(key=lambda r: (r["id"].split(".")[0], r["id"]))
     return out
 

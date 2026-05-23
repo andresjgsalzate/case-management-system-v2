@@ -154,6 +154,18 @@ export function MitreTechniquePickerModal({
                             </span>
                           )}
                         </div>
+                        {t.is_subtechnique && t.parent_id && (
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            <span aria-hidden>↳ </span>
+                            <code className="font-mono">{t.parent_id}</code>
+                            {t.parent_name && (
+                              <>
+                                <span className="mx-1">·</span>
+                                {t.parent_name}
+                              </>
+                            )}
+                          </p>
+                        )}
                         {t.tactics.length > 0 && (
                           <div className="mt-0.5 flex flex-wrap gap-1">
                             {t.tactics.map((tac) => (

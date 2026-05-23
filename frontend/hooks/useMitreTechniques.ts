@@ -11,6 +11,10 @@ export interface MitreTechnique {
   name: string;
   tactics: string[];
   is_subtechnique: boolean;
+  // Populated for sub-techniques (e.g. T1003.001 -> parent T1003
+  // "OS Credential Dumping"). Null for top-level techniques.
+  parent_id: string | null;
+  parent_name: string | null;
 }
 
 export function useMitreTechniqueSearch(query: string, enabled = true) {
