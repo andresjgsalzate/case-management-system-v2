@@ -1,8 +1,13 @@
 "use client";
 
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { Button } from "@/components/atoms/Button";
+import { MitreTechniquePickerModal } from "@/components/organisms/MitreTechniquePickerModal";
+import {
+  useMitreTechniquesByIds,
+} from "@/hooks/useMitreTechniques";
 import { useN8nWorkflows } from "@/hooks/useN8nWorkflows";
 import {
   useCreateTaxonomy,
@@ -46,7 +51,7 @@ type FormState = {
   triage_timeout_seconds: number;
   tlp_default: TLP;
   prioritization_formula_id: string;
-  mitre_techniques_csv: string;
+  mitre_techniques: string[];
 };
 
 const EMPTY_STATE: FormState = {
@@ -67,7 +72,7 @@ const EMPTY_STATE: FormState = {
   triage_timeout_seconds: 300,
   tlp_default: "amber",
   prioritization_formula_id: "",
-  mitre_techniques_csv: "",
+  mitre_techniques: [],
 };
 
 export function TaxonomyEditModal({
@@ -106,7 +111,7 @@ export function TaxonomyEditModal({
         triage_timeout_seconds: existing.triage_timeout_seconds,
         tlp_default: existing.tlp_default,
         prioritization_formula_id: existing.prioritization_formula_id ?? "",
-        mitre_techniques_csv: existing.mitre_techniques.join(", "),
+        mitre_techniques: existing.mitre_techniques ?? [],
       });
     } else {
       setForm(EMPTY_STATE);
@@ -119,8 +124,7 @@ export function TaxonomyEditModal({
   if (!isOpen) return null;
 
   async function handleSave() {
-    const techniques = form.mitre_techniques_csv
-      .split(",").map((t) => t.trim()).filter(Boolean);
+    const techniques = form.mitre_techniques;
 
     if (existing) {
       const payload: UpdateTaxonomyPayload = {
@@ -416,15 +420,13 @@ function Step2Classification({ form, setForm }: StepProps) {
       </Field>
       <Field
         label="MITRE ATT&CK Techniques"
-        hint="Lista separada por comas: T1486, T1490, T1059.001"
+        hint="Selecciona desde el catálogo MITRE — no se aceptan IDs libres"
       >
-        <input
-          type="text"
-          value={form.mitre_techniques_csv}
-          onChange={(e) =>
-            setForm((f) => ({ ...f, mitre_techniques_csv: e.target.value }))
+        <MitreTechniqueChips
+          selected={form.mitre_techniques}
+          onChange={(ids) =>
+            setForm((f) => ({ ...f, mitre_techniques: ids }))
           }
-          className="w-full rounded border bg-background p-1 text-sm font-mono"
         />
       </Field>
     </>
@@ -608,4 +610,73 @@ function validateForm(form: FormState, isCreate: boolean): {
       3: step1Ok,
     },
   };
+}
+
+// ─── MITRE technique chips + picker trigger ───────────────────
+function MitreTechniqueChips({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const { data: byId = {} } = useMitreTechniquesByIds(selected);
+
+  function removeId(id: string) {
+    onChange(selected.filter((x) => x !== id));
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {selected.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          Sin técnicas asociadas.
+        </p>
+      )}
+      {selected.map((id) => {
+        const t = byId[id];
+        return (
+          <span
+            key={id}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-xs"
+            title={t?.name ?? id}
+          >
+            <code className="font-mono text-[10px] text-muted-foreground">
+              {id}
+            </code>
+            {t?.name && (
+              <span className="truncate max-w-[160px]">{t.name}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => removeId(id)}
+              className="rounded p-0.5 hover:bg-destructive/10 hover:text-destructive"
+              aria-label={`Quitar ${id}`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        );
+      })}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => setPickerOpen(true)}
+      >
+        <Plus className="h-3.5 w-3.5 mr-1" />
+        Agregar
+      </Button>
+      <MitreTechniquePickerModal
+        open={pickerOpen}
+        initialSelected={selected}
+        onClose={() => setPickerOpen(false)}
+        onSave={(ids) => {
+          onChange(ids);
+          setPickerOpen(false);
+        }}
+      />
+    </div>
+  );
 }
