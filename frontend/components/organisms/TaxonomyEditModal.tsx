@@ -34,6 +34,26 @@ const IMPACT_LEVELS: ReadonlyArray<readonly [string, string]> = [
   ["falso_positivo", "Falso positivo"],
 ];
 
+/**
+ * Convert a free-form name into the canonical TUIC code shape used by
+ * the seed and the existing global taxonomies (UPPER-CASE, ASCII-only,
+ * hyphen-separated, max 50 chars).
+ *
+ * Examples:
+ *   "Ransomware LockBit"      -> "RANSOMWARE-LOCKBIT"
+ *   "Ingeniería Social"       -> "INGENIERIA-SOCIAL"
+ *   "Phishing - SMS  / Vish." -> "PHISHING-SMS-VISH"
+ */
+function slugifyTuic(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // strip diacritics
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
+}
+
 interface TaxonomyEditModalProps {
   isOpen: boolean;
   /** When set, modal is in edit mode; otherwise create mode. */
@@ -95,6 +115,10 @@ export function TaxonomyEditModal({
 }: TaxonomyEditModalProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [form, setForm] = useState<FormState>(EMPTY_STATE);
+  // Tracks whether the user manually edited the TUIC field. Once true,
+  // typing in `name` no longer auto-overrides the code (avoids stomping
+  // a deliberate override every keystroke).
+  const [tuicTouched, setTuicTouched] = useState(false);
 
   const createMutation = useCreateTaxonomy();
   const updateMutation = useUpdateTaxonomy();
@@ -128,6 +152,10 @@ export function TaxonomyEditModal({
       setForm(EMPTY_STATE);
     }
     setStep(1);
+    // Edit mode: the existing tuic_code is canonical, treat it as
+    // "user-provided" so we never touch it. Create mode: start in
+    // auto-sync mode.
+    setTuicTouched(!!existing);
   }, [isOpen, existing]);
 
   const validation = useMemo(() => validateForm(form, !existing), [form, existing]);
@@ -219,6 +247,7 @@ export function TaxonomyEditModal({
             <Step1Identity
               form={form} setForm={setForm} editing={!!existing}
               parentOptions={parentOptions}
+              tuicTouched={tuicTouched} setTuicTouched={setTuicTouched}
             />
           ) : step === 2 ? (
             <Step2Classification form={form} setForm={setForm} />
@@ -325,34 +354,54 @@ interface StepProps {
 
 function Step1Identity({
   form, setForm, editing, parentOptions,
+  tuicTouched, setTuicTouched,
 }: StepProps & {
   editing: boolean;
   parentOptions: Array<{ id: string; tuic_code: string; name: string }>;
+  tuicTouched: boolean;
+  setTuicTouched: (v: boolean) => void;
 }) {
   return (
     <>
+      <Field label="Nombre" required>
+        <input
+          type="text"
+          value={form.name}
+          onChange={(e) => {
+            const name = e.target.value;
+            setForm((f) => ({
+              ...f,
+              name,
+              // Mirror name -> tuic_code while the user hasn't typed
+              // anything in the TUIC field manually.
+              tuic_code:
+                !editing && !tuicTouched ? slugifyTuic(name) : f.tuic_code,
+            }));
+          }}
+          className="w-full rounded border bg-background p-1 text-sm"
+        />
+      </Field>
       <Field
         label="TUIC Code"
         required
-        hint={editing ? "El código es inmutable después de crear." : undefined}
+        hint={
+          editing
+            ? "El código es inmutable después de crear."
+            : tuicTouched
+              ? "Edición manual — ya no se sincroniza con el nombre."
+              : "Generado automáticamente desde el nombre. Editalo para personalizar."
+        }
       >
         <input
           type="text"
           value={form.tuic_code}
           disabled={editing}
-          onChange={(e) =>
-            setForm((f) => ({ ...f, tuic_code: e.target.value.toUpperCase() }))
-          }
+          onChange={(e) => {
+            setTuicTouched(true);
+            setForm((f) => ({ ...f, tuic_code: e.target.value.toUpperCase() }));
+          }}
           className="w-full rounded border bg-background p-1 text-sm font-mono"
           placeholder="RANSOM-LOCKBIT"
-        />
-      </Field>
-      <Field label="Nombre" required>
-        <input
-          type="text"
-          value={form.name}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          className="w-full rounded border bg-background p-1 text-sm"
         />
       </Field>
       <Field label="Descripción">
