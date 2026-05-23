@@ -12,6 +12,13 @@ import { usePermissionGuard } from "@/hooks/usePermissionGuard";
  * deep links like /n8n#/workflow/123 land directly on the workflow.
  * n8n itself does the in-iframe routing once the hash arrives.
  *
+ * Layout: `-m-6` cancels the dashboard layout's `<main>` padding so the
+ * iframe runs flush. Width compensates for the cancelled padding;
+ * height fills viewport minus the CMS header (3.5rem). Back/full-screen
+ * /badge actions live in the shared `<Header />` (gated by
+ * `pathname === "/n8n"`) so the editor sits under a single chrome bar
+ * instead of two.
+ *
  * Permission gate: `usePermissionGuard` redirects to /cases if the user
  * lacks `n8n_editor:access`. Phase 4 swaps the redirect for a 403 page
  * with a "File a Workflow Change Request" call to action.
@@ -34,7 +41,8 @@ export default function N8nEditorPage() {
   return (
     <iframe
       src={iframeSrc}
-      className="w-full h-[calc(100vh-3.5rem)] border-0"
+      className="-m-6 block border-0"
+      style={{ width: "calc(100% + 3rem)", height: "calc(100vh - 3.5rem)" }}
       sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
       title="Editor n8n"
     />
