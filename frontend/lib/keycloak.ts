@@ -35,7 +35,13 @@ function buildSettings(): UserManagerSettings {
     redirect_uri: `${origin}/auth/callback`,
     post_logout_redirect_uri: `${origin}/login`,
     response_type: "code",
-    scope: "openid profile email",
+    // `profile` and `email` aren't defined as separate client scopes in
+    // our realm import -- Keycloak only auto-creates them on UI realm
+    // creation, not via realm-export.json. The email / realm_access.roles
+    // / aud claims arrive anyway through inline protocolMappers on the
+    // cms-frontend client (see keycloak/realm-export.json), so requesting
+    // `openid` alone is enough.
+    scope: "openid",
     // No userinfo round-trip — id_token already carries email + roles.
     loadUserInfo: false,
     // Tokens land in localStorage so apiClient.ts (which reads
