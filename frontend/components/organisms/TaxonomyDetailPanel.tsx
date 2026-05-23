@@ -7,10 +7,15 @@ import { TLPBadge } from "@/components/molecules/TLPBadge";
 import { TaxonomyAuditLogModal } from "@/components/organisms/TaxonomyAuditLogModal";
 import { TaxonomyCatalogMappingsEditor } from "@/components/organisms/TaxonomyCatalogMappingsEditor";
 import { TaxonomyDriftWarning } from "@/components/organisms/TaxonomyDriftWarning";
+import { useN8nWorkflows } from "@/hooks/useN8nWorkflows";
+import { usePrioritizationFormulas } from "@/hooks/usePrioritization";
 import {
   useSoftDeleteTaxonomy,
   useTaxonomyDetail,
 } from "@/hooks/useSecurityTaxonomies";
+import { useTaxonomyNotifications } from "@/hooks/useTaxonomyNotifications";
+import { useTeams } from "@/hooks/useTeams";
+import { channelLabel, phaseLabel } from "@/lib/notification-labels";
 import type { SecurityTaxonomy } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -189,6 +194,8 @@ export function TaxonomyDetailPanel({
 
         <DetailGrid taxonomy={taxonomy} />
 
+        <NotificationsView taxonomyId={taxonomy.id} />
+
         <TaxonomyCatalogMappingsEditor taxonomyId={taxonomy.id} />
 
         {showDeleteConfirm ? (
@@ -254,11 +261,29 @@ export function TaxonomyDetailPanel({
 // ── Detail field grid ───────────────────────────────────────────────────
 
 function DetailGrid({ taxonomy }: { taxonomy: SecurityTaxonomy }) {
+  // Resolve UUIDs to human names. All three hooks share their cache
+  // with the editor / settings, so in the common case there is no
+  // extra round trip. Fallback: if the lookup misses (deleted record,
+  // cross-tenant, hook still loading), show the raw UUID instead of
+  // "—" so the operator doesn't lose the reference entirely.
+  const { data: teams } = useTeams();
+  const { data: workflows } = useN8nWorkflows();
+  const { data: formulas } = usePrioritizationFormulas();
+
+  const labelFor = <T extends { id: string; name: string }>(
+    items: T[] | undefined, id: string | null,
+  ): string =>
+    id ? (items?.find((x) => x.id === id)?.name ?? id) : "—";
+
+  const teamLabel = labelFor(teams, taxonomy.managed_by_team_id);
+  const workflowLabel = labelFor(workflows, taxonomy.delegated_workflow_id);
+  const formulaLabel = labelFor(formulas, taxonomy.prioritization_formula_id);
+
   const fields: Array<[string, React.ReactNode]> = [
     ["Tipo de caso", taxonomy.default_case_type],
     ["Requiere ticket", taxonomy.requires_ticket ? "Sí" : "No"],
     ["Modo de triage", taxonomy.triage_mode],
-    ["Workflow delegado", taxonomy.delegated_workflow_id ?? "—"],
+    ["Workflow delegado", workflowLabel],
     ["Timeout triage (seg)", String(taxonomy.triage_timeout_seconds)],
     ["TLP default", taxonomy.tlp_default],
     ["Tipo de ataque", taxonomy.attack_type ?? "—"],
@@ -271,11 +296,8 @@ function DetailGrid({ taxonomy }: { taxonomy: SecurityTaxonomy }) {
       "Impacto externo",
       taxonomy.external_impact_context ?? "—",
     ],
-    ["Equipo responsable", taxonomy.managed_by_team_id ?? "—"],
-    [
-      "Fórmula priorización",
-      taxonomy.prioritization_formula_id ?? "—",
-    ],
+    ["Equipo responsable", teamLabel],
+    ["Fórmula priorización", formulaLabel],
     [
       "MITRE techniques",
       taxonomy.mitre_techniques.length > 0
@@ -299,6 +321,60 @@ function DetailGrid({ taxonomy }: { taxonomy: SecurityTaxonomy }) {
           </div>
         ))}
       </dl>
+    </section>
+  );
+}
+
+// ── Notifications read-only view ────────────────────────────────────────
+
+function NotificationsView({ taxonomyId }: { taxonomyId: string }) {
+  const { data: notifications, isLoading } = useTaxonomyNotifications(taxonomyId);
+  const { data: teams } = useTeams();
+
+  const teamName = (id: string): string =>
+    teams?.find((t) => t.id === id)?.name ?? id;
+
+  return (
+    <section>
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Notificaciones por equipo
+      </h3>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Cargando…</p>
+      ) : notifications && notifications.length > 0 ? (
+        <ul className="divide-y rounded border">
+          {notifications.map((n) => (
+            <li key={n.id} className="px-2 py-1.5 text-xs">
+              <p className="font-medium">{teamName(n.team_id)}</p>
+              <p className="mt-0.5 text-muted-foreground">
+                <span>Fase: </span>
+                <span className="text-foreground">
+                  {phaseLabel(n.notify_phase)}
+                </span>
+                <span className="mx-2">·</span>
+                <span>Canal: </span>
+                <span className="text-foreground">
+                  {channelLabel(n.notify_channel)}
+                </span>
+                {n.escalation_minutes ? (
+                  <>
+                    <span className="mx-2">·</span>
+                    <span>Escalación: </span>
+                    <span className="text-foreground">
+                      {n.escalation_minutes} min
+                    </span>
+                  </>
+                ) : null}
+              </p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Sin reglas de notificación. Para agregar, usá{" "}
+          <span className="font-medium">Editar → Operación</span>.
+        </p>
+      )}
     </section>
   );
 }

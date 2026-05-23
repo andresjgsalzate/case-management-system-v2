@@ -19,6 +19,12 @@ import {
   useTaxonomyNotifications,
 } from "@/hooks/useTaxonomyNotifications";
 import { useTeams } from "@/hooks/useTeams";
+import {
+  NOTIFY_CHANNELS,
+  NOTIFY_PHASES,
+  channelLabel,
+  phaseLabel,
+} from "@/lib/notification-labels";
 import type {
   CreateTaxonomyPayload,
   NotifyChannel,
@@ -40,23 +46,6 @@ const IMPACT_LEVELS: ReadonlyArray<readonly [string, string]> = [
   ["critico", "Crítico"],
   ["informativo", "Informativo"],
   ["falso_positivo", "Falso positivo"],
-];
-
-// Notification phase + channel labels. Slugs mirror the backend
-// CHECK constraint (taxonomy_notifications.notify_phase / notify_channel).
-const NOTIFY_PHASES: ReadonlyArray<readonly [NotifyPhase, string]> = [
-  ["triage", "Triage"],
-  ["created", "Creado"],
-  ["critical_priority", "Prioridad crítica"],
-  ["sla_breach", "SLA vencido"],
-  ["resolved", "Resuelto"],
-  ["promoted", "Promovido"],
-];
-const NOTIFY_CHANNELS: ReadonlyArray<readonly [NotifyChannel, string]> = [
-  ["email", "Email"],
-  ["chat", "Chat"],
-  ["sms", "SMS"],
-  ["all", "Todos"],
 ];
 
 // TLP (Traffic Light Protocol) colour conventions per FIRST.org spec.
@@ -849,14 +838,8 @@ function NotificationsManager({
     return (id: string) => m.get(id) ?? id;
   }, [teams]);
 
-  const phaseLabel = useMemo(() => {
-    const m = new Map<string, string>(NOTIFY_PHASES.map(([k, v]) => [k, v]));
-    return (k: string) => m.get(k) ?? k;
-  }, []);
-  const channelLabel = useMemo(() => {
-    const m = new Map<string, string>(NOTIFY_CHANNELS.map(([k, v]) => [k, v]));
-    return (k: string) => m.get(k) ?? k;
-  }, []);
+  // phaseLabel + channelLabel imported from shared lib so the same
+  // slug<->label mapping powers the detail panel's read-only view.
 
   async function submit() {
     if (!draft.team_id) return;
