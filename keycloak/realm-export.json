@@ -19,7 +19,6 @@
   "maxDeltaTimeSeconds": 43200,
   "failureFactor": 5,
 
-  "_comment_session": "Token lifespans tuned for dev. Production should shorten access token TTL (e.g. 5 min) and rely on refresh.",
   "accessTokenLifespan": 900,
   "accessTokenLifespanForImplicitFlow": 900,
   "ssoSessionIdleTimeout": 28800,
@@ -27,7 +26,6 @@
   "offlineSessionIdleTimeout": 2592000,
 
   "roles": {
-    "_comment": "Realm roles mirror the CMS role hierarchy; CMS resolves the highest matching role via realm_access.roles in the JWT.",
     "realm": [
       { "name": "super_admin", "description": "Global access to all tenants and admin operations" },
       { "name": "admin",       "description": "Tenant-scoped administrator" },
@@ -76,7 +74,6 @@
 
   "clients": [
     {
-      "_comment": "Public client for the Next.js frontend. Authorization Code + PKCE only.",
       "clientId": "cms-frontend",
       "name": "CMS Frontend",
       "enabled": true,
@@ -106,7 +103,6 @@
       ]
     },
     {
-      "_comment": "Confidential client reserved for backend → Keycloak admin API calls (user provisioning). Optional v1; secret can be rotated via UI.",
       "clientId": "cms-backend",
       "name": "CMS Backend (service)",
       "enabled": true,
@@ -127,7 +123,6 @@
       ]
     },
     {
-      "_comment": "Confidential client used by oauth2-proxy in front of n8n. The 'secret' below MUST match OAUTH2_PROXY_CLIENT_SECRET in the .env consumed by docker-compose. Rotate together.",
       "clientId": "oauth2-proxy",
       "name": "n8n Front Proxy",
       "enabled": true,
