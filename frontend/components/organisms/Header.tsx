@@ -67,20 +67,28 @@ export function Header() {
   }, []);
 
   async function handleLogout() {
-    // Clear local state first so the user is logged out even if the
-    // Keycloak round-trip fails (network blip, IdP down).
-    logout();
+    const um = getUserManager();
+    // Grab the id_token BEFORE wiping local state. Keycloak >=18
+    // silently ignores post_logout_redirect_uri unless id_token_hint
+    // matches an active session -- without it the user lands on a
+    // generic "logged out" page (or worse, gets re-logged in by the
+    // /login auto-redirect because the SSO cookie survived).
+    const oidcUser = await um.getUser().catch(() => null);
+
     try {
-      // Terminates the Keycloak SSO session and redirects to the
-      // `post_logout_redirect_uri` configured on the UserManager
-      // (/login). Without this step the user lands on /login but
-      // Keycloak still has a session, so auto-redirect silently
-      // logs them right back in.
-      await getUserManager().signoutRedirect();
+      await um.signoutRedirect({
+        id_token_hint: oidcUser?.id_token,
+        post_logout_redirect_uri: `${window.location.origin}/login`,
+      });
+      // Browser navigates away -- nothing below runs on success.
     } catch {
-      // Fallback: stay local. Auto-redirect on /login will hit
-      // Keycloak which may or may not have a session; the user can
-      // explicitly use ?prompt=login.
+      // Fallback path: IdP unreachable or signoutRedirect threw.
+      // Clear both stores and fall back to /login locally; the
+      // user can re-auth (and Keycloak's session, if still alive,
+      // will SSO them back in -- acceptable degradation when the
+      // IdP can't process the front-channel logout).
+      await um.removeUser().catch(() => {});
+      logout();
       router.push("/login");
     }
   }
