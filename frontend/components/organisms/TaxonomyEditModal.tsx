@@ -13,6 +13,7 @@ import {
   useCreateTaxonomy,
   useUpdateTaxonomy,
 } from "@/hooks/useSecurityTaxonomies";
+import { useTeams } from "@/hooks/useTeams";
 import type {
   CreateTaxonomyPayload,
   SecurityTaxonomy,
@@ -32,6 +33,30 @@ const IMPACT_LEVELS: ReadonlyArray<readonly [string, string]> = [
   ["critico", "Crítico"],
   ["informativo", "Informativo"],
   ["falso_positivo", "Falso positivo"],
+];
+
+// TLP (Traffic Light Protocol) colour conventions per FIRST.org spec.
+// Hex values match the swatches users see on threat-intel reports so
+// they're recognisable at a glance.
+const TLP_LEVELS: ReadonlyArray<{
+  value: TLP; label: string; swatch: string; hint: string;
+}> = [
+  {
+    value: "white", label: "WHITE", swatch: "#FFFFFF",
+    hint: "Información de difusión libre (publicable).",
+  },
+  {
+    value: "green", label: "GREEN", swatch: "#33FF00",
+    hint: "Compartible con la comunidad / partners de confianza.",
+  },
+  {
+    value: "amber", label: "AMBER", swatch: "#FFC000",
+    hint: "Solo organización + clientes con necesidad de saber.",
+  },
+  {
+    value: "red", label: "RED", swatch: "#FF2B2B",
+    hint: "Estrictamente los destinatarios presentes en la reunión.",
+  },
 ];
 
 /**
@@ -59,7 +84,10 @@ interface TaxonomyEditModalProps {
   /** When set, modal is in edit mode; otherwise create mode. */
   existing?: SecurityTaxonomy | null;
   /** Parent taxonomy options (for parent_id picker — typically the tree flattened). */
-  parentOptions?: Array<{ id: string; tuic_code: string; name: string }>;
+  parentOptions?: Array<{
+    id: string; tuic_code: string; name: string;
+    description: string | null;
+  }>;
   onClose: () => void;
   onSaved?: (taxonomy: SecurityTaxonomy) => void;
 }
@@ -119,6 +147,9 @@ export function TaxonomyEditModal({
   // typing in `name` no longer auto-overrides the code (avoids stomping
   // a deliberate override every keystroke).
   const [tuicTouched, setTuicTouched] = useState(false);
+  // Same pattern for the description: child taxonomies inherit their
+  // parent's description by default, but a manual edit pins it.
+  const [descriptionTouched, setDescriptionTouched] = useState(false);
 
   const createMutation = useCreateTaxonomy();
   const updateMutation = useUpdateTaxonomy();
@@ -156,6 +187,9 @@ export function TaxonomyEditModal({
     // "user-provided" so we never touch it. Create mode: start in
     // auto-sync mode.
     setTuicTouched(!!existing);
+    // Same for description: in edit mode never auto-sync; in create
+    // mode start untouched so picking a parent fills it in.
+    setDescriptionTouched(!!existing);
   }, [isOpen, existing]);
 
   const validation = useMemo(() => validateForm(form, !existing), [form, existing]);
@@ -165,52 +199,60 @@ export function TaxonomyEditModal({
   async function handleSave() {
     const techniques = form.mitre_techniques;
 
-    if (existing) {
-      const payload: UpdateTaxonomyPayload = {
-        name: form.name,
-        description: form.description || null,
-        parent_id: form.parent_id || null,
-        attack_type: form.attack_type || null,
-        attack_subtype: form.attack_subtype || null,
-        internal_impact_context: form.internal_impact_context || null,
-        external_impact_context: form.external_impact_context || null,
-        managed_by_team_id: form.managed_by_team_id || null,
-        default_case_type: form.default_case_type,
-        requires_ticket: form.requires_ticket,
-        triage_mode: form.triage_mode,
-        delegated_workflow_id: form.delegated_workflow_id || null,
-        triage_timeout_seconds: form.triage_timeout_seconds,
-        tlp_default: form.tlp_default,
-        prioritization_formula_id: form.prioritization_formula_id || null,
-        mitre_techniques: techniques,
-      };
-      const updated = await updateMutation.mutateAsync({ id: existing.id, payload });
-      onSaved?.(updated);
-    } else {
-      const payload: CreateTaxonomyPayload = {
-        tenant_id: form.tenant_id,
-        tuic_code: form.tuic_code,
-        name: form.name,
-        description: form.description || null,
-        parent_id: form.parent_id || null,
-        attack_type: form.attack_type || null,
-        attack_subtype: form.attack_subtype || null,
-        internal_impact_context: form.internal_impact_context || null,
-        external_impact_context: form.external_impact_context || null,
-        managed_by_team_id: form.managed_by_team_id || null,
-        default_case_type: form.default_case_type,
-        requires_ticket: form.requires_ticket,
-        triage_mode: form.triage_mode,
-        delegated_workflow_id: form.delegated_workflow_id || null,
-        triage_timeout_seconds: form.triage_timeout_seconds,
-        tlp_default: form.tlp_default,
-        prioritization_formula_id: form.prioritization_formula_id || null,
-        mitre_techniques: techniques,
-      };
-      const created = await createMutation.mutateAsync(payload);
-      onSaved?.(created);
+    // Catch so the Next.js unhandled-rejection overlay doesn't pop on
+    // expected validation failures (dup tuic_code, missing parent, etc).
+    // The error stays on `mutation.error` and is rendered inline as a
+    // red message below the form (see the JSX block above the footer).
+    try {
+      if (existing) {
+        const payload: UpdateTaxonomyPayload = {
+          name: form.name,
+          description: form.description || null,
+          parent_id: form.parent_id || null,
+          attack_type: form.attack_type || null,
+          attack_subtype: form.attack_subtype || null,
+          internal_impact_context: form.internal_impact_context || null,
+          external_impact_context: form.external_impact_context || null,
+          managed_by_team_id: form.managed_by_team_id || null,
+          default_case_type: form.default_case_type,
+          requires_ticket: form.requires_ticket,
+          triage_mode: form.triage_mode,
+          delegated_workflow_id: form.delegated_workflow_id || null,
+          triage_timeout_seconds: form.triage_timeout_seconds,
+          tlp_default: form.tlp_default,
+          prioritization_formula_id: form.prioritization_formula_id || null,
+          mitre_techniques: techniques,
+        };
+        const updated = await updateMutation.mutateAsync({ id: existing.id, payload });
+        onSaved?.(updated);
+      } else {
+        const payload: CreateTaxonomyPayload = {
+          tenant_id: form.tenant_id,
+          tuic_code: form.tuic_code,
+          name: form.name,
+          description: form.description || null,
+          parent_id: form.parent_id || null,
+          attack_type: form.attack_type || null,
+          attack_subtype: form.attack_subtype || null,
+          internal_impact_context: form.internal_impact_context || null,
+          external_impact_context: form.external_impact_context || null,
+          managed_by_team_id: form.managed_by_team_id || null,
+          default_case_type: form.default_case_type,
+          requires_ticket: form.requires_ticket,
+          triage_mode: form.triage_mode,
+          delegated_workflow_id: form.delegated_workflow_id || null,
+          triage_timeout_seconds: form.triage_timeout_seconds,
+          tlp_default: form.tlp_default,
+          prioritization_formula_id: form.prioritization_formula_id || null,
+          mitre_techniques: techniques,
+        };
+        const created = await createMutation.mutateAsync(payload);
+        onSaved?.(created);
+      }
+      onClose();
+    } catch {
+      // Intentional: mutation.error already carries the surfaced message.
     }
-    onClose();
   }
 
   return (
@@ -248,6 +290,8 @@ export function TaxonomyEditModal({
               form={form} setForm={setForm} editing={!!existing}
               parentOptions={parentOptions}
               tuicTouched={tuicTouched} setTuicTouched={setTuicTouched}
+              descriptionTouched={descriptionTouched}
+              setDescriptionTouched={setDescriptionTouched}
             />
           ) : step === 2 ? (
             <Step2Classification form={form} setForm={setForm} />
@@ -355,11 +399,17 @@ interface StepProps {
 function Step1Identity({
   form, setForm, editing, parentOptions,
   tuicTouched, setTuicTouched,
+  descriptionTouched, setDescriptionTouched,
 }: StepProps & {
   editing: boolean;
-  parentOptions: Array<{ id: string; tuic_code: string; name: string }>;
+  parentOptions: Array<{
+    id: string; tuic_code: string; name: string;
+    description: string | null;
+  }>;
   tuicTouched: boolean;
   setTuicTouched: (v: boolean) => void;
+  descriptionTouched: boolean;
+  setDescriptionTouched: (v: boolean) => void;
 }) {
   return (
     <>
@@ -404,12 +454,20 @@ function Step1Identity({
           placeholder="RANSOM-LOCKBIT"
         />
       </Field>
-      <Field label="Descripción">
+      <Field
+        label="Descripción"
+        hint={
+          editing || descriptionTouched
+            ? undefined
+            : "Heredará la descripción del padre cuando lo selecciones. Editar este campo desactiva la herencia."
+        }
+      >
         <textarea
           value={form.description}
-          onChange={(e) =>
-            setForm((f) => ({ ...f, description: e.target.value }))
-          }
+          onChange={(e) => {
+            setDescriptionTouched(true);
+            setForm((f) => ({ ...f, description: e.target.value }));
+          }}
           className="w-full rounded border bg-background p-1 text-sm"
           rows={2}
         />
@@ -420,7 +478,23 @@ function Step1Identity({
       >
         <select
           value={form.parent_id}
-          onChange={(e) => setForm((f) => ({ ...f, parent_id: e.target.value }))}
+          onChange={(e) => {
+            const newParentId = e.target.value;
+            // When the user is creating and hasn't manually touched the
+            // description, inherit the parent's text on selection. Picking
+            // "Sin padre" clears the inherited copy (only if untouched)
+            // so the form doesn't keep a stale description from a
+            // previously-picked parent.
+            const parent = parentOptions.find((p) => p.id === newParentId);
+            setForm((f) => ({
+              ...f,
+              parent_id: newParentId,
+              description:
+                !editing && !descriptionTouched
+                  ? parent?.description ?? ""
+                  : f.description,
+            }));
+          }}
           className="w-full rounded border bg-background p-1 text-sm"
         >
           <option value="">— Sin padre (root) —</option>
@@ -523,9 +597,14 @@ function Step3Operation({ form, setForm }: StepProps) {
   // Active workflows for the delegated_workflow_id dropdown. React Query
   // dedupes if parent components also subscribe to this key.
   const { data: catalogWorkflows } = useN8nWorkflows({ only_active: true });
+  const { data: teams } = useTeams();
   return (
     <>
-      <Field label="Tipo de caso default" required>
+      <Field
+        label="Tipo de caso default"
+        required
+        hint="Define cómo se materializa cada disparo: 'event' es un registro liviano (log/observación); 'incident' arranca un caso completo con flujo de respuesta."
+      >
         <div className="flex gap-3 text-sm">
           {(["event", "incident"] as const).map((opt) => (
             <label key={opt} className="flex items-center gap-1">
@@ -543,7 +622,10 @@ function Step3Operation({ form, setForm }: StepProps) {
           ))}
         </div>
       </Field>
-      <Field label="Requiere ticket">
+      <Field
+        label="Requiere ticket"
+        hint="Cuando está activo, además del caso interno se crea un ticket formal (track de SLA, asignaciones, auditoría). Apagado: queda solo como evento/log."
+      >
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -555,7 +637,11 @@ function Step3Operation({ form, setForm }: StepProps) {
           Crear ticket completo (vs. solo evento/log)
         </label>
       </Field>
-      <Field label="Modo de triage" required>
+      <Field
+        label="Modo de triage"
+        required
+        hint="'auto' aplica las reglas internas de clasificación. 'delegate_to_n8n' delega la decisión a un workflow externo que debe responder antes del timeout."
+      >
         <select
           value={form.triage_mode}
           onChange={(e) =>
@@ -571,7 +657,7 @@ function Step3Operation({ form, setForm }: StepProps) {
         <Field
           label="Workflow delegado"
           required
-          hint="Selecciona del catálogo registrado en /settings/integrations → Workflows n8n"
+          hint="Workflow n8n que recibe el evento y decide. Debe estar registrado en /settings/integrations → Workflows n8n."
         >
           <select
             value={form.delegated_workflow_id}
@@ -600,7 +686,10 @@ function Step3Operation({ form, setForm }: StepProps) {
           ) : null}
         </Field>
       ) : null}
-      <Field label="Timeout triage (segundos)">
+      <Field
+        label="Timeout triage (segundos)"
+        hint="Tiempo máximo de espera para la respuesta del triage (auto o delegado). Si vence sin decisión, el caso se promueve al flujo por defecto."
+      >
         <input
           type="number"
           min={1}
@@ -614,21 +703,86 @@ function Step3Operation({ form, setForm }: StepProps) {
           className="w-full rounded border bg-background p-1 text-sm"
         />
       </Field>
-      <Field label="TLP default" required>
-        <select
-          value={form.tlp_default}
-          onChange={(e) =>
-            setForm((f) => ({ ...f, tlp_default: e.target.value as TLP }))
-          }
-          className="w-full rounded border bg-background p-1 text-sm"
-        >
-          {(["white", "green", "amber", "red"] as const).map((t) => (
-            <option key={t} value={t}>
-              {t.toUpperCase()}
-            </option>
+      <Field
+        label="TLP default"
+        required
+        hint="Traffic Light Protocol — define hasta dónde se puede compartir la información asociada a casos de esta taxonomía."
+      >
+        <div className="space-y-1">
+          {TLP_LEVELS.map((tlp) => (
+            <label
+              key={tlp.value}
+              className={cn(
+                "flex items-start gap-2 rounded border p-1.5 text-sm cursor-pointer",
+                form.tlp_default === tlp.value
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:bg-muted/40",
+              )}
+            >
+              <input
+                type="radio"
+                name="tlp_default"
+                value={tlp.value}
+                checked={form.tlp_default === tlp.value}
+                onChange={() =>
+                  setForm((f) => ({ ...f, tlp_default: tlp.value }))
+                }
+                className="mt-0.5"
+              />
+              <span
+                className="mt-0.5 inline-block h-3.5 w-3.5 rounded-sm border border-border shrink-0"
+                style={{ backgroundColor: tlp.swatch }}
+                aria-hidden
+              />
+              <span className="flex-1">
+                <span className="font-medium">{tlp.label}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {tlp.hint}
+                </span>
+              </span>
+            </label>
           ))}
-        </select>
+        </div>
       </Field>
+
+      {/* Ownership & notification section. Manager dropdown is wired
+          end-to-end; per-team notification rows (phase + channel +
+          escalation_minutes) are still a follow-up — flagged inline
+          so the user knows where to find them. */}
+      <div className="mt-2 rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Gestión y notificaciones
+        </p>
+        <Field
+          label="Equipo gestor"
+          hint="Equipo responsable del ciclo de vida de los casos. Recibe la asignación inicial y figura como dueño en auditoría."
+        >
+          <select
+            value={form.managed_by_team_id}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, managed_by_team_id: e.target.value }))
+            }
+            className="w-full rounded border bg-background p-1 text-sm"
+          >
+            <option value="">— Sin asignar —</option>
+            {teams?.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          {teams && teams.length === 0 ? (
+            <p className="mt-1 text-xs text-amber-600">
+              No hay equipos creados. Crea uno en{" "}
+              <span className="font-mono">/settings/teams</span>.
+            </p>
+          ) : null}
+        </Field>
+        <p className="text-xs text-muted-foreground">
+          Notificaciones por equipo / fase / canal: se configuran tras crear
+          la taxonomía desde la vista de detalle (próxima iteración).
+        </p>
+      </div>
     </>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { History, Pencil, Trash2 } from "lucide-react";
+import { ChevronRight, History, Pencil, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { TLPBadge } from "@/components/molecules/TLPBadge";
@@ -33,6 +33,14 @@ export function TaxonomyDetailPanel({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const deleteMutation = useSoftDeleteTaxonomy();
+
+  // Resolve the parent (if any) so we can render its context header
+  // above the child's own details. The hierarchy is capped at depth 2,
+  // so a single lookup is always enough -- no recursive walk needed.
+  const parent = useMemo(() => {
+    if (!taxonomy?.parent_id || !taxonomyMap) return null;
+    return taxonomyMap.get(taxonomy.parent_id) ?? null;
+  }, [taxonomy, taxonomyMap]);
 
   const driftInfo = useMemo(() => {
     if (!taxonomy || !taxonomy.forked_from_global_id || !taxonomyMap) {
@@ -86,6 +94,29 @@ export function TaxonomyDetailPanel({
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
+      {parent ? (
+        <section className="border-b bg-muted/40 px-4 py-3">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Taxonomía padre
+          </p>
+          <div className="flex items-start gap-2">
+            <ChevronRight className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline gap-2">
+                <code className="font-mono text-xs text-muted-foreground">
+                  {parent.tuic_code}
+                </code>
+                <span className="text-sm font-medium">{parent.name}</span>
+              </div>
+              {parent.description ? (
+                <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
+                  {parent.description}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
       <header className="border-b p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">

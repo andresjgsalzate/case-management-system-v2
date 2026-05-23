@@ -27,10 +27,17 @@ export default function TaxonomiesSettingsPage() {
     return m;
   }, [flatList]);
 
+  // Only root taxonomies (those without a parent) can themselves
+  // *be* a parent. This caps the hierarchy at depth 2 -- a child
+  // taxonomy can never grow grandchildren. The backend still owns
+  // the invariant; this just removes the foot-gun from the picker.
   const parentOptions = useMemo(() => {
-    return (flatList ?? []).map((t) => ({
-      id: t.id, tuic_code: t.tuic_code, name: t.name,
-    }));
+    return (flatList ?? [])
+      .filter((t) => t.parent_id === null)
+      .map((t) => ({
+        id: t.id, tuic_code: t.tuic_code, name: t.name,
+        description: t.description ?? null,
+      }));
   }, [flatList]);
 
   function handleSelect(node: SecurityTaxonomyTreeNode) {
