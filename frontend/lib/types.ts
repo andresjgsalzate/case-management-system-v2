@@ -1242,6 +1242,7 @@ export interface CreateN8nWorkflowPayload {
   is_active?: boolean;
   requires_approval?: boolean;
   allowed_role_ids?: string[] | null;
+  n8n_workflow_id?: string | null;
 }
 
 export interface UpdateN8nWorkflowPayload {
@@ -1251,6 +1252,7 @@ export interface UpdateN8nWorkflowPayload {
   is_active?: boolean;
   requires_approval?: boolean;
   allowed_role_ids?: string[] | null;
+  n8n_workflow_id?: string | null;
 }
 
 // ─── Workflow Change Requests (Sub-spec 09 §3.9) ──────────────

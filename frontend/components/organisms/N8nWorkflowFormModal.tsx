@@ -15,13 +15,27 @@ import type {
 interface Props {
   isOpen: boolean;
   initial?: N8nWorkflow | null;
+  /**
+   * Pre-fill values for *create* mode (no `initial`). Used when
+   * registering an orphan from the n8n inventory page: the orphan's
+   * n8n name + id are passed in so the operator only has to fill the
+   * webhook URL + curation flags. n8n_workflow_id is locked in this
+   * path so the new catalog row immediately links back to its n8n
+   * counterpart and the inventory flips it to "registered".
+   */
+  prefill?: {
+    name?: string;
+    n8n_workflow_id?: string;
+  } | null;
   onClose: () => void;
 }
 
 const inputCls =
   "px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary w-full";
 
-export function N8nWorkflowFormModal({ isOpen, initial, onClose }: Props) {
+export function N8nWorkflowFormModal({
+  isOpen, initial, prefill, onClose,
+}: Props) {
   const create = useCreateN8nWorkflow();
   const update = useUpdateN8nWorkflow();
 
@@ -30,19 +44,23 @@ export function N8nWorkflowFormModal({ isOpen, initial, onClose }: Props) {
   const [workflowUrl, setWorkflowUrl] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [requiresApproval, setRequiresApproval] = useState(false);
+  const [n8nWorkflowId, setN8nWorkflowId] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Reset form when initial changes or modal opens
+  // Reset form when initial / prefill changes or modal opens. `initial`
+  // wins (edit mode); otherwise `prefill` seeds the create form.
   useEffect(() => {
     if (isOpen) {
-      setName(initial?.name ?? "");
+      setName(initial?.name ?? prefill?.name ?? "");
       setDescription(initial?.description ?? "");
       setWorkflowUrl(initial?.workflow_url ?? "");
       setIsActive(initial?.is_active ?? true);
       setRequiresApproval(initial?.requires_approval ?? false);
+      // Locked when prefilled from an orphan (preserves the link).
+      setN8nWorkflowId(prefill?.n8n_workflow_id ?? "");
       setErrorMsg(null);
     }
-  }, [isOpen, initial]);
+  }, [isOpen, initial, prefill]);
 
   if (!isOpen) return null;
 
@@ -61,6 +79,7 @@ export function N8nWorkflowFormModal({ isOpen, initial, onClose }: Props) {
       return;
     }
     try {
+      const linkId = n8nWorkflowId.trim() || null;
       if (editing && initial) {
         await update.mutateAsync({
           id: initial.id,
@@ -70,6 +89,7 @@ export function N8nWorkflowFormModal({ isOpen, initial, onClose }: Props) {
             workflow_url: workflowUrl.trim(),
             is_active: isActive,
             requires_approval: requiresApproval,
+            n8n_workflow_id: linkId,
           },
         });
       } else {
@@ -79,6 +99,7 @@ export function N8nWorkflowFormModal({ isOpen, initial, onClose }: Props) {
           workflow_url: workflowUrl.trim(),
           is_active: isActive,
           requires_approval: requiresApproval,
+          n8n_workflow_id: linkId,
         };
         await create.mutateAsync(payload);
       }
@@ -146,6 +167,26 @@ export function N8nWorkflowFormModal({ isOpen, initial, onClose }: Props) {
               onChange={(e) => setWorkflowUrl(e.target.value)}
               placeholder="https://n8n.example.com/webhook/..."
             />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">
+              ID interno n8n (opcional, enlaza con el inventario)
+            </label>
+            <input
+              className={`${inputCls} font-mono text-xs`}
+              value={n8nWorkflowId}
+              onChange={(e) => setN8nWorkflowId(e.target.value)}
+              placeholder="F7v469lghiBA7FcX"
+              // Locked when registering an orphan: the id comes from
+              // the inventory and changing it would break the link.
+              disabled={!!prefill?.n8n_workflow_id}
+            />
+            {prefill?.n8n_workflow_id ? (
+              <p className="text-[11px] text-muted-foreground">
+                Heredado del workflow huérfano · no editable
+              </p>
+            ) : null}
           </div>
 
           <div className="flex gap-4">
