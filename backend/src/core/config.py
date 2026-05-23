@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     # backend's OIDC callback URL and the post-login landing page.
     CMS_FRONTEND_URL: str = "https://cms.local"
 
+    # n8n Public REST API (sub-spec 09 inventory feature).
+    # Dev: backend runs on host so it reaches n8n through nginx at the
+    # `/n8n-api/` path that strips the prefix on the way in.
+    # Prod: backend joins the docker network -> override with
+    # `http://n8n:5678/api/v1`. API key is generated in n8n's UI
+    # (Settings -> n8n API -> Create API key).
+    N8N_API_BASE_URL: str = "https://cms.local/n8n-api/v1"
+    N8N_API_KEY: str | None = None
+
     @field_validator("SECRET_KEY")
     @classmethod
     def validate_secret_key(cls, v: str) -> str:

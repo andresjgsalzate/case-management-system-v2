@@ -198,6 +198,8 @@ def create_app() -> FastAPI:
     app.include_router(n8n_webhook_router)
     app.include_router(n8n_admin_router)
     app.include_router(workflow_change_requests_router, prefix="/api/v1")
+    from backend.src.modules.n8n_inventory.router import router as n8n_inventory_router
+    app.include_router(n8n_inventory_router, prefix="/api/v1")
     app.include_router(operational_router)
     app.include_router(forensic_router)
     app.include_router(alert_reports_router)

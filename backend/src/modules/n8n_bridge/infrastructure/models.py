@@ -223,6 +223,14 @@ class N8nWorkflowModel(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     workflow_url: Mapped[str] = mapped_column(String(500), nullable=False)
 
+    # Short id n8n assigns to the workflow itself (e.g. "F7v469lghiBA7FcX").
+    # Lets the n8n_inventory feature detect "registered" rows vs "orphans"
+    # (workflows that exist in n8n but were never added to this catalog).
+    # Nullable: legacy rows + brand-new entries before they're linked.
+    n8n_workflow_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true",
     )

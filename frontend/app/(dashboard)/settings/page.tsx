@@ -3,7 +3,7 @@ import {
   Users, Shield, Clock, Zap, Bell,
   AlertTriangle, Flag, Layers, Globe, Hash, LayoutGrid, Building2, Mail,
   BookOpen, Package, Fingerprint, FileText, ListTree, Plug, Calculator,
-  GitPullRequest,
+  GitPullRequest, Workflow,
 } from "lucide-react";
 
 const SETTINGS_SECTIONS = [
@@ -52,6 +52,7 @@ const SETTINGS_SECTIONS = [
       { href: "/settings/forensic-artifacts",       icon: Fingerprint, color: "text-pink-500",   bg: "bg-pink-50 dark:bg-pink-950/40",     title: "Artifacts de Velociraptor", description: "Catálogo de artifacts disponibles para hunts forenses" },
       { href: "/settings/alert-report-templates",   icon: FileText,    color: "text-lime-500",   bg: "bg-lime-50 dark:bg-lime-950/40",     title: "Plantillas de Alert Report", description: "Templates de informe de alerta con bloques configurables" },
       { href: "/settings/workflow-change-requests", icon: GitPullRequest, color: "text-purple-500", bg: "bg-purple-50 dark:bg-purple-950/40", title: "Solicitudes de cambio n8n", description: "Tracker de propuestas para modificar workflows (control compensatorio mientras CMS use n8n Community)" },
+      { href: "/settings/n8n-inventory",             icon: Workflow,        color: "text-purple-500", bg: "bg-purple-50 dark:bg-purple-950/40", title: "Inventario de workflows n8n", description: "Vista live de workflows en n8n + catálogo CMS, con detección de huérfanos y enlaces rotos" },
     ],
   },
 ];

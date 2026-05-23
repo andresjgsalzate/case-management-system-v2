@@ -1307,3 +1307,19 @@ export interface ImplementWCRPayload {
   workflow_id: string;
   workflow_url: string;
 }
+
+// ─── n8n Inventory (live n8n workflows joined with CMS catalog) ──
+export type N8nInventoryStatus =
+  | "registered"      // in n8n AND in CMS catalog (link via n8n_workflow_id)
+  | "orphan_in_n8n"   // in n8n, no CMS catalog row
+  | "orphan_in_cms"   // CMS catalog points to an n8n_workflow_id that no longer exists in n8n
+  | "unlinked";       // CMS catalog row with no n8n_workflow_id set
+
+export interface N8nInventoryEntry {
+  n8n_id: string | null;
+  n8n_name: string | null;
+  n8n_active: boolean | null;
+  n8n_updated_at: string | null;
+  catalog: N8nWorkflow | null;
+  status: N8nInventoryStatus;
+}
