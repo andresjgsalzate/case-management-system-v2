@@ -1,8 +1,10 @@
 "use client";
 
-import { Pencil, Power, Trash2, Workflow as WorkflowIcon } from "lucide-react";
+import Link from "next/link";
+import { ExternalLink, Pencil, Power, Trash2, Workflow as WorkflowIcon } from "lucide-react";
 import { useState } from "react";
 
+import { useHasPermission } from "@/hooks/useHasPermission";
 import {
   useDeleteN8nWorkflow,
   useN8nWorkflows,
@@ -19,6 +21,7 @@ export function N8nWorkflowsTable({ onEdit }: Props) {
   const update = useUpdateN8nWorkflow();
   const del = useDeleteN8nWorkflow();
   const [busyId, setBusyId] = useState<string | null>(null);
+  const canOpenN8nEditor = useHasPermission("n8n_editor", "access");
 
   if (isLoading) {
     return (
@@ -121,6 +124,20 @@ export function N8nWorkflowsTable({ onEdit }: Props) {
               </td>
               <td className="px-3 py-2">
                 <div className="flex items-center justify-end gap-1">
+                  {canOpenN8nEditor && (
+                    // Sub-spec 09 §3.8: deep-link into the n8n editor.
+                    // The hash uses the CMS workflow id today; once we
+                    // track the n8n-side workflow id explicitly we can
+                    // route to the exact graph instead of just landing
+                    // in the editor.
+                    <Link
+                      href={`/n8n#/workflow/${wf.id}`}
+                      title="Editar en n8n"
+                      className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Link>
+                  )}
                   <button
                     type="button"
                     onClick={() => handleToggleActive(wf)}

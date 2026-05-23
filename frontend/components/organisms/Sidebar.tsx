@@ -14,6 +14,7 @@ import {
   Briefcase,
   Archive,
   Activity,
+  Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/ui.store";
@@ -37,6 +38,7 @@ const NAV_ITEMS: NavItemDef[] = [
   { href: "/kb",           label: "Base de conocimiento", icon: BookOpen,        color: "text-emerald-500", permission: { module: "knowledge_base",  action: "read" } },
   { href: "/archive",      label: "Archivo",              icon: Archive,         color: "text-slate-500",   permission: { module: "cases",           action: "read" } },
   { href: "/audit",        label: "Auditoría",            icon: Shield,          color: "text-violet-500",  permission: { module: "audit",           action: "read" } },
+  { href: "/n8n",          label: "Editor n8n",           icon: Workflow,        color: "text-purple-500",  permission: { module: "n8n_editor",      action: "access" } },
 ];
 
 const BOTTOM_ITEMS: NavItemDef[] = [

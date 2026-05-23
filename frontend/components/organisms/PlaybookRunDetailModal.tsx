@@ -1,8 +1,10 @@
 "use client";
 
-import { ChevronRight, X } from "lucide-react";
+import Link from "next/link";
+import { ChevronRight, ExternalLink, X } from "lucide-react";
 import { useState } from "react";
 
+import { useHasPermission } from "@/hooks/useHasPermission";
 import {
   usePlaybookRunCallbacks,
   usePlaybookRunDetail,
@@ -17,6 +19,7 @@ interface Props {
 export function PlaybookRunDetailModal({ runId, onClose }: Props) {
   const { data: run, isLoading: runLoading } = usePlaybookRunDetail(runId);
   const { data: callbacks, isLoading: cbsLoading } = usePlaybookRunCallbacks(runId);
+  const canOpenN8nEditor = useHasPermission("n8n_editor", "access");
 
   if (!runId) return null;
 
@@ -70,6 +73,19 @@ export function PlaybookRunDetailModal({ runId, onClose }: Props) {
                   {run.error}
                 </pre>
               ) : null}
+
+              {run.n8n_execution_id && canOpenN8nEditor && (
+                // Sub-spec 09 §3.8: jump into the n8n editor's execution
+                // detail. /n8n iframe page picks up the hash and hands
+                // it to n8n's own router.
+                <Link
+                  href={`/n8n#/execution/${run.n8n_execution_id}`}
+                  className="mt-3 inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  Ver ejecución en n8n
+                </Link>
+              )}
             </section>
           )}
 
