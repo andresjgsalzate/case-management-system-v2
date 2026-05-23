@@ -35,6 +35,12 @@ class CreateN8nWorkflowDTO(BaseModel):
     is_active: bool = True
     requires_approval: bool = False
     allowed_role_ids: list[str] | None = None
+    # n8n's internal short id (e.g. "F7v469lghiBA7FcX"). Set when
+    # registering an orphan from the inventory page so the row flips
+    # from "orphan_in_n8n" to "registered" without an extra link step.
+    # Optional: legacy catalogs + workflows whose n8n side is unknown
+    # leave it null.
+    n8n_workflow_id: str | None = Field(default=None, max_length=64)
 
 
 class UpdateN8nWorkflowDTO(BaseModel):
@@ -48,6 +54,7 @@ class UpdateN8nWorkflowDTO(BaseModel):
     is_active: bool | None = None
     requires_approval: bool | None = None
     allowed_role_ids: list[str] | None = None
+    n8n_workflow_id: str | None = Field(default=None, max_length=64)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -130,6 +137,7 @@ class N8nWorkflowCatalogUseCases:
             is_active=dto.is_active,
             requires_approval=dto.requires_approval,
             allowed_role_ids=dto.allowed_role_ids,
+            n8n_workflow_id=dto.n8n_workflow_id,
             created_by_user_id=created_by_user_id,
         )
         self.db.add(wf)
@@ -167,6 +175,8 @@ class N8nWorkflowCatalogUseCases:
             wf.requires_approval = dto.requires_approval
         if "allowed_role_ids" in set_fields:
             wf.allowed_role_ids = dto.allowed_role_ids
+        if "n8n_workflow_id" in set_fields:
+            wf.n8n_workflow_id = dto.n8n_workflow_id
         try:
             await self.db.commit()
         except IntegrityError as exc:
