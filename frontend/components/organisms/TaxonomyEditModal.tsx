@@ -13,9 +13,16 @@ import {
   useCreateTaxonomy,
   useUpdateTaxonomy,
 } from "@/hooks/useSecurityTaxonomies";
+import {
+  useAddTaxonomyNotification,
+  useRemoveTaxonomyNotification,
+  useTaxonomyNotifications,
+} from "@/hooks/useTaxonomyNotifications";
 import { useTeams } from "@/hooks/useTeams";
 import type {
   CreateTaxonomyPayload,
+  NotifyChannel,
+  NotifyPhase,
   SecurityTaxonomy,
   TLP,
   TaxonomyDefaultCaseType,
@@ -33,6 +40,23 @@ const IMPACT_LEVELS: ReadonlyArray<readonly [string, string]> = [
   ["critico", "Crítico"],
   ["informativo", "Informativo"],
   ["falso_positivo", "Falso positivo"],
+];
+
+// Notification phase + channel labels. Slugs mirror the backend
+// CHECK constraint (taxonomy_notifications.notify_phase / notify_channel).
+const NOTIFY_PHASES: ReadonlyArray<readonly [NotifyPhase, string]> = [
+  ["triage", "Triage"],
+  ["created", "Creado"],
+  ["critical_priority", "Prioridad crítica"],
+  ["sla_breach", "SLA vencido"],
+  ["resolved", "Resuelto"],
+  ["promoted", "Promovido"],
+];
+const NOTIFY_CHANNELS: ReadonlyArray<readonly [NotifyChannel, string]> = [
+  ["email", "Email"],
+  ["chat", "Chat"],
+  ["sms", "SMS"],
+  ["all", "Todos"],
 ];
 
 // TLP (Traffic Light Protocol) colour conventions per FIRST.org spec.
@@ -296,7 +320,10 @@ export function TaxonomyEditModal({
           ) : step === 2 ? (
             <Step2Classification form={form} setForm={setForm} />
           ) : (
-            <Step3Operation form={form} setForm={setForm} />
+            <Step3Operation
+              form={form} setForm={setForm}
+              existingId={existing?.id ?? null}
+            />
           )}
 
           {validation.errors.length > 0 ? (
@@ -593,7 +620,9 @@ function Step2Classification({ form, setForm }: StepProps) {
   );
 }
 
-function Step3Operation({ form, setForm }: StepProps) {
+function Step3Operation({
+  form, setForm, existingId,
+}: StepProps & { existingId: string | null }) {
   // Active workflows for the delegated_workflow_id dropdown. React Query
   // dedupes if parent components also subscribe to this key.
   const { data: catalogWorkflows } = useN8nWorkflows({ only_active: true });
@@ -778,12 +807,218 @@ function Step3Operation({ form, setForm }: StepProps) {
             </p>
           ) : null}
         </Field>
-        <p className="text-xs text-muted-foreground">
-          Notificaciones por equipo / fase / canal: se configuran tras crear
-          la taxonomía desde la vista de detalle (próxima iteración).
-        </p>
+        {existingId ? (
+          <NotificationsManager taxonomyId={existingId} teams={teams ?? []} />
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Las notificaciones por equipo / fase / canal se habilitan al
+            guardar la taxonomía. Volvé a abrir el editor para configurarlas.
+          </p>
+        )}
       </div>
     </>
+  );
+}
+
+// ── Notifications CRUD (only available in edit mode) ─────────────────
+
+function NotificationsManager({
+  taxonomyId, teams,
+}: {
+  taxonomyId: string;
+  teams: { id: string; name: string }[];
+}) {
+  const { data: notifications, isLoading } = useTaxonomyNotifications(taxonomyId);
+  const add = useAddTaxonomyNotification(taxonomyId);
+  const remove = useRemoveTaxonomyNotification(taxonomyId);
+  const [showForm, setShowForm] = useState(false);
+  const [draft, setDraft] = useState<{
+    team_id: string;
+    notify_phase: NotifyPhase;
+    notify_channel: NotifyChannel;
+    escalation_minutes: string;  // string so the input can be empty
+  }>({
+    team_id: "",
+    notify_phase: "triage",
+    notify_channel: "email",
+    escalation_minutes: "",
+  });
+
+  const teamName = useMemo(() => {
+    const m = new Map(teams.map((t) => [t.id, t.name]));
+    return (id: string) => m.get(id) ?? id;
+  }, [teams]);
+
+  const phaseLabel = useMemo(() => {
+    const m = new Map<string, string>(NOTIFY_PHASES.map(([k, v]) => [k, v]));
+    return (k: string) => m.get(k) ?? k;
+  }, []);
+  const channelLabel = useMemo(() => {
+    const m = new Map<string, string>(NOTIFY_CHANNELS.map(([k, v]) => [k, v]));
+    return (k: string) => m.get(k) ?? k;
+  }, []);
+
+  async function submit() {
+    if (!draft.team_id) return;
+    try {
+      await add.mutateAsync({
+        team_id: draft.team_id,
+        notify_phase: draft.notify_phase,
+        notify_channel: draft.notify_channel,
+        escalation_minutes: draft.escalation_minutes
+          ? Number(draft.escalation_minutes)
+          : null,
+      });
+      // Reset only the team so the user can quickly add multiple rules
+      // for the same phase/channel without reselecting every dropdown.
+      setDraft((d) => ({ ...d, team_id: "", escalation_minutes: "" }));
+      setShowForm(false);
+    } catch {
+      // Error stays on add.error and renders inline below.
+    }
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium">
+          Notificaciones por equipo{" "}
+          {notifications && (
+            <span className="text-muted-foreground">
+              ({notifications.length})
+            </span>
+          )}
+        </p>
+        <button
+          type="button"
+          onClick={() => setShowForm((v) => !v)}
+          className="text-xs text-primary hover:underline"
+        >
+          {showForm ? "Cancelar" : "+ Agregar"}
+        </button>
+      </div>
+
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Cargando…</p>
+      ) : notifications && notifications.length > 0 ? (
+        <ul className="divide-y rounded border">
+          {notifications.map((n) => (
+            <li
+              key={n.id}
+              className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs"
+            >
+              <div className="min-w-0 flex-1">
+                <span className="font-medium">{teamName(n.team_id)}</span>
+                <span className="text-muted-foreground">
+                  {" · "}{phaseLabel(n.notify_phase)}
+                  {" · "}{channelLabel(n.notify_channel)}
+                  {n.escalation_minutes
+                    ? ` · escala a los ${n.escalation_minutes} min`
+                    : ""}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => remove.mutate(n.id)}
+                disabled={remove.isPending}
+                className="text-rose-600 hover:text-rose-700 disabled:opacity-50"
+                title="Eliminar"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Sin reglas de notificación.
+        </p>
+      )}
+
+      {showForm && (
+        <div className="rounded border bg-background p-2 space-y-1.5">
+          <div className="grid grid-cols-2 gap-1.5">
+            <label className="text-[11px]">
+              Equipo
+              <select
+                value={draft.team_id}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, team_id: e.target.value }))
+                }
+                className="mt-0.5 w-full rounded border bg-background p-1 text-xs"
+              >
+                <option value="">— elegir —</option>
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px]">
+              Fase
+              <select
+                value={draft.notify_phase}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d, notify_phase: e.target.value as NotifyPhase,
+                  }))
+                }
+                className="mt-0.5 w-full rounded border bg-background p-1 text-xs"
+              >
+                {NOTIFY_PHASES.map(([slug, label]) => (
+                  <option key={slug} value={slug}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px]">
+              Canal
+              <select
+                value={draft.notify_channel}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d, notify_channel: e.target.value as NotifyChannel,
+                  }))
+                }
+                className="mt-0.5 w-full rounded border bg-background p-1 text-xs"
+              >
+                {NOTIFY_CHANNELS.map(([slug, label]) => (
+                  <option key={slug} value={slug}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px]">
+              Escalation (min, opcional)
+              <input
+                type="number"
+                min={1}
+                value={draft.escalation_minutes}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d, escalation_minutes: e.target.value,
+                  }))
+                }
+                placeholder="—"
+                className="mt-0.5 w-full rounded border bg-background p-1 text-xs"
+              />
+            </label>
+          </div>
+          {add.isError && (
+            <p className="text-[11px] text-rose-600">
+              {(add.error as Error).message}
+            </p>
+          )}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!draft.team_id || add.isPending}
+              className="rounded bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50"
+            >
+              {add.isPending ? "Agregando…" : "Agregar"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
