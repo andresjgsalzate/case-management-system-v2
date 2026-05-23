@@ -15,11 +15,15 @@ import {
   Archive,
   Activity,
   Workflow,
+  GitPullRequest,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/ui.store";
 import { useAuthStore } from "@/store/auth.store";
+import { usePendingWCRCount } from "@/hooks/useWorkflowChangeRequests";
 import type { UserPermission } from "@/lib/types";
+
+const WCR_HREF = "/settings/workflow-change-requests";
 
 interface NavItemDef {
   href: string;
@@ -39,6 +43,7 @@ const NAV_ITEMS: NavItemDef[] = [
   { href: "/archive",      label: "Archivo",              icon: Archive,         color: "text-slate-500",   permission: { module: "cases",           action: "read" } },
   { href: "/audit",        label: "Auditoría",            icon: Shield,          color: "text-violet-500",  permission: { module: "audit",           action: "read" } },
   { href: "/n8n",          label: "Editor n8n",           icon: Workflow,        color: "text-purple-500",  permission: { module: "n8n_editor",      action: "access" } },
+  { href: WCR_HREF,        label: "Cambios n8n",          icon: GitPullRequest,  color: "text-purple-500",  permission: { module: "workflow_change_requests", action: "read" } },
 ];
 
 const BOTTOM_ITEMS: NavItemDef[] = [
@@ -56,18 +61,20 @@ interface NavItemProps {
   icon: React.ElementType;
   color: string;
   collapsed: boolean;
+  badge?: number;
 }
 
-function NavItem({ href, label, icon: Icon, color, collapsed }: NavItemProps) {
+function NavItem({ href, label, icon: Icon, color, collapsed, badge }: NavItemProps) {
   const pathname = usePathname();
   const isActive = pathname.startsWith(href);
+  const showBadge = typeof badge === "number" && badge > 0;
 
   return (
     <Link
       href={href}
       title={collapsed ? label : undefined}
       className={cn(
-        "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors duration-150",
+        "relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors duration-150",
         isActive
           ? "bg-[hsl(var(--sidebar-item-active-bg))] text-[hsl(var(--sidebar-item-active-text))]"
           : "text-muted-foreground hover:text-foreground hover:bg-[hsl(var(--sidebar-item-hover))]",
@@ -82,6 +89,18 @@ function NavItem({ href, label, icon: Icon, color, collapsed }: NavItemProps) {
         )}
       />
       {!collapsed && <span className="truncate">{label}</span>}
+      {showBadge && (
+        <span
+          className={cn(
+            "ml-auto flex items-center justify-center rounded-full bg-rose-500 text-[10px] font-semibold text-white",
+            collapsed
+              ? "absolute -top-1 -right-1 h-4 min-w-4 px-1"
+              : "h-4 min-w-4 px-1.5"
+          )}
+        >
+          {badge}
+        </span>
+      )}
     </Link>
   );
 }
@@ -97,6 +116,13 @@ export function Sidebar() {
   const visibleBottomItems = BOTTOM_ITEMS.filter((item) =>
     !item.permission || hasPermission(permissions, item.permission.module, item.permission.action)
   );
+
+  // Pending WCR count -- only fetched for reviewers; everyone else gets
+  // `enabled=false` so React Query skips the network entirely.
+  const canReview = hasPermission(
+    permissions, "workflow_change_requests", "review"
+  );
+  const { data: pendingWcrCount } = usePendingWCRCount(canReview);
 
   return (
     <aside
@@ -130,7 +156,12 @@ export function Sidebar() {
       {/* Nav principal */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 flex flex-col gap-0.5">
         {visibleNavItems.map((item) => (
-          <NavItem key={item.href} {...item} collapsed={sidebarCollapsed} />
+          <NavItem
+            key={item.href}
+            {...item}
+            collapsed={sidebarCollapsed}
+            badge={item.href === WCR_HREF ? pendingWcrCount : undefined}
+          />
         ))}
       </nav>
 

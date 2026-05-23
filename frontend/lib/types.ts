@@ -1252,3 +1252,58 @@ export interface UpdateN8nWorkflowPayload {
   requires_approval?: boolean;
   allowed_role_ids?: string[] | null;
 }
+
+// ─── Workflow Change Requests (Sub-spec 09 §3.9) ──────────────
+export type WCRStatus =
+  | "pending"
+  | "in_review"
+  | "approved"
+  | "rejected"
+  | "implemented";
+
+export type ProposedChangeType =
+  | "add_step"
+  | "remove_step"
+  | "modify_step"
+  | "new_workflow";
+
+export interface ProposedChange {
+  type: ProposedChangeType;
+  details: string;
+  screenshots?: string[];
+}
+
+export interface WorkflowChangeRequest {
+  id: string;
+  tenant_id: string | null;
+  workflow_id: string | null;
+  title: string;
+  description: string;
+  proposed_change: ProposedChange;
+  requested_by: string;
+  requested_at: string | null;
+  status: WCRStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_notes: string | null;
+  implemented_at: string | null;
+  implemented_in_workflow_url: string | null;
+}
+
+export interface CreateWCRPayload {
+  title: string;
+  description: string;
+  proposed_change: ProposedChange;
+  workflow_id?: string | null;
+  tenant_id?: string | null;
+}
+
+export interface UpdateWCRStatusPayload {
+  status: Exclude<WCRStatus, "pending" | "implemented">;
+  review_notes?: string | null;
+}
+
+export interface ImplementWCRPayload {
+  workflow_id: string;
+  workflow_url: string;
+}
