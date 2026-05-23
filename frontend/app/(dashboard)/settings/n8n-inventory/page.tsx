@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -8,10 +9,12 @@ import {
   CircleDashed,
   ExternalLink,
   GitMerge,
+  Plus,
   Workflow,
   XCircle,
 } from "lucide-react";
 
+import { N8nWorkflowFormModal } from "@/components/organisms/N8nWorkflowFormModal";
 import { usePermissionGuard } from "@/hooks/usePermissionGuard";
 import { useN8nInventory } from "@/hooks/useN8nInventory";
 import type { N8nInventoryEntry, N8nInventoryStatus } from "@/lib/types";
@@ -54,8 +57,14 @@ const STATUS_META: Record<
 
 export default function N8nInventoryPage() {
   usePermissionGuard("n8n_editor", "access");
+  const qc = useQueryClient();
   const { data, isLoading, error } = useN8nInventory();
   const [filter, setFilter] = useState<Filter>("all");
+  // When set, opens the workflow form pre-filled with this orphan's
+  // n8n name + id so the operator only fills the curated metadata.
+  const [orphanToRegister, setOrphanToRegister] = useState<{
+    name?: string; n8n_workflow_id?: string;
+  } | null>(null);
 
   const visible = useMemo(
     () => (data ?? []).filter((e) => filter === "all" || e.status === filter),
@@ -154,14 +163,38 @@ export default function N8nInventoryPage() {
             Sin workflows en este filtro.
           </p>
         ) : (
-          <InventoryTable entries={visible} />
+          <InventoryTable
+            entries={visible}
+            onRegisterOrphan={(e) =>
+              setOrphanToRegister({
+                name: e.n8n_name ?? undefined,
+                n8n_workflow_id: e.n8n_id ?? undefined,
+              })
+            }
+          />
         )}
       </div>
+
+      <N8nWorkflowFormModal
+        isOpen={orphanToRegister !== null}
+        prefill={orphanToRegister}
+        onClose={() => {
+          setOrphanToRegister(null);
+          // Refresh inventory so the just-registered row flips to
+          // "registered" without a manual reload.
+          qc.invalidateQueries({ queryKey: ["n8n-inventory"] });
+        }}
+      />
     </div>
   );
 }
 
-function InventoryTable({ entries }: { entries: N8nInventoryEntry[] }) {
+function InventoryTable({
+  entries, onRegisterOrphan,
+}: {
+  entries: N8nInventoryEntry[];
+  onRegisterOrphan: (entry: N8nInventoryEntry) => void;
+}) {
   return (
     <table className="w-full text-sm">
       <thead className="border-b bg-muted/40 text-left">
@@ -233,16 +266,29 @@ function InventoryTable({ entries }: { entries: N8nInventoryEntry[] }) {
                 )}
               </td>
               <td className="px-3 py-2 text-right">
-                {e.n8n_id && (
-                  <Link
-                    href={`/n8n#/workflow/${e.n8n_id}`}
-                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                    title="Abrir en el editor"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                    Abrir
-                  </Link>
-                )}
+                <div className="inline-flex items-center gap-3">
+                  {e.status === "orphan_in_n8n" && (
+                    <button
+                      type="button"
+                      onClick={() => onRegisterOrphan(e)}
+                      className="inline-flex items-center gap-1 rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                      title="Registrar este workflow en el catálogo CMS"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Registrar
+                    </button>
+                  )}
+                  {e.n8n_id && (
+                    <Link
+                      href={`/n8n#/workflow/${e.n8n_id}`}
+                      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                      title="Abrir en el editor"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Abrir
+                    </Link>
+                  )}
+                </div>
               </td>
             </tr>
           );
