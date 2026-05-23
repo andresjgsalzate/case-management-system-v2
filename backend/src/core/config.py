@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     # (Settings -> n8n API -> Create API key).
     N8N_API_BASE_URL: str = "https://cms.local/n8n-api/v1"
     N8N_API_KEY: str | None = None
+    # Public base URL n8n uses to build webhook URLs (must match the
+    # `WEBHOOK_URL` env var of the n8n container). The inventory page
+    # uses this to compose full webhook URLs from a workflow's nodes
+    # when an operator registers an orphan -- avoids manual copy/paste.
+    # Trailing slash is required to keep the join predictable.
+    N8N_WEBHOOK_BASE: str = "https://cms.local/webhook/"
 
     @field_validator("SECRET_KEY")
     @classmethod

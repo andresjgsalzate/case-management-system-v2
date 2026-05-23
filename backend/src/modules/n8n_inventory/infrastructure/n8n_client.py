@@ -65,6 +65,24 @@ class N8nApiClient:
 
         return out[:limit]
 
+    async def get_workflow(self, workflow_id: str) -> dict[str, Any] | None:
+        """Fetch a single workflow by its n8n internal id.
+
+        Returns the raw n8n object (includes `nodes` array, settings,
+        connections, etc.) or None if n8n responds 404. Other errors
+        propagate so the caller can surface them.
+        """
+        http = await self._ensure_http()
+        response = await http.get(
+            f"{self.base_url}/workflows/{workflow_id}",
+            headers={"X-N8N-API-KEY": self.api_key},
+            timeout=10,
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:
             await self._http.aclose()
