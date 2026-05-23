@@ -124,7 +124,11 @@ export function TaxonomyDetailPanel({
               {taxonomy.tuic_code}
             </p>
             <h2 className="text-lg font-semibold">{taxonomy.name}</h2>
-            {taxonomy.description ? (
+            {/* Skip the child description when a parent is shown above
+                -- the parent header already carries it (children typically
+                inherit the parent description, so rendering both is
+                duplicate noise). Roots still show their own. */}
+            {taxonomy.description && !parent ? (
               <p className="mt-1 text-sm text-muted-foreground">
                 {taxonomy.description}
               </p>
