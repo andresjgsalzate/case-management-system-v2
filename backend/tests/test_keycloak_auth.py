@@ -129,20 +129,23 @@ async def test_validator_extracts_roles_from_realm_access(rsa_key):
 from fastapi.security import HTTPAuthorizationCredentials
 
 
-def _mock_db_session(role, permission, team_id=None):
-    """AsyncSession stub that returns the given role/permission/team_id
-    in the order PermissionChecker queries them."""
+def _mock_db_session(role, permission, user_id="user-123", team_id=None):
+    """AsyncSession stub returning role -> permission -> (id, team_id) row
+    in the order PermissionChecker queries them. The last query uses
+    .first() (not .scalar_one_or_none) because the user lookup pulls
+    two columns now."""
     role_result = MagicMock()
     role_result.scalar_one_or_none = MagicMock(return_value=role)
 
     perm_result = MagicMock()
     perm_result.scalar_one_or_none = MagicMock(return_value=permission)
 
-    team_result = MagicMock()
-    team_result.scalar_one_or_none = MagicMock(return_value=team_id)
+    user_row = MagicMock(id=user_id, team_id=team_id)
+    user_result = MagicMock()
+    user_result.first = MagicMock(return_value=user_row)
 
     db = AsyncMock()
-    db.execute = AsyncMock(side_effect=[role_result, perm_result, team_result])
+    db.execute = AsyncMock(side_effect=[role_result, perm_result, user_result])
     return db
 
 

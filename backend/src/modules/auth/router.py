@@ -239,9 +239,10 @@ async def get_me(
     validator = get_keycloak_validator()
     payload = await validator.validate(credentials.credentials)
 
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    # Resolve via email (see PermissionChecker for why sub != users.id).
+    email = payload.get("email")
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid token (no email)")
 
     from backend.src.modules.roles.infrastructure.models import (
         PermissionModel,
@@ -250,7 +251,7 @@ async def get_me(
     from backend.src.modules.users.infrastructure.models import UserModel
 
     user = (
-        await db.execute(select(UserModel).where(UserModel.id == user_id))
+        await db.execute(select(UserModel).where(UserModel.email == email))
     ).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

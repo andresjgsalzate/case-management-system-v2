@@ -60,11 +60,16 @@ class PermissionChecker:
         validator = get_keycloak_validator()
         payload = await validator.validate(credentials.credentials)
 
-        user_id = payload.get("sub")
-        if not user_id:
-            raise UnauthorizedError("Invalid token payload (missing sub)")
+        # Resolve the CMS user via email rather than `sub`: Keycloak's
+        # POST /admin/realms/{realm}/users silently ignores the supplied
+        # `id` field and assigns its own UUID, so `sub` is *not* the same
+        # as `users.id` even when migrate_users_to_keycloak sends them.
+        # Email is the stable shared identifier and Keycloak's `email`
+        # claim comes from the inline mapper on the cms-frontend client.
+        email = payload.get("email")
+        if not email:
+            raise UnauthorizedError("Invalid token payload (missing email)")
 
-        email = payload.get("email", "")
         tenant_id = payload.get("tenant_id") or "default"
         realm_roles = payload.get("realm_access", {}).get("roles") or []
         if not realm_roles:
@@ -101,11 +106,19 @@ class PermissionChecker:
             )
 
         from backend.src.modules.users.infrastructure.models import UserModel
-        team_id = (
+        user_row = (
             await db.execute(
-                select(UserModel.team_id).where(UserModel.id == user_id)
+                select(UserModel.id, UserModel.team_id).where(
+                    UserModel.email == email
+                )
             )
-        ).scalar_one_or_none()
+        ).first()
+        if not user_row:
+            raise UnauthorizedError(
+                f"No CMS user provisioned for {email}"
+            )
+        user_id = user_row.id
+        team_id = user_row.team_id
 
         from backend.src.modules.audit.application.middleware import set_current_actor
         set_current_actor(user_id)

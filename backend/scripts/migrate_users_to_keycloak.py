@@ -81,6 +81,9 @@ async def migrate(
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+    # Side-effect import: register UserSessionModel + sibling auth models
+    # with the SQLAlchemy registry so UserModel's relationships resolve.
+    from backend.src.modules.auth.infrastructure import models as _  # noqa: F401
     from backend.src.modules.roles.infrastructure.models import RoleModel
     from backend.src.modules.users.infrastructure.models import UserModel
 
