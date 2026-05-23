@@ -28,7 +28,7 @@ async def search_techniques(
     limit: int = Query(50, ge=1, le=200),
     _current_user: CurrentUser = Depends(_taxonomy_gate),
 ):
-    return SuccessResponse.ok(loader.search(q, limit=limit))
+    return SuccessResponse.ok(await loader.search(q, limit=limit))
 
 
 @router.get("/techniques/{technique_id}", response_model=SuccessResponse[dict])
@@ -36,7 +36,23 @@ async def get_technique(
     technique_id: str,
     _current_user: CurrentUser = Depends(_taxonomy_gate),
 ):
-    t = loader.get_by_id(technique_id)
+    t = await loader.get_by_id(technique_id)
     if not t:
         raise HTTPException(status_code=404, detail="Technique not found")
     return SuccessResponse.ok(t)
+
+
+@router.post("/refresh", response_model=SuccessResponse[dict])
+async def force_refresh(
+    # Manual cache invalidation gated by the taxonomy admin permission.
+    # Any user who can manage global taxonomies can force a refetch from
+    # MITRE before the 24 h TTL elapses (e.g. "MITRE just published v15,
+    # update the picker now").
+    _current_user: CurrentUser = Depends(
+        PermissionChecker("security_taxonomies", "manage_global"),
+    ),
+):
+    data = await loader.get_all(force_refresh=True)
+    return SuccessResponse.ok(
+        {"count": len(data), "ttl_seconds": loader.CACHE_TTL_SECONDS}
+    )
