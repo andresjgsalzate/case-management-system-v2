@@ -1,7 +1,14 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
 
+// nginx terminates TLS at cms.local:443 and routes /api/* directly to
+// the backend (FastAPI), so the browser can target /api/v1/* without
+// going through the legacy Next.js proxy under /api/proxy. The proxy
+// route stays in the repo for now -- only reachable when the frontend
+// is hit directly on port 3000 (no nginx) -- but isn't on the hot path.
 const BASE_URL =
-  typeof window !== "undefined" ? "/api/proxy" : `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/api/proxy`;
+  typeof window !== "undefined"
+    ? "/api/v1"
+    : `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/api/v1`;
 
 function getAccessToken(): string | null {
   if (typeof window === "undefined") return null;

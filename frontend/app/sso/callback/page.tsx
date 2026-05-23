@@ -16,18 +16,26 @@ import { useAuthStore } from "@/store/auth.store";
  *
  * Sub-spec 09 §3.6.
  */
+
+// Module-level one-shot guard: React 18 + Next.js StrictMode fires the
+// callback effect twice in dev. The first call consumes the
+// authorization code at Keycloak's token endpoint; the second sees
+// "code already used" and Keycloak returns 400. The flag survives
+// StrictMode's synthetic unmount/remount and is reset on full reload.
+let callbackProcessed = false;
+
 export default function AuthCallbackPage() {
   const router = useRouter();
   const setTokens = useAuthStore((s) => s.setTokens);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    if (callbackProcessed) return;
+    callbackProcessed = true;
 
     (async () => {
       try {
         const user = await getUserManager().signinRedirectCallback();
-        if (cancelled) return;
         if (!user.access_token) {
           throw new Error("Keycloak no devolvió un access token.");
         }
@@ -41,20 +49,18 @@ export default function AuthCallbackPage() {
         const next = typeof user.state === "string" ? user.state : "/cases";
         router.replace(next.startsWith("/") ? next : "/cases");
       } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "No se pudo completar el inicio de sesión."
-          );
-        }
+        // Release the guard so the user can retry from /login.
+        callbackProcessed = false;
+        setError(
+          err instanceof Error
+            ? err.message
+            : "No se pudo completar el inicio de sesión."
+        );
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [router, setTokens]);
+    // intentionally empty deps -- run once per mount, gated by module flag
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (error) {
     return (

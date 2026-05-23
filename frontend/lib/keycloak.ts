@@ -32,7 +32,10 @@ function buildSettings(): UserManagerSettings {
   return {
     authority,
     client_id: clientId,
-    redirect_uri: `${origin}/auth/callback`,
+    // `/sso/callback`, not `/auth/callback` -- nginx routes any /auth/*
+    // path straight to Keycloak so a callback under that prefix would
+    // 404 at the IdP. Anything under /sso/* falls through to Next.js.
+    redirect_uri: `${origin}/sso/callback`,
     post_logout_redirect_uri: `${origin}/login`,
     response_type: "code",
     // `profile` and `email` aren't defined as separate client scopes in

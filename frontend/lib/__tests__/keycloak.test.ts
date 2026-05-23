@@ -21,8 +21,9 @@ describe("keycloak UserManager", () => {
     expect(um.settings.scope).toContain("openid");
   });
 
-  it("targets /auth/callback under the current origin", () => {
+  it("targets /sso/callback under the current origin", () => {
+    // /auth/* is reserved for Keycloak by nginx; /sso/* hits Next.js.
     const um = getUserManager();
-    expect(um.settings.redirect_uri).toMatch(/\/auth\/callback$/);
+    expect(um.settings.redirect_uri).toMatch(/\/sso\/callback$/);
   });
 });
