@@ -48,15 +48,46 @@ ejecutado durante la atención del caso, que:
 | **Contexto Origen alerta — tipo** | `Origen Interno`, `Origen Externo` |
 | **Criticidad de activo** | `Crítico`, `Alto`, `Medio`, `Bajo` |
 
+> **Nota**: `Falso Positivo` aparece en la lista de **Severidad** **y** también es una clasificación
+> de **Taxonomía** válida (root: `Falso Positivo` con sub `Falso Positivo`,
+> impactos internos/externos = `Falso Positivo`). Cuando el analista determina
+> que el evento no representa riesgo, marca la severidad como FP **y** opcionalmente
+> reclasifica la taxonomía a FP. Ver xlsx `Taxonomía v9!R7`.
+
+### 2.2.b Correlación TLP ↔ Criticidad ↔ Valoración
+
+El xlsx `Priorización!R24-R28` define un aliasing entre el TLP de la taxonomía
+y la Criticidad de activo, mapeados al mismo valor numérico de la matriz:
+
+| TLP (de la taxonomía) | Criticidad | Valoración |
+|---|---|---|
+| `TLP:RED` | `Crítico` | **5** |
+| `TLP:AMBER` | `Alto` | **4** |
+| `TLP:GREEN` | `Medio` | **3** |
+| `TLP:CLEAR` (white) | `Bajo` | **2** |
+
+**Implicación de diseño**: la Criticidad de activo puede inicializarse al TLP
+de la taxonomía seleccionada (auto-fill) y el analista puede overridear si la
+realidad del activo difiere. El cálculo de la matriz usa la **valoración
+numérica final** independiente de si vino del TLP o del override manual.
+
 ### 2.3 Listas parametrizables (tablas catálogo editables desde `/settings`)
 
-| Tabla nueva | Propósito | Ejemplos iniciales |
+| Tabla nueva | Propósito | Valores literales del xlsx |
 |---|---|---|
-| `triage_tool_types` | Tipo de herramienta origen del evento | FW Externo, FW Interno, AD-Controller, EDR, Server, WAF, Base de datos, Equipos Red, Linux, Office365, ZTNA, AntiSPAM, Backup, Equipos cómputo, NGFW |
-| `triage_tool_modes` | Modo de la herramienta (por herramienta) | Monitoreo, Bloqueo |
+| `triage_tool_types` | Tipo de herramienta origen del evento (xlsx `Herramientas!R9-R23`) | FW Externo, FW Interno, AD-Controller, EDR, Server, WAF, Base de datos, Equipos Red, Linux, Office365, ZTNA, AntiSPAM, Backup, Equipos de computo, **NGFWG** |
+| `triage_tool_actions` | "Acción aplicada" sobre la herramienta (xlsx `Triage!R17 col C`) | `Monitoreo`, `Bloqueo` (extensible) |
 | `triage_sla_policies` | SLA por nivel de prioridad calculada | Crítico → 20 min, Alto → 40 min, Medio → 120 min, Bajo → 12 h, Falso Positivo → N/A |
 
 Todas con CRUD admin en `/settings/triage-catalogs` (o equivalente).
+
+> **Nota nomenclatura**: el xlsx llama al modo de la herramienta **"Acción
+> aplicada"** (no "Modo herramienta"). El campo backend se llama
+> `triage_tool_actions` para mantener consistencia con la palabra del cliente.
+
+> **Nota typo**: el xlsx tiene `NGFWG` en el último item (probable typo de
+> NGFW + G). Importar literal para no perder fidelidad con el documento
+> operacional del cliente; renombrar si confirma que es typo.
 
 ### 2.4 Campos libres
 
@@ -93,7 +124,16 @@ score = (severidad_alerta_calif × 0.50)
 | Medio | 3 |
 | Bajo | 2 |
 | Falso Positivo | 0 |
-| Informativo | 1 |
+
+> El xlsx `Priorización!R25-R28` solo enumera 4 niveles (Crítico, Alto, Medio,
+> Bajo). `Falso Positivo` no está en la tabla numérica del xlsx pero aparece
+> en el mapping de SLA (R22: "Falso Positivo → N/A"). El comportamiento
+> esperado: si la severidad es FP, **se omite el cálculo de matriz** y la
+> prioridad resultante es directamente "Falso Positivo" con SLA N/A. No se
+> multiplica por pesos. Tratar como caso especial en el use case.
+>
+> "Informativo" NO está en el xlsx — removido de esta versión del spec.
+> Si surge la necesidad, agregarlo después.
 
 (Esto debería vivir en `prioritization_scales` ya existente — reutilizar
 schema, no crear tabla nueva.)
@@ -155,7 +195,7 @@ CREATE TABLE case_triages (
 
   -- Listas parametrizables (FK a tablas catálogo)
   tool_type_id                VARCHAR(36) REFERENCES triage_tool_types(id),
-  tool_mode_id                VARCHAR(36) REFERENCES triage_tool_modes(id),
+  tool_action_id              VARCHAR(36) REFERENCES triage_tool_actions(id),
 
   -- Campos libres
   context_origin_detail       VARCHAR(500),           -- IP/Red/Correo
@@ -197,14 +237,16 @@ CREATE TABLE triage_tool_types (
   UNIQUE (tenant_id, name)
 );
 
-CREATE TABLE triage_tool_modes (
+CREATE TABLE triage_tool_actions (
   id            VARCHAR(36) PRIMARY KEY,
   tenant_id     VARCHAR(36),
-  tool_type_id  VARCHAR(36) REFERENCES triage_tool_types(id) ON DELETE CASCADE,
   name          VARCHAR(50) NOT NULL,     -- Monitoreo|Bloqueo|...
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
-  UNIQUE (tenant_id, tool_type_id, name)
+  UNIQUE (tenant_id, name)
 );
+-- Renamed from `triage_tool_modes` per xlsx nomenclature ("Acción
+-- aplicada", not "Modo herramienta"). Global list (not per-tool) because
+-- the same actions apply across all tool types in the xlsx.
 
 CREATE TABLE triage_sla_policies (
   id            VARCHAR(36) PRIMARY KEY,
@@ -379,3 +421,27 @@ Spec capturada en sesión de diseño 2026-05-24 sobre conversación de
 revisión de la pestaña Seguridad. Cambios futuros aquí deberían acompañar
 las migraciones / PRs correspondientes para mantener doc + código en
 sincro.
+
+### 10.1 Revisión 2026-05-24 (post-import xlsx `Triage Eventos de Seguridad`)
+
+Reconciliación con el documento operacional real del cliente (xlsx con
+sheets `Triage`, `Priorización`, `Herramientas`, `Taxonomía v9`):
+
+- §2.2: agregada nota sobre `Falso Positivo` como taxonomía válida (no
+  solo severidad).
+- §2.2.b: nueva sección con tabla TLP ↔ Criticidad ↔ Valoración derivada
+  de `Priorización!R24-R28`.
+- §2.3: rename `triage_tool_modes` → `triage_tool_actions` ("Acción
+  aplicada" según xlsx). Lista de 15 herramientas confirmada con
+  `NGFWG` (typo o intencional — preservar literal al importar).
+- §3.2: `Falso Positivo` tratado como caso especial (skip matriz, prioridad
+  directa = FP, SLA = N/A). Removido `Informativo` por no estar en xlsx.
+- §4.1, §4.2: schema actualizado a `tool_action_id` / `triage_tool_actions`.
+
+**Gap pendiente identificado** (NO en este doc, se resuelve aparte): el
+seed actual de taxonomías CMS (`CODE-MALICIOUS`, `INTRUSION`, etc., ~20
+rows) está desalineado con la `Taxonomía v9` del xlsx (~90 rows con
+parents `Abuso de Contenido`, `Fraude`, `Seguridad del Contenido de la
+Información`, `Violación de políticas`, `Falso Positivo`, etc.). Acción
+acordada: script futuro `scripts/import_taxonomy_from_xlsx.py` que
+soft-deletea taxonomías no presentes en xlsx y agrega las nuevas.
