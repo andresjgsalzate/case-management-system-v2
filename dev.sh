@@ -356,5 +356,40 @@ sleep 2
 ) &
 FRONTEND_PID=$!
 
-# Esperar a que ambos procesos terminen
-wait "$BACKEND_PID" "$FRONTEND_PID"
+# Esperar a que CUALQUIERA muera (no a ambos).
+#
+# Bug previo: `wait $A $B` espera a que *ambos* PIDs terminen y devuelve
+# el exit code del último. Si Next.js (frontend) crasheaba silenciosamente
+# por OOM/Turbopack, el shell se quedaba en `wait` esperando al backend,
+# que seguía vivo logueando requests del browser. Resultado: el operador
+# veía logs normales mientras el browser tiraba 502 Bad Gateway porque
+# el upstream :3000 estaba muerto -- sin ningún aviso en consola.
+#
+# `wait -n` (bash 4.3+) retorna apenas el primer PID termina, junto con
+# su exit code. Identificamos cuál murió por liveness probe del otro y
+# damos un mensaje claro + hint específico. La trap EXIT (línea 52) se
+# encarga de matar al sobreviviente.
+set +e
+wait -n "$BACKEND_PID" "$FRONTEND_PID"
+DEAD_EXIT=$?
+set -e
+
+if kill -0 "$BACKEND_PID" 2>/dev/null; then
+  DEAD_NAME="FRONTEND (npm run dev / Next.js)"
+  HINT="Causas comunes: Turbopack OOM (cerrá otras apps; probar NODE_OPTIONS=--max-old-space-size=4096), node_modules corruptos, o puerto 3000 ocupado."
+elif kill -0 "$FRONTEND_PID" 2>/dev/null; then
+  DEAD_NAME="BACKEND (uvicorn)"
+  HINT="Causas comunes: import error en Python, env var faltante en backend/.env, puerto 8000 ocupado, o DB inaccesible."
+else
+  DEAD_NAME="AMBOS (carrera)"
+  HINT="Murieron casi al mismo tiempo. Buscá el primer error real más arriba en este log."
+fi
+
+echo ""
+echo -e "${RED}══════════════════════════════════════════════════════${NC}"
+echo -e "${RED}  ${DEAD_NAME} murió (exit ${DEAD_EXIT})${NC}"
+echo -e "${RED}  ${HINT}${NC}"
+echo -e "${RED}  Bajando el proceso sobreviviente…${NC}"
+echo -e "${RED}══════════════════════════════════════════════════════${NC}"
+
+exit "$DEAD_EXIT"
