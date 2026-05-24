@@ -202,6 +202,9 @@ def create_app() -> FastAPI:
     app.include_router(n8n_inventory_router, prefix="/api/v1")
     from backend.src.modules.mitre.router import router as mitre_router
     app.include_router(mitre_router, prefix="/api/v1")
+    # Triage router declares its own /api/v1/cases/{id}/triage prefix.
+    from backend.src.modules.triage.router import router as triage_router
+    app.include_router(triage_router)
     app.include_router(operational_router)
     app.include_router(forensic_router)
     app.include_router(alert_reports_router)
