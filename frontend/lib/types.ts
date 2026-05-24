@@ -1325,3 +1325,86 @@ export interface N8nInventoryEntry {
   catalog: N8nWorkflow | null;
   status: N8nInventoryStatus;
 }
+
+// ─── SOC Triage (docs/specs/triage.md, backend module: triage) ────
+
+export type AlertSeverity =
+  | "critico" | "alto" | "medio" | "bajo" | "falso_positivo";
+export type ContextOriginType = "origen_interno" | "origen_externo";
+export type AssetCriticality = "critico" | "alto" | "medio" | "bajo";
+
+export interface TriageToolType {
+  id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+}
+
+export interface TriageToolAction {
+  id: string;
+  name: string;
+  is_active: boolean;
+}
+
+export interface CaseTriage {
+  id: string;
+  case_id: string;
+  version: number;
+  triaged_by_user_id: string;
+  triaged_at: string;
+
+  case_title_snapshot: string;
+  case_tenant_name_snapshot: string | null;
+
+  sub_taxonomy_id: string;
+  alert_severity: AlertSeverity;
+  context_origin_type: ContextOriginType;
+  asset_criticality: AssetCriticality;
+
+  tool_type_id: string | null;
+  tool_action_id: string | null;
+
+  context_origin_detail: string | null;
+  related_asset: string | null;
+  alert_duration_seconds: number | null;
+  alert_repetitions: number;
+
+  analysis_narrative: string | null;
+  behavior_narrative: string | null;
+  recommendations: string | null;
+
+  evidence_attachment_id: string | null;
+  behavior_attachment_id: string | null;
+
+  calculated_priority_id: string | null;
+  calculated_score: string | null;   // Decimal serialized as string
+  calculated_sla_minutes: number | null;
+
+  created_at: string;
+}
+
+export interface TriageWithContext {
+  triage: CaseTriage;
+  parent_taxonomy_id: string | null;
+  parent_taxonomy_name: string | null;
+  sub_taxonomy_name: string;
+  impacto_potencial: string | null;
+}
+
+export interface CreateTriagePayload {
+  sub_taxonomy_id: string;
+  alert_severity: AlertSeverity;
+  context_origin_type: ContextOriginType;
+  asset_criticality: AssetCriticality;
+  tool_type_id?: string | null;
+  tool_action_id?: string | null;
+  context_origin_detail?: string | null;
+  related_asset?: string | null;
+  alert_duration_seconds?: number | null;
+  alert_repetitions?: number;
+  analysis_narrative?: string | null;
+  behavior_narrative?: string | null;
+  recommendations?: string | null;
+  evidence_attachment_id?: string | null;
+  behavior_attachment_id?: string | null;
+}
