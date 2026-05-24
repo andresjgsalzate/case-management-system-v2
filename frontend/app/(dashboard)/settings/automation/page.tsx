@@ -12,6 +12,8 @@ import { Spinner } from "@/components/atoms/Spinner";
 import { useConfirm } from "@/components/providers/ConfirmProvider";
 import { formatDate } from "@/lib/utils";
 import { useCasePriorities, useCaseStatuses, useUsers } from "@/hooks/useCases";
+import { useN8nWorkflows } from "@/hooks/useN8nWorkflows";
+import { useServiceItems } from "@/hooks/useServiceCatalog";
 import type { ApiResponse } from "@/lib/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -56,9 +58,13 @@ const EVENT_LABELS: Record<string, string> = {
   "note.created":          "Nota agregada",
 };
 
-const CONDITION_FIELDS: Record<string, { label: string; valueType: "priority" | "status" | "text" }> = {
-  priority_id:          { label: "Prioridad",          valueType: "priority" },
-  status_id:            { label: "Estado",              valueType: "status" },
+const CONDITION_FIELDS: Record<
+  string,
+  { label: string; valueType: "priority" | "status" | "text" | "catalog_item" }
+> = {
+  priority_id:             { label: "Prioridad",          valueType: "priority" },
+  status_id:               { label: "Estado",              valueType: "status" },
+  service_catalog_item_id: { label: "Item de catalogo",    valueType: "catalog_item" },
 };
 
 const OPERATORS: Record<string, string> = {
@@ -74,6 +80,7 @@ const ACTION_TYPES: Record<string, string> = {
   change_status:        "Cambiar estado",
   create_todo:          "Crear tarea",
   escalate_priority:    "Escalar prioridad",
+  trigger_n8n_workflow: "Disparar workflow n8n",
 };
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -122,12 +129,14 @@ function ConditionRow({
   onRemove,
   priorities,
   statuses,
+  catalogItems,
 }: {
   cond: Condition;
   onChange: (c: Condition) => void;
   onRemove: () => void;
   priorities: { id: string; name: string }[];
   statuses: { id: string; name: string }[];
+  catalogItems: { id: string; name: string }[];
 }) {
   const fieldMeta = CONDITION_FIELDS[cond.field];
 
@@ -177,6 +186,18 @@ function ConditionRow({
           {statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       )}
+      {fieldMeta?.valueType === "catalog_item" && (
+        <select
+          className="flex-1 px-2 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+          value={cond.value}
+          onChange={(e) => onChange({ ...cond, value: e.target.value })}
+        >
+          <option value="">— item de catálogo —</option>
+          {catalogItems.map((it) => (
+            <option key={it.id} value={it.id}>{it.name}</option>
+          ))}
+        </select>
+      )}
       {!fieldMeta && (
         <input
           className="flex-1 px-2 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
@@ -206,6 +227,7 @@ function ActionRow({
   priorities,
   statuses,
   users,
+  n8nWorkflows,
 }: {
   action: Action;
   onChange: (a: Action) => void;
@@ -213,6 +235,7 @@ function ActionRow({
   priorities: { id: string; name: string }[];
   statuses: { id: string; name: string }[];
   users: { id: string; full_name: string }[];
+  n8nWorkflows: { id: string; name: string; is_active: boolean }[];
 }) {
   function setParam(key: string, value: string) {
     onChange({ ...action, params: { ...action.params, [key]: value } });
@@ -376,6 +399,51 @@ function ActionRow({
           Sube la prioridad del caso un nivel. Si ya está en el nivel más alto, no hace nada.
         </p>
       )}
+
+      {/* Params for trigger_n8n_workflow */}
+      {action.action_type === "trigger_n8n_workflow" && (
+        <div className="flex flex-col gap-2 pl-1">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">Workflow n8n</label>
+            <select
+              className="px-2 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              value={action.params.workflow_id ?? ""}
+              onChange={(e) => setParam("workflow_id", e.target.value)}
+            >
+              <option value="">— elegir workflow del catálogo —</option>
+              {n8nWorkflows
+                .filter((w) => w.is_active)
+                .map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+            </select>
+            {n8nWorkflows.length === 0 && (
+              <p className="text-[11px] text-amber-600">
+                Sin workflows registrados. Andá a{" "}
+                <span className="font-mono">/settings/integrations</span> o{" "}
+                <span className="font-mono">/settings/n8n-inventory</span> para
+                registrar uno.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">
+              Email destinatario (opcional)
+            </label>
+            <input
+              type="email"
+              className="px-2 py-1.5 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              placeholder="alerts@empresa.com"
+              value={action.params.recipient_email ?? ""}
+              onChange={(e) => setParam("recipient_email", e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Se pasa al workflow bajo <code>context.recipient_email</code>.
+              El workflow decide cómo usarlo (ej. To del email).
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -405,6 +473,12 @@ function RuleEditor({
   const { data: priorities = [] } = useCasePriorities();
   const { data: statuses = [] } = useCaseStatuses();
   const { data: users = [] } = useUsers();
+  // Catalog items (across all categories) + n8n workflows registered in CMS.
+  // Both feed the new "trigger_n8n_workflow" action + "service_catalog_item_id"
+  // condition picker. useServiceItems with no category arg returns the full
+  // list; useN8nWorkflows returns the catalog rows.
+  const { data: catalogItems = [] } = useServiceItems();
+  const { data: n8nWorkflows = [] } = useN8nWorkflows();
 
   function addCondition() {
     setForm((f) => ({
@@ -537,6 +611,7 @@ function RuleEditor({
                 onRemove={() => removeCondition(i)}
                 priorities={priorities}
                 statuses={statuses}
+                catalogItems={catalogItems}
               />
             ))}
           </div>
@@ -573,6 +648,7 @@ function RuleEditor({
               priorities={priorities}
               statuses={statuses}
               users={users}
+              n8nWorkflows={n8nWorkflows}
             />
           ))}
         </div>

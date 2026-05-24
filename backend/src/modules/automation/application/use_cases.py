@@ -290,5 +290,73 @@ class AutomationUseCases:
                     case_id, current_priority.level, next_priority.level,
                 )
 
+            case "trigger_n8n_workflow":
+                # Self-contained call to an n8n webhook -- no HMAC + no
+                # PlaybookRun persistence. The full path (HMAC signing +
+                # callback JWT + run audit) lives in n8n_bridge.trigger_workflow
+                # and is used by taxonomy delegation. This action is intentionally
+                # simpler: it just POSTs the enriched case context so any
+                # workflow can react. Params:
+                #   - workflow_id: FK to n8n_workflows.id (catalog entry)
+                #   - <anything else>: passed through under `context` so the
+                #     workflow can use it (e.g. recipient_email for a notifier).
+                if not case_id:
+                    logger.warning("trigger_n8n_workflow: no case_id en el contexto")
+                    return
+                workflow_id = action.params.get("workflow_id")
+                if not workflow_id:
+                    logger.warning("trigger_n8n_workflow: workflow_id no configurado en params")
+                    return
+                from backend.src.modules.n8n_bridge.infrastructure.models import (
+                    N8nWorkflowModel,
+                )
+                wf = await self.db.get(N8nWorkflowModel, workflow_id)
+                if wf is None:
+                    logger.warning("trigger_n8n_workflow: workflow %s no encontrado", workflow_id)
+                    return
+                if not wf.is_active:
+                    logger.warning("trigger_n8n_workflow: workflow %s inactivo", wf.name)
+                    return
+
+                import httpx
+                payload = {
+                    "case_id": case_id,
+                    "case_number": context.get("case_number"),
+                    "title": context.get("title"),
+                    "case_type": context.get("case_type"),
+                    "service_catalog_item_id": context.get("service_catalog_item_id"),
+                    "service_catalog_label": context.get("service_catalog_label"),
+                    "tenant_id": context.get("tenant_id"),
+                    "priority_id": context.get("priority_id"),
+                    "status_id": context.get("status_id"),
+                    "application_id": context.get("application_id"),
+                    "origin_id": context.get("origin_id"),
+                    "context": {
+                        "triggered_by": "automation_rule",
+                        "triggered_by_user": actor_id or None,
+                        # Forward every other rule param so the workflow can
+                        # read them (e.g. recipient_email, slack_channel, ...).
+                        **{
+                            k: v for k, v in action.params.items()
+                            if k != "workflow_id"
+                        },
+                    },
+                }
+                try:
+                    # verify=False: dev nginx uses a self-signed cert. In prod
+                    # the webhook URL should point to a host with a valid cert.
+                    async with httpx.AsyncClient(timeout=15, verify=False) as client:
+                        r = await client.post(wf.workflow_url, json=payload)
+                        r.raise_for_status()
+                    logger.info(
+                        "trigger_n8n_workflow: posted to '%s' (status %d) for case %s",
+                        wf.name, r.status_code, case_id,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "trigger_n8n_workflow: POST a '%s' fallo para caso %s: %s",
+                        wf.name, case_id, e,
+                    )
+
             case _:
                 logger.warning("Tipo de acción no implementada: %s", action.action_type)
