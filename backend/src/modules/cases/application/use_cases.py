@@ -134,12 +134,27 @@ class CaseUseCases:
                 tenant_id=tenant_id,
             )
 
+        # Payload enriched with filterable fields so AutomationEngine rules
+        # can match on service catalog item, status, priority, etc. without
+        # needing to re-load the case. Keep keys shallow + JSON-friendly.
         await event_bus.publish(
             BaseEvent(
                 event_name="case.created",
                 tenant_id=tenant_id or "default",
                 actor_id=actor_id,
-                payload={"case_id": case.id, "case_number": case_number, "title": dto.title},
+                payload={
+                    "case_id": case.id,
+                    "case_number": case_number,
+                    "title": dto.title,
+                    "case_type": case_type,
+                    "status_id": initial_status.id,
+                    "priority_id": priority_id,
+                    "application_id": dto.application_id,
+                    "origin_id": dto.origin_id,
+                    "service_catalog_item_id": dto.service_item_id,
+                    "service_catalog_label": service_item.name if service_item else None,
+                    "complexity": dto.complexity,
+                },
             )
         )
 
