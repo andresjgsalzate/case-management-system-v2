@@ -5,10 +5,12 @@ import { useState } from "react";
 import { AlertReportTab } from "./AlertReportTab";
 import { ApprovalsTab } from "./ApprovalsTab";
 import { ForensicArtifactsTab } from "./ForensicArtifactsTab";
+import { TriageTab } from "./TriageTab";
 import { WazuhEventsTab } from "./WazuhEventsTab";
 import { WorkflowRunsTab } from "./WorkflowRunsTab";
 
 type SubTab =
+  | "triage"
   | "wazuh"
   | "forensic"
   | "approvals"
@@ -16,6 +18,8 @@ type SubTab =
   | "report";
 
 const SUB_TABS: { key: SubTab; label: string }[] = [
+  // Triage first: the operational starting point for every SOC case.
+  { key: "triage", label: "Triage" },
   { key: "wazuh", label: "Wazuh Events" },
   { key: "forensic", label: "Forensic Artifacts" },
   { key: "approvals", label: "Approvals" },
@@ -28,7 +32,7 @@ interface Props {
 }
 
 export function SeguridadTabsLayout({ caseId }: Props) {
-  const [active, setActive] = useState<SubTab>("wazuh");
+  const [active, setActive] = useState<SubTab>("triage");
 
   return (
     <div className="space-y-3">
@@ -50,6 +54,7 @@ export function SeguridadTabsLayout({ caseId }: Props) {
       </nav>
 
       <div>
+        {active === "triage" && <TriageTab caseId={caseId} />}
         {active === "wazuh" && <WazuhEventsTab caseId={caseId} />}
         {active === "forensic" && <ForensicArtifactsTab caseId={caseId} />}
         {active === "approvals" && <ApprovalsTab caseId={caseId} />}
