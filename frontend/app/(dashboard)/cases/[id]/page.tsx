@@ -79,7 +79,17 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
   const canTransition   = caseActions.canTransition;
   const canTransferCase = caseActions.canTransfer;
 
-  // Tabs available based on permissions
+  // The Seguridad tab is SOC-specific surface (Wazuh events, forensic
+  // artifacts, alert reports, etc.). Only meaningful when the case has
+  // a taxonomy attached -- without one, the sub-tabs render empty rows
+  // and confuse non-SOC operators looking at request/general cases.
+  // A future enhancement could also light it up when the case's
+  // service_catalog_item is mapped to a taxonomy via the
+  // taxonomy_catalog_mappings table; for now we gate strictly on
+  // direct taxonomy_id to keep the visibility unambiguous.
+  const hasTaxonomy = Boolean(c?.taxonomy_id);
+
+  // Tabs available based on permissions + case shape
   const visibleTabs: { key: Tab; label: string }[] = [
     { key: "details",       label: "Detalles" },
     { key: "notes",         label: "Notas" },
@@ -87,7 +97,7 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
     ...(canViewTimer  ? [{ key: "tiempo"       as Tab, label: "Tiempo" }]        : []),
     ...(canClassify   ? [{ key: "clasificacion" as Tab, label: "Clasificación" }] : []),
     ...(canViewPriorityCalcs ? [{ key: "priorizacion" as Tab, label: "Priorización" }] : []),
-    { key: "seguridad", label: "Seguridad" },
+    ...(hasTaxonomy ? [{ key: "seguridad" as Tab, label: "Seguridad" }] : []),
     { key: "actividad", label: "Actividad" },
   ];
 
@@ -95,11 +105,12 @@ export default function CaseDetailPage({ params }: { params: { id: string } }) {
     setCurrentUserId(getCurrentUserId());
   }, []);
 
-  // If the current tab is no longer visible (permissions changed), reset to "details"
+  // If the current tab is no longer visible (permissions changed or
+  // taxonomy was removed from the case), reset to "details".
   useEffect(() => {
     const validKeys = visibleTabs.map((t) => t.key);
     if (!validKeys.includes(tab)) setTab("details");
-  }, [canViewTimer, canClassify, canViewPriorityCalcs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canViewTimer, canClassify, canViewPriorityCalcs, hasTaxonomy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (isLoading) {
     return (
