@@ -23,15 +23,25 @@ from backend.src.core.middleware.permission_checker import (
     PermissionChecker,
 )
 from backend.src.core.responses import SuccessResponse
+from sqlalchemy import select
+
 from backend.src.modules.triage.application.dtos import (
     CaseTriageResponse,
     CreateTriagePayload,
+    TriageToolActionResponse,
+    TriageToolTypeResponse,
     TriageWithContext,
 )
 from backend.src.modules.triage.application.use_cases import TriageUseCases
+from backend.src.modules.triage.infrastructure.models import (
+    TriageToolActionModel,
+    TriageToolTypeModel,
+)
 
 
 router = APIRouter(prefix="/api/v1/cases", tags=["triage"])
+# Separate router for read-only catalog endpoints (different URL prefix).
+catalogs_router = APIRouter(prefix="/api/v1/triage-catalogs", tags=["triage"])
 
 _Read = Depends(PermissionChecker("cases", "read"))
 _Update = Depends(PermissionChecker("cases", "update"))
@@ -98,3 +108,44 @@ async def create_triage(
     await db.commit()
     await db.refresh(triage)
     return SuccessResponse.ok(triage)
+
+
+# ── Catalogs (read-only, separate router with /api/v1/triage-catalogs) ──
+
+
+@catalogs_router.get(
+    "/tool-types",
+    response_model=SuccessResponse[list[TriageToolTypeResponse]],
+)
+async def list_tool_types(
+    db: DBSession,
+    _current_user: CurrentUser = _Read,
+):
+    """All active tool types (xlsx Herramientas). Tenant scoping ignored
+    for now -- catalog is global until /settings UI lands in Phase 5.
+    """
+    stmt = (
+        select(TriageToolTypeModel)
+        .where(TriageToolTypeModel.is_active.is_(True))
+        .order_by(TriageToolTypeModel.name)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return SuccessResponse.ok(rows)
+
+
+@catalogs_router.get(
+    "/tool-actions",
+    response_model=SuccessResponse[list[TriageToolActionResponse]],
+)
+async def list_tool_actions(
+    db: DBSession,
+    _current_user: CurrentUser = _Read,
+):
+    """All active tool actions (Monitoreo / Bloqueo / extensible)."""
+    stmt = (
+        select(TriageToolActionModel)
+        .where(TriageToolActionModel.is_active.is_(True))
+        .order_by(TriageToolActionModel.name)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return SuccessResponse.ok(rows)
