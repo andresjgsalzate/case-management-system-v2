@@ -91,12 +91,13 @@ class SmtpConfigUseCases:
             except Exception:
                 return {"success": False, "message": "Error desencriptando contraseña — guarda la config de nuevo"}
 
+        use_tls, start_tls = resolve_tls_mode(config.port, config.use_tls)
         try:
             smtp = aiosmtplib.SMTP(
                 hostname=config.host,
                 port=config.port,
-                use_tls=False,
-                start_tls=config.use_tls,
+                use_tls=use_tls,
+                start_tls=start_tls,
                 timeout=10,
             )
             await smtp.connect()
@@ -106,3 +107,31 @@ class SmtpConfigUseCases:
             return {"success": True, "message": f"Conexión exitosa a {config.host}:{config.port}"}
         except Exception as e:
             return {"success": False, "message": str(e)}
+
+
+def resolve_tls_mode(port: int, use_tls_flag: bool) -> tuple[bool, bool]:
+    """Map (port, user-intent flag) to aiosmtplib's (use_tls, start_tls) pair.
+
+    SMTP has three modes that the single `use_tls` checkbox in the CMS UI
+    can't represent cleanly, so we derive the right combination from the
+    port + the flag:
+
+    * Port 465  -> implicit TLS (SMTPS, RFC 8314). Connection is encrypted
+                   from byte 0. Required by Hostinger, Gmail SSL, etc.
+                   `use_tls=True, start_tls=False`.
+    * Port 587  -> STARTTLS upgrade. Connection starts plain, then the
+                   client issues STARTTLS to upgrade. The standard
+                   submission port.
+                   `use_tls=False, start_tls=True`.
+    * Other     -> respect the flag: True means STARTTLS, False means plain.
+
+    The previous implementation hardcoded `use_tls=False` and routed the
+    flag into `start_tls`, which silently broke implicit-TLS servers
+    (the client opened plain on 465 and timed out waiting for a "220
+    ready" greeting that was already wrapped in TLS).
+    """
+    if not use_tls_flag:
+        return (False, False)
+    if port == 465:
+        return (True, False)
+    return (False, True)

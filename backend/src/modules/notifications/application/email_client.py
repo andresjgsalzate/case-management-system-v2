@@ -204,6 +204,12 @@ async def send_email(to_email: str, subject: str, html_body: str) -> None:
     message["Subject"] = subject
     message.attach(MIMEText(html_body, "html"))
 
+    # Local import to avoid a module-level dep cycle (email_config
+    # imports notifications via the event bus in some flows).
+    from backend.src.modules.email_config.application.smtp_use_cases import (
+        resolve_tls_mode,
+    )
+    use_tls, start_tls = resolve_tls_mode(params["port"], params["use_tls"])
     try:
         await aiosmtplib.send(
             message,
@@ -211,8 +217,8 @@ async def send_email(to_email: str, subject: str, html_body: str) -> None:
             port=params["port"],
             username=params["username"] or None,
             password=params["password"] or None,
-            use_tls=False,
-            start_tls=params["use_tls"],
+            use_tls=use_tls,
+            start_tls=start_tls,
         )
         logger.info("Email enviado a %s: %s", to_email, subject)
     except Exception as e:
