@@ -93,6 +93,75 @@ ALL_ACTIONS = [
     "archive", "assign", "transition",
 ]
 
+# ── SOC role bundles (ADR 0001 + docs/specs/orchestration-flows.md §6) ──
+#
+# Capacidades atómicas reales tomadas del inventario de PermissionChecker
+# en los módulos SOC (forensic, security_taxonomies, integrations,
+# alert_reports, approvals, triage usa cases:read/update).
+#
+# Jerarquía por composición: L2 = L1 + extra, Admin SOC = L2 + extra.
+# NOTA: el gate de acción destructiva NO es un permiso `forensic:launch_
+# destructive` (no existe) -- es `approvals:approve` (autorizar el
+# ApprovalRequest) + el routing obligatorio por n8n
+# (_enforce_destructive_governance). Por eso L1 (sin approvals:approve)
+# no puede autorizar hunts destructivos; L2 sí.
+
+_SOC_L1_PERMS = [
+    # Casos + triage (los endpoints de triage usan cases:read/update)
+    {"module": "cases",          "action": "read",            "scope": "all"},
+    {"module": "cases",          "action": "update",          "scope": "all"},
+    {"module": "cases",          "action": "transition",      "scope": "all"},
+    {"module": "cases",          "action": "create:event",    "scope": "all"},
+    {"module": "cases",          "action": "create:incident", "scope": "all"},
+    {"module": "notes",          "action": "create",          "scope": "all"},
+    {"module": "notes",          "action": "read",            "scope": "all"},
+    {"module": "attachments",    "action": "create",          "scope": "all"},
+    {"module": "attachments",    "action": "read",            "scope": "all"},
+    {"module": "classification", "action": "read",            "scope": "all"},
+    {"module": "classification", "action": "create",          "scope": "all"},
+    {"module": "security_taxonomies", "action": "read",        "scope": "all"},
+    # Forense read-only (sin acciones destructivas)
+    {"module": "forensic",       "action": "read",            "scope": "all"},
+    {"module": "forensic",       "action": "launch_ro",       "scope": "all"},
+    # Reportes de alerta: ver + generar
+    {"module": "alert_reports",  "action": "read",            "scope": "all"},
+    {"module": "alert_reports",  "action": "generate",        "scope": "all"},
+    # Integraciones: ver eventos entrantes (no gestionar)
+    {"module": "integrations",   "action": "read_events",     "scope": "all"},
+    # Cola de aprobaciones: VER pero NO aprobar (eso es L2)
+    {"module": "approvals",      "action": "read",            "scope": "all"},
+    {"module": "metrics",        "action": "read",            "scope": "all"},
+    {"module": "sla",            "action": "read",            "scope": "all"},
+    {"module": "notifications",  "action": "read",            "scope": "own"},
+]
+
+# L2 / Forense: autoriza acciones destructivas + gestiona reportes
+_SOC_L2_EXTRA = [
+    {"module": "approvals",      "action": "approve",         "scope": "all"},  # ← gate destructivo
+    {"module": "forensic",       "action": "cancel_own",      "scope": "all"},
+    {"module": "integrations",   "action": "read",            "scope": "all"},
+    {"module": "integrations",   "action": "replay_events",   "scope": "all"},
+    {"module": "alert_reports",  "action": "manage_templates","scope": "all"},
+    {"module": "alert_reports",  "action": "set_default",     "scope": "all"},
+    {"module": "alert_reports",  "action": "view_versions",   "scope": "all"},
+    {"module": "alert_reports",  "action": "delete",          "scope": "all"},
+    {"module": "security_taxonomies", "action": "read_audit_log", "scope": "all"},
+    {"module": "n8n_editor",     "action": "access",          "scope": "all"},
+]
+_SOC_L2_PERMS = _SOC_L1_PERMS + _SOC_L2_EXTRA
+
+# Admin SOC: gobernanza de taxonomías, integraciones, catálogos
+_SOC_ADMIN_EXTRA = [
+    {"module": "security_taxonomies", "action": "create",        "scope": "all"},
+    {"module": "security_taxonomies", "action": "update",        "scope": "all"},
+    {"module": "security_taxonomies", "action": "delete",        "scope": "all"},
+    {"module": "security_taxonomies", "action": "manage_global", "scope": "all"},
+    {"module": "integrations",        "action": "manage",        "scope": "all"},
+    {"module": "forensic",            "action": "sync_catalog",  "scope": "all"},
+    {"module": "forensic",            "action": "manage_featured","scope": "all"},
+]
+_SOC_ADMIN_PERMS = _SOC_L2_PERMS + _SOC_ADMIN_EXTRA
+
 ROLES_SEED = [
     {
         "name": "Super Admin",
@@ -184,6 +253,25 @@ ROLES_SEED = [
             {"module": "document_types", "action": "read",      "scope": "all"},
         ],
     },
+    # ── SOC roles (ADR 0001) — capability bundles, tiered by `level` ──
+    {
+        "name": "SOC Analyst L1",
+        "description": "Analista SOC N1: triage, lectura forense, hunts read-only. NO autoriza acciones destructivas.",
+        "level": 1,
+        "permissions": _SOC_L1_PERMS,
+    },
+    {
+        "name": "SOC Analyst L2",
+        "description": "Analista SOC N2 / forense: aprueba acciones destructivas, gestiona reportes de alerta.",
+        "level": 2,
+        "permissions": _SOC_L2_PERMS,
+    },
+    {
+        "name": "SOC Admin",
+        "description": "Administrador SOC: gobernanza de taxonomías, integraciones y catálogos.",
+        "level": 3,
+        "permissions": _SOC_ADMIN_PERMS,
+    },
 ]
 
 # Correcciones de nombres de módulo: (nombre_viejo → nombre_correcto)
@@ -224,6 +312,12 @@ ROLE_PERMISSION_ADDITIONS = {
         # Sub-spec 01 § 3.6 granular case creation permissions
         {"module": "cases",          "action": "create:request", "scope": "own"},
     ],
+    # SOC roles: re-listing the full bundle here means re-running seed
+    # repairs any capability added to the bundle constants later (only
+    # missing perms are inserted; existing ones are left untouched).
+    "SOC Analyst L1": _SOC_L1_PERMS,
+    "SOC Analyst L2": _SOC_L2_PERMS,
+    "SOC Admin": _SOC_ADMIN_PERMS,
     "Agent": [
         {"module": "cases",          "action": "assign",  "scope": "own"},
         {"module": "users",          "action": "read",    "scope": "all"},
@@ -355,6 +449,7 @@ async def seed_phase_1(session) -> None:
             name=role_data["name"],
             description=role_data["description"],
             is_global=role_data.get("is_global", False),
+            level=role_data.get("level", 1),
         )
         session.add(role)
         await session.flush()
