@@ -53,6 +53,46 @@ class TriageSlaPolicyResponse(BaseModel):
     is_active: bool
 
 
+# ─── Catalog admin payloads (Phase 5 CRUD) ──────────────────────────
+
+
+class CreateToolTypePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class UpdateToolTypePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+    is_active: bool | None = None
+
+
+class CreateToolActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=50)
+
+
+class UpdateToolActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=50)
+    is_active: bool | None = None
+
+
+class CreateSlaPolicyPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    priority_id: str
+    # NULL = N/A (e.g. Falso Positivo). >=0 otherwise.
+    sla_minutes: int | None = Field(default=None, ge=0)
+
+
+class UpdateSlaPolicyPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sla_minutes: int | None = Field(default=None, ge=0)
+    is_active: bool | None = None
+
+
 # ─── Main: case_triage request + response ───────────────────────────
 
 

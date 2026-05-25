@@ -94,6 +94,8 @@ export interface Case {
   assigned_user_name?: string | null;
   team_id?: string;
   created_by: string;
+  created_by_name?: string | null;
+  created_by_email?: string | null;
   solution_description?: string | null;
   is_archived: boolean;
   archived_at?: string | null;
@@ -1407,4 +1409,37 @@ export interface CreateTriagePayload {
   recommendations?: string | null;
   evidence_attachment_id?: string | null;
   behavior_attachment_id?: string | null;
+}
+
+export interface TriageSlaPolicy {
+  id: string;
+  priority_id: string;
+  sla_minutes: number | null;
+  is_active: boolean;
+}
+
+// Catalog admin payloads (Phase 5)
+export interface CreateToolTypePayload {
+  name: string;
+  description?: string | null;
+}
+export interface UpdateToolTypePayload {
+  name?: string;
+  description?: string | null;
+  is_active?: boolean;
+}
+export interface CreateToolActionPayload {
+  name: string;
+}
+export interface UpdateToolActionPayload {
+  name?: string;
+  is_active?: boolean;
+}
+export interface CreateSlaPolicyPayload {
+  priority_id: string;
+  sla_minutes?: number | null;
+}
+export interface UpdateSlaPolicyPayload {
+  sla_minutes?: number | null;
+  is_active?: boolean;
 }
