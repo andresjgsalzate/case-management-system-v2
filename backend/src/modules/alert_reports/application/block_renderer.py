@@ -133,6 +133,7 @@ class BlockRenderer:
         tpl = self.env.get_template("blocks/alert_metadata.html")
         return tpl.render(
             case=snapshot.get("case", {}),
+            triage=snapshot.get("triage"),
             params=self._resolve_params(block),
         )
 
@@ -177,6 +178,7 @@ class BlockRenderer:
         tpl = self.env.get_template("blocks/triage_analysis.html")
         return tpl.render(
             case=snapshot.get("case", {}),
+            triage=snapshot.get("triage"),
             notes_summary=snapshot.get("notes_summary", ""),
             params=block.get("params", {}),
         )

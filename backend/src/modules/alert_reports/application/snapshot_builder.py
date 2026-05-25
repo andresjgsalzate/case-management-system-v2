@@ -24,8 +24,15 @@ SNAPSHOT_SIZE_LIMIT = 1024 * 1024  # 1 MB
 
 async def build_data_snapshot(db: AsyncSession, case) -> dict[str, Any]:
     """Aggregate every cross-spec data needed to reproduce the report."""
+    # The SOC triage (if any) is the structured source of truth for the
+    # narrative blocks. We fetch it once and let its fields take precedence
+    # over the legacy free-text extractors (which remain as fallback for
+    # cases triaged before this feature existed).
+    triage = await _snapshot_triage(db, case.id)
+
     snapshot = {
         "case": _snapshot_case(case),
+        "triage": triage,
         "priority_calculation": await _snapshot_priority_calc(db, case.id),
         "forensic_hunts": await _snapshot_forensic_hunts(db, case.id),
         "evidence_attachments": await _snapshot_evidence_attachments(
@@ -33,8 +40,14 @@ async def build_data_snapshot(db: AsyncSession, case) -> dict[str, Any]:
         ),
         "notes_summary": await _snapshot_notes_summary(db, case.id),
         "activity_timeline": await _snapshot_activity(db, case.id, limit=100),
-        "recommendations": await _extract_recommendations_note(db, case.id),
-        "behavior_relation": await _extract_behavior_note(db, case.id),
+        "recommendations": (
+            (triage or {}).get("recommendations")
+            or await _extract_recommendations_note(db, case.id)
+        ),
+        "behavior_relation": (
+            (triage or {}).get("behavior_narrative")
+            or await _extract_behavior_note(db, case.id)
+        ),
         "iocs": await _extract_iocs(db, case),
         "mitre_techniques": (
             getattr(case.taxonomy, "mitre_techniques", []) or []
@@ -43,6 +56,86 @@ async def build_data_snapshot(db: AsyncSession, case) -> dict[str, Any]:
         ),
     }
     return snapshot
+
+
+# ── SOC triage projection (latest revision) ─────────────────────────
+
+async def _snapshot_triage(db: AsyncSession, case_id: str) -> dict[str, Any] | None:
+    """Latest triage revision with FK names resolved + impact derived.
+
+    Returns None when the case was never triaged -- callers fall back to
+    legacy free-text extractors. All names are resolved here so the
+    immutable snapshot doesn't depend on later catalog edits.
+    """
+    from backend.src.modules.triage.infrastructure.models import (
+        CaseTriageModel,
+        TriageToolActionModel,
+        TriageToolTypeModel,
+    )
+    from backend.src.modules.security_taxonomies.infrastructure.models import (
+        SecurityTaxonomyModel,
+    )
+
+    stmt = (
+        select(CaseTriageModel)
+        .where(CaseTriageModel.case_id == case_id)
+        .order_by(CaseTriageModel.version.desc())
+        .limit(1)
+    )
+    t = (await db.execute(stmt)).scalar_one_or_none()
+    if t is None:
+        return None
+
+    sub = await db.get(SecurityTaxonomyModel, t.sub_taxonomy_id)
+    parent = (
+        await db.get(SecurityTaxonomyModel, sub.parent_id)
+        if sub and sub.parent_id else None
+    )
+    tool_type = (
+        await db.get(TriageToolTypeModel, t.tool_type_id)
+        if t.tool_type_id else None
+    )
+    tool_action = (
+        await db.get(TriageToolActionModel, t.tool_action_id)
+        if t.tool_action_id else None
+    )
+
+    # Impacto potencial = sub-taxonomy's internal/external impact picked
+    # by the origin context (spec section 2.1).
+    impacto = None
+    if sub:
+        impacto = (
+            sub.internal_impact_context
+            if t.context_origin_type == "origen_interno"
+            else sub.external_impact_context
+        )
+
+    return {
+        "version": t.version,
+        "triaged_at": t.triaged_at.isoformat() if t.triaged_at else None,
+        "sub_taxonomy_name": sub.name if sub else None,
+        # When sub has no parent it IS the root classification.
+        "parent_taxonomy_name": (
+            parent.name if parent else (sub.name if sub else None)
+        ),
+        "alert_severity": t.alert_severity,
+        "context_origin_type": t.context_origin_type,
+        "context_origin_detail": t.context_origin_detail,
+        "asset_criticality": t.asset_criticality,
+        "impacto_potencial": impacto,
+        "related_asset": t.related_asset,
+        "tool_type_name": tool_type.name if tool_type else None,
+        "tool_action_name": tool_action.name if tool_action else None,
+        "alert_duration_seconds": t.alert_duration_seconds,
+        "alert_repetitions": t.alert_repetitions,
+        "analysis_narrative": t.analysis_narrative,
+        "behavior_narrative": t.behavior_narrative,
+        "recommendations": t.recommendations,
+        "calculated_score": (
+            float(t.calculated_score) if t.calculated_score is not None else None
+        ),
+        "calculated_sla_minutes": t.calculated_sla_minutes,
+    }
 
 
 def is_snapshot_too_large(snapshot: dict[str, Any]) -> bool:

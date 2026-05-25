@@ -15,5 +15,15 @@
     {% if case.closed_at %}
     <tr><th>Cerrado</th><td>{{ case.closed_at }}</td></tr>
     {% endif %}
+    {% if triage %}
+    {# Triage-derived fields: the analyst's sub-classification + severity
+       + the calculated notification SLA. Only shown when the case has a
+       structured triage. #}
+    <tr><th>Sub-clasificación</th><td>{{ triage.sub_taxonomy_name or "—" }}</td></tr>
+    <tr><th>Severidad alerta</th><td>{{ triage.alert_severity }}</td></tr>
+    {% if triage.calculated_sla_minutes is not none %}
+    <tr><th>SLA notificación</th><td>{{ triage.calculated_sla_minutes }} min</td></tr>
+    {% endif %}
+    {% endif %}
   </table>
 </section>

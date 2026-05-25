@@ -1,17 +1,69 @@
 <section class="triage-analysis">
   <h2>ANÁLISIS Y TRIAGE DE LA ALERTA</h2>
-  {% if params.show_taxonomy_chain and case.taxonomy_code %}
-    <p>
-      <strong>Taxonomía:</strong>
-      {{ case.taxonomy_code }} — {{ case.taxonomy_name }}
-    </p>
-  {% endif %}
-  {% if case.description %}
-    <h3>Descripción</h3>
-    <p>{{ case.description }}</p>
-  {% endif %}
-  {% if notes_summary %}
-    <h3>Notas</h3>
-    <pre class="notes-block">{{ notes_summary }}</pre>
+
+  {% if triage %}
+    {# Structured triage takes precedence. Classification chain + matrix
+       inputs render as a compact table; narrative below. #}
+    <table class="triage-summary">
+      <tr>
+        <th>Clasificación</th>
+        <td>{{ triage.parent_taxonomy_name or "—" }}</td>
+        <th>Sub-clasificación</th>
+        <td>{{ triage.sub_taxonomy_name or "—" }}</td>
+      </tr>
+      <tr>
+        <th>Severidad</th>
+        <td>{{ triage.alert_severity }}</td>
+        <th>Impacto potencial</th>
+        <td>{{ triage.impacto_potencial or "—" }}</td>
+      </tr>
+      <tr>
+        <th>Criticidad de activo</th>
+        <td>{{ triage.asset_criticality }}</td>
+        <th>Contexto origen</th>
+        <td>
+          {{ triage.context_origin_type }}
+          {% if triage.context_origin_detail %}
+            ({{ triage.context_origin_detail }})
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>Activo relacionado</th>
+        <td>{{ triage.related_asset or "—" }}</td>
+        <th>Repeticiones</th>
+        <td>{{ triage.alert_repetitions }}</td>
+      </tr>
+      {% if triage.tool_type_name or triage.tool_action_name %}
+      <tr>
+        <th>Fuente</th>
+        <td>{{ triage.tool_type_name or "—" }}</td>
+        <th>Acción aplicada</th>
+        <td>{{ triage.tool_action_name or "—" }}</td>
+      </tr>
+      {% endif %}
+    </table>
+
+    {% if triage.analysis_narrative %}
+      <h3>Descripción del análisis</h3>
+      <p>{{ triage.analysis_narrative }}</p>
+    {% endif %}
+  {% else %}
+    {# Fallback: legacy free-text path for cases triaged before the
+       structured triage feature existed. #}
+    {% if params.show_taxonomy_chain and case.taxonomy_code %}
+      <p>
+        <strong>Taxonomía:</strong>
+        {{ case.taxonomy_code }} — {{ case.taxonomy_name }}
+      </p>
+    {% endif %}
+    {% if case.description %}
+      <h3>Descripción</h3>
+      <p>{{ case.description }}</p>
+    {% endif %}
+    {% if notes_summary %}
+      <h3>Notas</h3>
+      <pre class="notes-block">{{ notes_summary }}</pre>
+    {% endif %}
   {% endif %}
 </section>
