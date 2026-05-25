@@ -104,6 +104,33 @@ class CaseUseCases:
         if not priority_id:
             raise ValidationError("priority_id is required (or use a service_item with default)")
 
+        # Auto-resolver taxonomy desde el catálogo si hay mapeo en
+        # taxonomy_catalog_mappings. Sin esto, la pestaña Seguridad (y el
+        # triage subsiguiente) no se activan aunque la operación SOC haya
+        # asociado catálogos a taxonomías. Selección determinística:
+        # primero is_default=TRUE, luego priority_order ASC.
+        resolved_taxonomy_id: str | None = None
+        if dto.service_item_id:
+            from sqlalchemy import asc, desc
+            from backend.src.modules.security_taxonomies.infrastructure.models import (
+                TaxonomyCatalogMappingModel,
+            )
+            mapping_stmt = (
+                select(TaxonomyCatalogMappingModel.taxonomy_id)
+                .where(
+                    TaxonomyCatalogMappingModel.service_catalog_item_id
+                    == dto.service_item_id
+                )
+                .order_by(
+                    desc(TaxonomyCatalogMappingModel.is_default),
+                    asc(TaxonomyCatalogMappingModel.priority_order),
+                )
+                .limit(1)
+            )
+            resolved_taxonomy_id = (
+                await self.db.execute(mapping_stmt)
+            ).scalar_one_or_none()
+
         case = CaseModel(
             id=str(uuid.uuid4()),
             tenant_id=tenant_id,
@@ -117,6 +144,7 @@ class CaseUseCases:
             application_id=dto.application_id,
             origin_id=dto.origin_id,
             service_item_id=dto.service_item_id,
+            taxonomy_id=resolved_taxonomy_id,
             team_id=team_id,
             current_level=current_level,
             created_by=actor_id,
@@ -153,6 +181,7 @@ class CaseUseCases:
                     "origin_id": dto.origin_id,
                     "service_catalog_item_id": dto.service_item_id,
                     "service_catalog_label": service_item.name if service_item else None,
+                    "taxonomy_id": resolved_taxonomy_id,
                     "complexity": dto.complexity,
                 },
             )
@@ -169,6 +198,7 @@ class CaseUseCases:
                 selectinload(CaseModel.application),
                 selectinload(CaseModel.origin),
                 selectinload(CaseModel.assigned_user),
+                selectinload(CaseModel.creator),
                 selectinload(CaseModel.service_item).selectinload(
                     ServiceCatalogItemModel.category
                 ),
@@ -200,6 +230,7 @@ class CaseUseCases:
                 selectinload(CaseModel.application),
                 selectinload(CaseModel.origin),
                 selectinload(CaseModel.assigned_user),
+                selectinload(CaseModel.creator),
                 selectinload(CaseModel.service_item).selectinload(
                     ServiceCatalogItemModel.category
                 ),
@@ -550,6 +581,7 @@ class CaseUseCases:
                 selectinload(CaseModel.application),
                 selectinload(CaseModel.origin),
                 selectinload(CaseModel.assigned_user),
+                selectinload(CaseModel.creator),
                 selectinload(CaseModel.service_item).selectinload(
                     ServiceCatalogItemModel.category
                 ),
@@ -585,6 +617,7 @@ class CaseUseCases:
                 selectinload(CaseModel.application),
                 selectinload(CaseModel.origin),
                 selectinload(CaseModel.assigned_user),
+                selectinload(CaseModel.creator),
                 selectinload(CaseModel.service_item).selectinload(
                     ServiceCatalogItemModel.category
                 ),
@@ -696,6 +729,8 @@ class CaseUseCases:
             service_category_id=svc_category.id if svc_category else None,
             service_category_name=svc_category.name if svc_category else None,
             created_by=model.created_by,
+            created_by_name=model.creator.full_name if model.creator else None,
+            created_by_email=model.creator.email if model.creator else None,
             assigned_to=model.assigned_to,
             assigned_user_name=model.assigned_user.full_name if model.assigned_user else None,
             team_id=model.team_id,
@@ -705,10 +740,15 @@ class CaseUseCases:
             archived_by=model.archived_by,
             closed_at=model.closed_at.isoformat() if model.closed_at else None,
             case_type=model.case_type,
+            taxonomy_id=model.taxonomy_id,
             original_case_number=model.original_case_number,
             original_case_type=model.original_case_type,
             promoted_at=model.promoted_at.isoformat() if model.promoted_at else None,
             promoted_by=model.promoted_by,
+            pending_triage_until=(
+                model.pending_triage_until.isoformat()
+                if model.pending_triage_until else None
+            ),
             created_at=model.created_at.isoformat(),
             updated_at=model.updated_at.isoformat(),
         )

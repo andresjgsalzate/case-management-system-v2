@@ -64,6 +64,11 @@ class CaseResponseDTO(BaseModel):
     service_category_id: str | None = None
     service_category_name: str | None = None
     created_by: str
+    # Creator info expanded -- used by the triage "Notificado por" header
+    # and any other consumer that wants to show who created the case
+    # without a second roundtrip to /users.
+    created_by_name: str | None = None
+    created_by_email: str | None = None
     assigned_to: str | None
     assigned_user_name: str | None
     team_id: str | None

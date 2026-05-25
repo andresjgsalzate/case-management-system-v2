@@ -164,6 +164,12 @@ class CaseModel(Base):
     assigned_user: Mapped["UserModel | None"] = relationship(  # type: ignore[name-defined]
         "UserModel", foreign_keys=[assigned_to]
     )
+    # `creator` reads created_by FK -> users.id. Used by _to_dto + the
+    # triage "Notificado por" header. Must be eager-loaded
+    # (selectinload(creator)) wherever _to_dto is called.
+    creator: Mapped["UserModel | None"] = relationship(  # type: ignore[name-defined]
+        "UserModel", foreign_keys=[created_by]
+    )
     service_item: Mapped["ServiceCatalogItemModel | None"] = relationship(  # type: ignore[name-defined]
         "ServiceCatalogItemModel", foreign_keys=[service_item_id]
     )

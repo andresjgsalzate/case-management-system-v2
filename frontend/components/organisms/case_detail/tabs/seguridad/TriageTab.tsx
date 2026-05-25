@@ -150,12 +150,46 @@ export function TriageTab({ caseId }: Props) {
 
   // ── Derived data ────────────────────────────────────────────
 
-  // Parent taxonomy = the case's taxonomy_id (which IS the root in our
-  // depth-2 hierarchy). Sub-taxonomies = subs whose parent_id matches.
-  const parentTaxonomy = useMemo<SecurityTaxonomy | undefined>(() => {
+  // case.taxonomy_id can point to EITHER a parent (root) OR a sub. In
+  // our depth-2 hierarchy, if the linked taxonomy has a parent_id, then
+  // it's a sub and we walk up one level for the parent. Otherwise it IS
+  // the parent. This matters because taxonomy_catalog_mappings often
+  // points the catalog directly at the sub (e.g. SPAM under "Abuso de
+  // Contenido"), not at the root.
+  const linkedTaxonomy = useMemo<SecurityTaxonomy | undefined>(() => {
     if (!caseData?.taxonomy_id) return undefined;
     return allTaxonomies.find((t) => t.id === caseData.taxonomy_id);
   }, [caseData?.taxonomy_id, allTaxonomies]);
+
+  const parentTaxonomy = useMemo<SecurityTaxonomy | undefined>(() => {
+    if (!linkedTaxonomy) return undefined;
+    if (linkedTaxonomy.parent_id) {
+      // Linked taxonomy is a sub -- find its parent
+      return allTaxonomies.find((t) => t.id === linkedTaxonomy.parent_id);
+    }
+    // Already a root
+    return linkedTaxonomy;
+  }, [linkedTaxonomy, allTaxonomies]);
+
+  // Pre-fill sub_taxonomy_id from the case's linked taxonomy when it
+  // IS a sub (most common via catalog mapping). The user can still
+  // override via the dropdown if the original classification was wrong.
+  const suggestedSubId = useMemo<string | null>(() => {
+    if (!linkedTaxonomy) return null;
+    // Only suggest if the linked one is itself a sub (has parent_id).
+    return linkedTaxonomy.parent_id ? linkedTaxonomy.id : null;
+  }, [linkedTaxonomy]);
+
+  // Apply the suggestion exactly once when the case loads (and only when
+  // the user hasn't yet picked a sub manually + there's no existing
+  // triage already hydrating the form).
+  useEffect(() => {
+    if (!suggestedSubId) return;
+    if (form.sub_taxonomy_id) return;     // user picked OR triage hydrated
+    if (triageWithCtx) return;            // existing triage takes precedence
+    setForm((f) => ({ ...f, sub_taxonomy_id: suggestedSubId }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestedSubId, triageWithCtx]);
 
   const subTaxonomies = useMemo<SecurityTaxonomy[]>(() => {
     if (!parentTaxonomy) return [];
@@ -233,7 +267,16 @@ export function TriageTab({ caseId }: Props) {
           <Field label="TLP" value={parentTaxonomy?.tlp_default?.toUpperCase() ?? "—"} />
           <Field label="Caso #" value={caseData.case_number} />
           <Field label="Fecha" value={formatDate(caseData.created_at)} />
-          <Field label="Notificado por" value={caseData.assigned_user_name ?? "—"} />
+          <Field
+            label="Notificado por"
+            value={
+              caseData.created_by_name
+                ? caseData.created_by_email
+                  ? `${caseData.created_by_name} (${caseData.created_by_email})`
+                  : caseData.created_by_name
+                : "—"
+            }
+          />
           <Field label="Tipo de caso" value={caseData.case_type ?? "—"} />
           <Field label="Estado" value={caseData.status_name} />
           <Field label="Versión triage" value={triageWithCtx ? `v${triageWithCtx.triage.version}` : "Nueva"} />
