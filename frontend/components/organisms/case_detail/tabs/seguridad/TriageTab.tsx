@@ -1,9 +1,13 @@
 "use client";
 
-import { CheckCircle2, AlertTriangle, History } from "lucide-react";
+import { CheckCircle2, AlertTriangle, History, Upload, X as XIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { useCase } from "@/hooks/useCases";
+import {
+  useCase,
+  useAttachments,
+  useUploadAttachment,
+} from "@/hooks/useCases";
 import { useSecurityTaxonomies } from "@/hooks/useSecurityTaxonomies";
 import { useTriageCurrent, useCreateTriage } from "@/hooks/useTriage";
 import {
@@ -431,11 +435,24 @@ export function TriageTab({ caseId }: Props) {
           onChange={(v) => setForm((f) => ({ ...f, recommendations: v }))}
           rows={3}
         />
-        <p className="text-[11px] text-muted-foreground">
-          📎 Adjuntar evidencia + screenshot de comportamiento: usá la
-          pestaña Adjuntos y referencialos al guardar el triage
-          (próxima iteración wireará los selectores aquí mismo).
-        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <AttachmentSlot
+            label="Evidencia de la alerta (imagen)"
+            caseId={caseId}
+            attachmentId={form.evidence_attachment_id ?? null}
+            onChange={(id) =>
+              setForm((f) => ({ ...f, evidence_attachment_id: id }))
+            }
+          />
+          <AttachmentSlot
+            label="Comportamiento / relación (imagen)"
+            caseId={caseId}
+            attachmentId={form.behavior_attachment_id ?? null}
+            onChange={(id) =>
+              setForm((f) => ({ ...f, behavior_attachment_id: id }))
+            }
+          />
+        </div>
       </section>
 
       {/* ── Error + save bar ──────────────────────────────── */}
@@ -594,6 +611,92 @@ function PriorityPreview({ score, priority }: { score: number; priority: string 
         <Icon className="h-4 w-4" />
         {priority} · score {score.toFixed(2)}
       </div>
+    </div>
+  );
+}
+
+// Image slot: upload a new file OR pick an existing image attachment of
+// the case. Both paths set the attachment_id in the form. Uploads go
+// through the case's normal attachment endpoint (so they also show up in
+// the Adjuntos tab) and the returned id is wired into the triage payload.
+function AttachmentSlot({
+  label, caseId, attachmentId, onChange,
+}: {
+  label: string;
+  caseId: string;
+  attachmentId: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  const { data: attachments = [] } = useAttachments(caseId);
+  const upload = useUploadAttachment(caseId);
+
+  const selected = attachments.find((a) => a.id === attachmentId);
+  const imageAttachments = attachments.filter((a) =>
+    a.mime_type.startsWith("image/"),
+  );
+
+  async function handleFile(file: File) {
+    try {
+      const result = await upload.mutateAsync(file);
+      onChange(result.id);
+    } catch {
+      // upload.error renders below
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-[11px] text-muted-foreground">{label}</label>
+
+      {attachmentId ? (
+        <div className="flex items-center justify-between gap-2 rounded border bg-muted/30 px-2 py-1.5 text-xs">
+          <span className="min-w-0 flex-1 truncate">
+            {selected ? selected.original_filename : "Adjunto seleccionado"}
+          </span>
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            className="rounded p-0.5 text-muted-foreground hover:text-rose-600"
+            title="Quitar"
+          >
+            <XIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-dashed px-2 py-1.5 text-xs text-muted-foreground hover:border-primary/50 hover:text-foreground">
+            <Upload className="h-3.5 w-3.5" />
+            {upload.isPending ? "Subiendo…" : "Subir imagen"}
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              disabled={upload.isPending}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleFile(f);
+              }}
+            />
+          </label>
+          {imageAttachments.length > 0 && (
+            <select
+              value=""
+              onChange={(e) => e.target.value && onChange(e.target.value)}
+              className="rounded border bg-background px-2 py-1 text-xs"
+            >
+              <option value="">o elegí una imagen existente…</option>
+              {imageAttachments.map((a) => (
+                <option key={a.id} value={a.id}>{a.original_filename}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+      {upload.isError && (
+        <p className="text-[11px] text-rose-600">
+          {(upload.error as Error).message}
+        </p>
+      )}
     </div>
   );
 }
