@@ -181,6 +181,23 @@ class N8nBridgeUseCases:
         await self.db.commit()
         await self.db.refresh(approval)
 
+        # Emit locked SOC2 audit note so the decision is visible in the case timeline
+        if approval.case_id:
+            from backend.src.modules.notes.application.use_cases import NoteUseCases
+            decision_word = "AUTORIZADA" if decision == "approved" else "DENEGADA"
+            await NoteUseCases(db=self.db).create_system(
+                case_id=approval.case_id,
+                user_id=self.system_user_id or approver_user_id,
+                tenant_id=approval.tenant_id,
+                content=(
+                    f"[Auditoría SOC2] Acción destructiva {decision_word}. "
+                    f"Solicitada: {approval.requested_action} "
+                    f"(categoría: {approval.action_category}). "
+                    f"Aprobador: {approver_name or approver_user_id}. "
+                    f"Motivo: {reason or '(sin motivo registrado)'}."
+                ),
+            )
+
         # Build resume payload
         resume_payload = {
             "decision": decision,
