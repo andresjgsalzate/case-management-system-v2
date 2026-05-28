@@ -94,4 +94,4 @@ class ApprovalDecidePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: str  # 'approved' | 'rejected'
-    reason: str | None = None
+    reason: str = Field(min_length=1, description="Justificación técnica obligatoria para toda decisión sobre acción destructiva")

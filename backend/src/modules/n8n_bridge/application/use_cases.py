@@ -160,8 +160,8 @@ class N8nBridgeUseCases:
             raise ValidationError(
                 f"decision must be 'approved' or 'rejected', got {decision!r}",
             )
-        if decision == "rejected" and not reason:
-            raise ValidationError("rejection requires a reason")
+        if not reason:
+            raise ValidationError("reason is required for all destructive-action decisions")
 
         approval = await self._load_approval_for_update(approval_id)
         if approval is None:
