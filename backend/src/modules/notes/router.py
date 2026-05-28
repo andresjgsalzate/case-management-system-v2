@@ -35,6 +35,8 @@ async def list_notes(
             "sender_name": n.author.full_name if n.author else "Usuario",
             "content": n.content,
             "created_at": n.created_at.isoformat(),
+            "is_locked": n.is_locked,
+            "source": n.source,
         }
         for n in notes
     ])

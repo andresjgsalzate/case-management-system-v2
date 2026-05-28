@@ -45,8 +45,40 @@ class NoteUseCases:
         )
         return list(result.scalars().all())
 
+    async def create_system(
+        self,
+        *,
+        case_id: str,
+        user_id: str,
+        tenant_id: str | None,
+        content: str,
+    ) -> CaseNoteModel:
+        note = CaseNoteModel(
+            id=str(uuid.uuid4()),
+            case_id=case_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            content=content,
+            is_locked=True,
+            source="system",
+        )
+        self.db.add(note)
+        await self.db.commit()
+        await self.db.refresh(note)
+        await event_bus.publish(
+            BaseEvent(
+                event_name="note.created",
+                tenant_id=tenant_id or "default",
+                actor_id=user_id,
+                payload={"case_id": case_id, "note_id": note.id, "source": "system"},
+            )
+        )
+        return note
+
     async def update(self, note_id: str, user_id: str, content: str) -> CaseNoteModel:
         note = await self._get(note_id)
+        if note.is_locked or note.source == "system":
+            raise ForbiddenError("Las notas bloqueadas no pueden modificarse")
         if note.user_id != user_id:
             raise ForbiddenError("Solo el autor puede editar esta nota")
         note.content = content
@@ -56,6 +88,8 @@ class NoteUseCases:
 
     async def delete(self, note_id: str, user_id: str) -> None:
         note = await self._get(note_id)
+        if note.is_locked or note.source == "system":
+            raise ForbiddenError("Las notas bloqueadas no pueden modificarse")
         if note.user_id != user_id:
             raise ForbiddenError("Solo el autor puede eliminar esta nota")
         note.is_deleted = True
