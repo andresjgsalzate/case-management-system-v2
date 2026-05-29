@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     VT_API_KEY: SecretStr | None = None
     OTX_API_KEY: SecretStr | None = None
 
+    # Wazuh Query (outbound) — syscheck por hash para movimiento lateral
+    WAZUH_API_URL: str | None = None
+    WAZUH_API_USER: str | None = None
+    WAZUH_API_PASSWORD: SecretStr | None = None
+    WAZUH_VERIFY_SSL: bool = True
+
     # Email (optional)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
