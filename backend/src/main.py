@@ -83,6 +83,7 @@ from backend.src.modules.forensic.application.health import (
 from backend.src.modules.alert_reports.router import (
     router as alert_reports_router,
 )
+from backend.src.modules.enrichment.router import router as enrichment_router
 
 
 @asynccontextmanager
@@ -212,6 +213,7 @@ def create_app() -> FastAPI:
     app.include_router(operational_router)
     app.include_router(forensic_router)
     app.include_router(alert_reports_router)
+    app.include_router(enrichment_router)
 
     return app
 

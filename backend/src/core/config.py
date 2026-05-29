@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     # Path to api.config.yaml (mTLS credentials for the Velociraptor API)
     VELOCIRAPTOR_API_CONFIG_PATH: str | None = None
 
+    # Enrichment — VirusTotal + AlienVault OTX (opcional; sin key el proveedor
+    # devuelve "unknown" en lugar de crash)
+    VT_API_KEY: SecretStr | None = None
+    OTX_API_KEY: SecretStr | None = None
+
     # Email (optional)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
