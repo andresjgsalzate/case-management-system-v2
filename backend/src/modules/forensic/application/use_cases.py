@@ -142,12 +142,27 @@ class ForensicUseCases:
             )
 
         if artifact.is_destructive:
-            await self._enforce_destructive_governance(
-                n8n_run_id=n8n_run_id,
-                approval_request_id=approval_request_id,
-                case_id=case_id,
-                artifact=artifact,
-            )
+            try:
+                await self._enforce_destructive_governance(
+                    n8n_run_id=n8n_run_id,
+                    approval_request_id=approval_request_id,
+                    case_id=case_id,
+                    artifact=artifact,
+                )
+            except PermissionDeniedError as exc:
+                actor_id = actor.user_id if actor is not None else None
+                if case_id and actor_id:
+                    from backend.src.modules.notes.application.use_cases import NoteUseCases
+                    await NoteUseCases(db=self.db).create_system(
+                        case_id=case_id,
+                        user_id=actor_id,
+                        tenant_id=tenant_id,
+                        content=(
+                            f"[Alerta SOC2] Intento de acción destructiva BLOQUEADO. "
+                            f"Artefacto: {artifact.name}. Motivo: {exc}."
+                        ),
+                    )
+                raise
         elif actor is not None:
             action = (
                 "launch_evidence"
