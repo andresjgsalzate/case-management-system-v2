@@ -232,7 +232,7 @@ Los niveles son bundles:
 | Nivel | Capacidades |
 |---|---|
 | **L1** | `cases:read`, `cases:update`, `forensic:read`, `forensic:launch_ro` |
-| **L2 / Forense** | L1 + `forensic:launch_destructive`, `forensic:cancel_own` |
+| **L2 / Forense** | L1 + `approvals:approve` (gate destructivo, ver §6.3), `forensic:cancel_own` |
 | **Admin SOC** | L2 + `security_taxonomies:manage_global`, `integrations:manage` |
 
 ### 6.3 Gate de acción destructiva (ya implementado)

@@ -80,8 +80,15 @@ El CMS modela permisos por **capacidad atómica**, no por tier jerárquico. Los
 | Nivel SOC | Capacidades (resource:action) |
 |---|---|
 | Analista L1 | `cases:read`, `cases:update`, `forensic:read`, `forensic:launch_ro` (read-only) |
-| Analista L2 / Forense | L1 + `forensic:launch_destructive`, `forensic:cancel_own` |
+| Analista L2 / Forense | L1 + `approvals:approve`, `forensic:cancel_own` |
 | Admin SOC | L2 + `security_taxonomies:manage_global`, `integrations:manage`, gestión de catálogos |
+
+> **Nota sobre el gate destructivo**: no existe un permiso
+> `forensic:launch_destructive`. La capacidad que separa L1 de L2 es
+> `approvals:approve` (autorizar el `ApprovalRequest`), combinada con el
+> routing obligatorio por n8n que valida `_enforce_destructive_governance`.
+> Un L1 sin `approvals:approve` no puede autorizar hunts destructivos. El
+> seed (`scripts/seed.py`) ya usa el permiso correcto.
 
 Ventaja sobre tiers rígidos: se puede crear un "L1.5" (lee forense pero no
 lanza) sin reestructurar la jerarquía — es solo otro bundle.
