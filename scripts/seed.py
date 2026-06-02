@@ -123,6 +123,13 @@ _SOC_L1_PERMS = [
     # Forense read-only (sin acciones destructivas)
     {"module": "forensic",       "action": "read",            "scope": "all"},
     {"module": "forensic",       "action": "launch_ro",       "scope": "all"},
+    # Consultas outbound read-only de los playbooks n8n (Fase 2 + Fase 3).
+    # Módulo/acción tomados literal de PermissionChecker en los routers:
+    # enrichment/router.py -> ("enrichment","query"); wazuh_query/router.py
+    # -> ("wazuh","query_syscheck"). No destructivas: reputación VT/OTX y
+    # movimiento lateral por hash. En L1 para que L2/Admin las hereden.
+    {"module": "enrichment",     "action": "query",           "scope": "all"},
+    {"module": "wazuh",          "action": "query_syscheck",  "scope": "all"},
     # Reportes de alerta: ver + generar
     {"module": "alert_reports",  "action": "read",            "scope": "all"},
     {"module": "alert_reports",  "action": "generate",        "scope": "all"},
