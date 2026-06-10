@@ -770,6 +770,316 @@ async def seed_phase_4(session) -> None:
     print("OK Phase 4 complete")
 
 
+# ── Reference data: prioritization engine (sub-spec 03 §4) ───────────────
+# Exact values transcribed from docs/superpowers/specs/
+# 2026-05-10-prioritization-engine-design.md §4.1-4.4.
+_PRIO_CRITERIA = [
+    # (code, name, description, data_source, source_field_key, strategy, default)
+    ("severity", "Severidad de la alerta",
+     "Severidad técnica reportada por la fuente de detección",
+     "taxonomy_field", "default_severity_value", "use_default", 3),
+    ("impact", "Impacto potencial",
+     "Impacto estimado en el negocio si la amenaza se materializa",
+     "case_custom_value", "impact", "use_default", 3),
+    ("asset_criticality", "Criticidad del activo afectado",
+     "Importancia del activo según el inventario de aplicaciones",
+     "asset_field", "criticality", "skip", None),
+    ("data_sensitivity", "Sensibilidad de la información (TLP)",
+     "Nivel TLP de la información involucrada",
+     "taxonomy_field", "tlp_default", "use_default", 3),
+    ("user_visibility", "Cantidad de usuarios afectados",
+     "Número estimado de usuarios impactados",
+     "case_custom_value", "affected_users_estimate", "skip", None),
+    ("repetition_count", "Frecuencia (repetición)",
+     "Cuántas veces se ha visto un evento similar recientemente",
+     "derived", "repetition_count_handler", "use_default", 1),
+]
+
+_PRIO_SCALES = [
+    ("Mínimo", 1, "#94a3b8"), ("Bajo", 2, "#22c55e"), ("Medio", 3, "#f59e0b"),
+    ("Alto", 4, "#f97316"), ("Crítico", 5, "#ef4444"),
+]
+
+_PRIO_FORMULAS = [
+    {"logical_key": "soc-default", "name": "SOC Default Formula 2026",
+     "description": "Fórmula balanceada para operación SOC general",
+     "weights": {"severity": "0.50", "impact": "0.30", "asset_criticality": "0.20"},
+     "thresholds": [("4.50", "5.00", "critical"), ("3.50", "4.49", "high"),
+                    ("2.50", "3.49", "medium"), ("0.00", "2.49", "low")]},
+    {"logical_key": "compliance-focused", "name": "Compliance-Focused Formula",
+     "description": "Énfasis en sensibilidad de información (PCI, GDPR, etc.)",
+     "weights": {"data_sensitivity": "0.40", "severity": "0.30", "impact": "0.30"},
+     "thresholds": [("4.00", "5.00", "critical"), ("3.00", "3.99", "high"),
+                    ("2.00", "2.99", "medium"), ("0.00", "1.99", "low")]},
+    {"logical_key": "user-impact-focused", "name": "User Impact Formula",
+     "description": "Énfasis en cantidad de usuarios afectados",
+     "weights": {"user_visibility": "0.40", "severity": "0.30", "impact": "0.30"},
+     "thresholds": [("4.50", "5.00", "critical"), ("3.50", "4.49", "high"),
+                    ("2.50", "3.49", "medium"), ("0.00", "2.49", "low")]},
+]
+
+# case_priorities has no slug column; map the spec's threshold slugs to the
+# seeded priority names (level 1=Baja .. 4=Critica).
+_PRIO_SLUG_TO_PRIORITY = {
+    "critical": "Critica", "high": "Alta", "medium": "Media", "low": "Baja",
+}
+
+_PRIO_PERMISSIONS = [
+    "read", "manage_criteria", "manage_formulas",
+    "manage_global", "recalculate", "read_calculations",
+]
+
+
+async def seed_prioritization(session) -> None:
+    """Seed prioritization reference data: 6 criteria + 5 scales each + 3
+    formulas (weights + thresholds) + 6 permissions. Idempotent by natural key."""
+    from decimal import Decimal
+    from sqlalchemy import select
+    from backend.src.modules.prioritization.infrastructure.models import (
+        PrioritizationCriterionModel, PrioritizationScaleModel,
+        PrioritizationFormulaModel, PrioritizationFormulaCriterionModel,
+        PrioritizationThresholdModel,
+    )
+
+    crit_ids: dict[str, str] = {}
+    for code, name, desc, ds, sfk, strat, dflt in _PRIO_CRITERIA:
+        existing = (await session.execute(
+            select(PrioritizationCriterionModel).where(
+                PrioritizationCriterionModel.tenant_id.is_(None),
+                PrioritizationCriterionModel.code == code,
+            )
+        )).scalar_one_or_none()
+        if existing:
+            crit_ids[code] = existing.id
+            continue
+        cid = str(uuid.uuid4())
+        crit_ids[code] = cid
+        session.add(PrioritizationCriterionModel(
+            id=cid, tenant_id=None, code=code, name=name, description=desc,
+            data_source=ds, source_field_key=sfk, missing_data_strategy=strat,
+            default_value=dflt,
+        ))
+        for label, value, color in _PRIO_SCALES:
+            session.add(PrioritizationScaleModel(
+                id=str(uuid.uuid4()), criterion_id=cid,
+                label=label, numeric_value=value, color=color, sort_order=value,
+            ))
+    await session.commit()
+
+    prio_by_name = {
+        p.name: p.id for p in (await session.execute(
+            select(CasePriorityModel).where(CasePriorityModel.tenant_id.is_(None))
+        )).scalars().all()
+    }
+    creator = (await session.execute(select(UserModel.id).limit(1))).scalar_one_or_none()
+    if not creator:
+        print("  WARNING no user for formula.created_by — skipping formulas")
+        return
+
+    for f in _PRIO_FORMULAS:
+        existing = (await session.execute(
+            select(PrioritizationFormulaModel).where(
+                PrioritizationFormulaModel.tenant_id.is_(None),
+                PrioritizationFormulaModel.logical_key == f["logical_key"],
+            )
+        )).scalar_one_or_none()
+        if existing:
+            continue
+        fid = str(uuid.uuid4())
+        session.add(PrioritizationFormulaModel(
+            id=fid, tenant_id=None, logical_key=f["logical_key"], version=1,
+            name=f["name"], description=f["description"], is_active=True,
+            created_by=creator,
+        ))
+        # Flush the parent first: the self-referential FK (superseded_by_id)
+        # breaks SQLAlchemy's insert ordering, so children would otherwise hit
+        # the formula FK before the row exists.
+        await session.flush()
+        for i, (code, w) in enumerate(f["weights"].items()):
+            session.add(PrioritizationFormulaCriterionModel(
+                id=str(uuid.uuid4()), formula_id=fid, criterion_id=crit_ids[code],
+                weight=Decimal(w), sort_order=i,
+            ))
+        for i, (mn, mx, slug) in enumerate(f["thresholds"]):
+            pid = prio_by_name.get(_PRIO_SLUG_TO_PRIORITY[slug])
+            if not pid:
+                print(f"  WARNING priority for slug '{slug}' missing — skipping threshold")
+                continue
+            session.add(PrioritizationThresholdModel(
+                id=str(uuid.uuid4()), formula_id=fid,
+                min_value=Decimal(mn), max_value=Decimal(mx),
+                priority_id=pid, sort_order=i,
+            ))
+    await session.commit()
+
+    # Permissions: the test only requires the 6 actions to exist under module
+    # 'prioritization'; attach them to Super Admin.
+    sa = (await session.execute(
+        select(RoleModel).where(RoleModel.name == "Super Admin")
+    )).scalar_one_or_none()
+    if sa:
+        existing_actions = {
+            p.action for p in (await session.execute(
+                select(PermissionModel).where(
+                    PermissionModel.role_id == sa.id,
+                    PermissionModel.module == "prioritization",
+                )
+            )).scalars().all()
+        }
+        for action in _PRIO_PERMISSIONS:
+            if action not in existing_actions:
+                session.add(PermissionModel(
+                    id=str(uuid.uuid4()), role_id=sa.id,
+                    module="prioritization", action=action, scope="all",
+                ))
+        await session.commit()
+    print("OK prioritization seeded")
+
+
+# ── Reference data: 17 global SOC teams (security-taxonomies spec §4.1) ───
+_SOC_TEAMS = [
+    ("Incidentes - SOC", "operational", False),
+    ("Soporte IT", "operational", False),
+    ("Customer Success", "operational", True),
+    ("Infraestructura", "technical_support", False),
+    ("Bases de datos", "technical_support", False),
+    ("Aplicaciones", "technical_support", False),
+    ("Adm. Antivirus", "technical_support", False),
+    ("Adm. Correo", "technical_support", False),
+    ("Net&Sec", "technical_support", False),
+    ("Ethical Hacker", "technical_support", False),
+    ("Segu Info. - Risk", "governance", False),
+    ("Recursos Humanos", "governance", True),
+    ("Datos Personales", "governance", True),
+    ("Legal", "legal", True),
+    ("Director de Producto", "executive", True),
+    ("Director Arquitectura", "executive", True),
+    ("Alta Dirección", "executive", True),
+]
+
+
+async def seed_soc_teams(session) -> None:
+    """Seed the 17 global SOC teams. Idempotent by name; keeps attrs in sync."""
+    from sqlalchemy import select
+
+    count = 0
+    for name, category, notif_only in _SOC_TEAMS:
+        existing = (await session.execute(
+            select(TeamModel).where(
+                TeamModel.tenant_id.is_(None), TeamModel.name == name,
+            )
+        )).scalar_one_or_none()
+        if existing:
+            existing.team_category = category
+            existing.is_notification_only = notif_only
+            continue
+        session.add(TeamModel(
+            id=str(uuid.uuid4()), tenant_id=None, name=name,
+            team_category=category, is_notification_only=notif_only,
+        ))
+        count += 1
+    await session.commit()
+    print(f"  + {count} SOC teams seeded")
+
+
+# ── Reference data: security-taxonomies extras (sub-spec 02) ─────────────
+# Exact security_taxonomies permission matrix per base role (Task 4).
+_SEC_TAX_PERM_MATRIX = {
+    "Super Admin": {"read", "create", "update", "delete",
+                    "manage_global", "read_audit_log", "export", "import"},
+    "Admin":       {"read", "create", "update", "delete",
+                    "read_audit_log", "export", "import"},
+    "Manager":     {"read", "create", "update", "read_audit_log", "export"},
+    "Agent":       {"read", "read_audit_log"},
+    "Reporter":    {"read"},
+}
+
+
+async def seed_security_taxonomy_extras(session) -> None:
+    """Seed the RANSOM-LOCKBIT fixture taxonomy (child of RANSOMWARE, Task 6)
+    plus the security_taxonomies permission matrix on the 5 base roles."""
+    from sqlalchemy import select
+    from backend.src.modules.security_taxonomies.infrastructure.models import (
+        SecurityTaxonomyModel,
+    )
+
+    # Task 6 fixtures: (code, name, parent_code, tlp_default). RANSOM-LOCKBIT's
+    # parent is asserted == RANSOMWARE; PHISH-MAIL just needs to exist global.
+    _tax_fixtures = [
+        ("RANSOM-LOCKBIT", "Ransomware LockBit", "RANSOMWARE", "red"),
+        ("PHISH-MAIL", "Phishing por correo", "PHISHING-SPEAR-PHISHING", "amber"),
+    ]
+    creator = (await session.execute(select(UserModel.id).limit(1))).scalar_one_or_none()
+    for code, name, parent_code, tlp in _tax_fixtures:
+        exists = (await session.execute(
+            select(SecurityTaxonomyModel).where(
+                SecurityTaxonomyModel.tuic_code == code,
+                SecurityTaxonomyModel.tenant_id.is_(None),
+            )
+        )).scalar_one_or_none()
+        if exists:
+            continue
+        parent = (await session.execute(
+            select(SecurityTaxonomyModel).where(
+                SecurityTaxonomyModel.tuic_code == parent_code,
+                SecurityTaxonomyModel.tenant_id.is_(None),
+            )
+        )).scalar_one_or_none()
+        if not parent:
+            print(f"  WARNING parent '{parent_code}' missing — skipping {code}")
+            continue
+        session.add(SecurityTaxonomyModel(
+            id=str(uuid.uuid4()), tenant_id=None,
+            tuic_code=code, name=name,
+            description=f"Fixture global {code}",
+            parent_id=parent.id,
+            default_case_type="event", requires_ticket=False,
+            triage_mode="auto", triage_timeout_seconds=300,
+            tlp_default=tlp, mitre_techniques=[],
+            is_active=True, created_by=creator,
+        ))
+        print(f"  + {code} taxonomy seeded")
+    await session.commit()
+
+    for role_name, actions in _SEC_TAX_PERM_MATRIX.items():
+        role = (await session.execute(
+            select(RoleModel).where(
+                RoleModel.name == role_name, RoleModel.tenant_id.is_(None),
+            )
+        )).scalar_one_or_none()
+        if not role:
+            continue
+        existing = {
+            p.action for p in (await session.execute(
+                select(PermissionModel).where(
+                    PermissionModel.role_id == role.id,
+                    PermissionModel.module == "security_taxonomies",
+                )
+            )).scalars().all()
+        }
+        for action in actions:
+            if action not in existing:
+                session.add(PermissionModel(
+                    id=str(uuid.uuid4()), role_id=role.id,
+                    module="security_taxonomies", action=action, scope="all",
+                ))
+    await session.commit()
+    print("OK security_taxonomies extras seeded")
+
+
+async def seed_reference_data(session) -> None:
+    """Opt-in reference data the integration tests assert on (statuses,
+    priorities, SLA, classification, prioritization, SOC teams,
+    security-taxonomies extras). Idempotent."""
+    await seed_phase_2(session)
+    await seed_phase_3(session)
+    await seed_phase_4(session)
+    await seed_prioritization(session)
+    await seed_soc_teams(session)
+    await seed_security_taxonomy_extras(session)
+    print("OK Reference data seeded")
+
+
 async def main() -> None:
     """Minimal seed — only what's needed to bootstrap a fresh deploy.
 
@@ -793,11 +1103,18 @@ async def main() -> None:
     if not await verify_connection():
         sys.exit(1)
 
-    print("Starting seed (bootstrap-only mode)...")
+    include_ref = "--include-reference-data" in sys.argv
+    mode = "with reference data" if include_ref else "bootstrap-only"
+    print(f"Starting seed ({mode} mode)...")
     async with AsyncSessionLocal() as session:
         await repair_permissions(session)
         await seed_phase_1(session)
-    print("OK Bootstrap seed complete. Reference data left for client config.")
+        if include_ref:
+            await seed_reference_data(session)
+    if include_ref:
+        print("OK Seed complete (bootstrap + reference data).")
+    else:
+        print("OK Bootstrap seed complete. Reference data left for client config.")
 
 
 if __name__ == "__main__":
