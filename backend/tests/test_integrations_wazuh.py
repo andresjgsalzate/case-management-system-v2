@@ -1227,8 +1227,10 @@ async def _ensure_number_ranges(session, tenant_id, prefixes=("INC", "EVT", "REQ
             continue
         await session.execute(_t(
             "INSERT INTO case_number_ranges "
-            "(id, tenant_id, prefix, range_start, range_end, current_number, created_at) "
-            "VALUES (:id, :t, :p, 1, 999999, 0, NOW())"
+            "(id, tenant_id, case_type, prefix, range_start, range_end, current_number, created_at) "
+            "VALUES (:id, :t, "
+            "CASE :p WHEN 'INC' THEN 'incident' WHEN 'REQ' THEN 'request' ELSE 'event' END, "
+            ":p, 1, 999999, 0, NOW())"
         ), {"id": str(_uuid.uuid4()), "t": tenant_id, "p": prefix})
     await session.commit()
 

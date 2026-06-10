@@ -23,7 +23,7 @@ def test_seed_script_has_verify_connection():
     seed_path = os.path.join(
         os.path.dirname(__file__), "..", "..", "scripts", "seed.py"
     )
-    with open(seed_path) as f:
+    with open(seed_path, encoding="utf-8") as f:
         content = f.read()
     assert "verify_connection" in content
     assert "seed_phase_1" in content
@@ -34,7 +34,7 @@ def test_seed_has_all_four_roles():
     seed_path = os.path.join(
         os.path.dirname(__file__), "..", "..", "scripts", "seed.py"
     )
-    with open(seed_path) as f:
+    with open(seed_path, encoding="utf-8") as f:
         content = f.read()
     for role in ["Super Admin", "Admin", "Manager", "Agent"]:
         assert role in content, f"Role '{role}' should be in seed script"
