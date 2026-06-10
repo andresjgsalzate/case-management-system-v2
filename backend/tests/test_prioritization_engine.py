@@ -1004,33 +1004,64 @@ def _e2e_setup():
         async with Session() as session:
             yield session
 
+    # Bypass the live Keycloak validator: decode the cooked token without
+    # signature/JWKS so e2e tests run offline. The token still carries a kid
+    # header + realm_access.roles, exercising the PermissionChecker path.
+    from backend.src.core.middleware import permission_checker as _pc
+
+    class _FakeKeycloakValidator:
+        async def validate(self, token):
+            import jwt as _jwt
+            return _jwt.decode(token, options={"verify_signature": False})
+
+    _orig_get_validator = _pc.get_keycloak_validator
+    _pc.get_keycloak_validator = lambda: _FakeKeycloakValidator()
+
     app.dependency_overrides[get_db] = _override
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url="http://test")
 
     async def cleanup():
         await client.aclose()
+        _pc.get_keycloak_validator = _orig_get_validator
         if get_db in app.dependency_overrides:
             del app.dependency_overrides[get_db]
         await engine.dispose()
 
     async def make_jwt(role_name, user_id="ec35a91e-5778-4210-a631-c5ed673c679d",
-                       tenant_id="test-tenant-e2e"):
+                       tenant_id="test-tenant-e2e", email="test-e2e@example.com"):
+        import time
+        import uuid as _uuid
+        import jwt as _jwt
         from sqlalchemy import text
-        from backend.src.core.security import create_access_token
         async with Session() as session:
             row = (await session.execute(text(
                 "SELECT id, level FROM roles "
                 "WHERE name = :n AND tenant_id IS NULL LIMIT 1"
             ), {"n": role_name})).first()
-        if not row:
-            raise RuntimeError(f"Role '{role_name}' not found")
-        return create_access_token(
-            subject=user_id,
-            extra_claims={
-                "role_id": row[0], "role_level": int(row[1]),
-                "tenant_id": tenant_id, "email": "test-e2e@example.com",
+            if not row:
+                raise RuntimeError(f"Role '{role_name}' not found")
+            # PermissionChecker resolves the caller by email and 401s if the
+            # user is absent, so provision one (idempotent).
+            await session.execute(text(
+                "INSERT INTO users (id, email, full_name, hashed_password, "
+                "is_active, email_notifications, created_at, updated_at) "
+                "VALUES (:id, :email, 'E2E Test User', 'x', true, false, "
+                "NOW(), NOW()) ON CONFLICT (email) DO NOTHING"
+            ), {"id": str(_uuid.uuid4()), "email": email})
+            await session.commit()
+        # Keycloak-shaped token (sub-spec 09): realm_access.roles drives the
+        # CMS role lookup; kid header satisfies the validator contract.
+        return _jwt.encode(
+            {
+                "email": email,
+                "tenant_id": tenant_id,
+                "realm_access": {"roles": [role_name]},
+                "exp": int(time.time()) + 3600,
             },
+            "e2e-test-secret-signature-not-verified-0123456789",
+            algorithm="HS256",
+            headers={"kid": "e2e-test"},
         )
 
     return client, cleanup, make_jwt
