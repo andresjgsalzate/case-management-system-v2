@@ -25,6 +25,14 @@ def _register_all_models(set_test_env):
     # registry and fail to resolve string-based relationships.
     import backend.src.main  # noqa: F401
 
+    # operational_center's jobs lazy-import IntegrationHealthModel *inside*
+    # functions, so main's chain never registers integration_health at module
+    # load. Import it explicitly so configure_mappers() sees a complete registry
+    # regardless of test order — otherwise a later test registers the model
+    # after mappers are configured and its FK to integration_sources fails to
+    # resolve (NoReferencedTableError) only in the full-suite run.
+    import backend.src.modules.operational_center.infrastructure.models  # noqa: F401
+
 
 def _make_mock_db():
     """Returns an async generator that yields a mock AsyncSession.
