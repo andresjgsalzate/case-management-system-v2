@@ -54,6 +54,7 @@ def _bind_app_to_real_db():
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from backend.src.main import app
     from backend.src.core.database import get_db
+    from backend.src.core.middleware import permission_checker as _pc
 
     engine = create_async_engine(_get_real_url())
     Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -62,10 +63,22 @@ def _bind_app_to_real_db():
         async with Session() as session:
             yield session
 
+    # Bypass the live Keycloak validator (JWKS + kid header check) so e2e runs
+    # offline; the fake decodes the cooked token's claims without verifying the
+    # signature. Mirrors the prioritization e2e harness.
+    class _FakeKeycloakValidator:
+        async def validate(self, token):
+            import jwt as _jwt
+            return _jwt.decode(token, options={"verify_signature": False})
+
+    _orig_get_validator = _pc.get_keycloak_validator
+    _pc.get_keycloak_validator = lambda: _FakeKeycloakValidator()
+
     app.dependency_overrides[get_db] = _override
 
     def _cleanup():
         app.dependency_overrides.pop(get_db, None)
+        _pc.get_keycloak_validator = _orig_get_validator
 
     return app, engine, _cleanup
 
@@ -77,23 +90,44 @@ async def _open_session():
     return engine, session
 
 
-async def _make_jwt(session, role_name="Super Admin", user_id=ADMIN_USER_ID):
-    """Mint a JWT for the admin endpoints."""
+async def _make_jwt(session, role_name="Super Admin", user_id=ADMIN_USER_ID,
+                    email="admin@example.com", tenant_id="e2e-tenant"):
+    """Mint a Keycloak-shaped JWT the PermissionChecker accepts offline.
+
+    PermissionChecker (sub-spec 09) validates via the Keycloak validator and
+    resolves the caller by email + realm_access.roles, so the token carries a
+    kid header + realm_access.roles. The email maps to ``user_id`` (the seeded
+    admin) so endpoints that stamp ``approver_user_id`` record ADMIN_USER_ID.
+    The fake validator installed by _bind_app_to_real_db skips signature/JWKS.
+    """
+    import time
+    import jwt as _jwt
     from sqlalchemy import text as _t
-    from backend.src.core.security import create_access_token
     row = (await session.execute(_t(
         "SELECT id, level FROM roles WHERE name = :n AND tenant_id IS NULL LIMIT 1"
     ), {"n": role_name})).first()
     if not row:
         pytest.skip(f"Role '{role_name}' missing in dev seed")
-    return create_access_token(
-        subject=user_id,
-        extra_claims={
-            "role_id": row[0],
-            "role_level": int(row[1]),
-            "tenant_id": "e2e-tenant",
-            "email": "e2e@test.local",
+    # PermissionChecker 401s if the caller's email has no user row. The seeded
+    # admin normally already owns this id/email; the upsert is a safety net so
+    # the email resolves to ADMIN_USER_ID even on a freshly reset DB.
+    await session.execute(_t(
+        "INSERT INTO users (id, email, full_name, hashed_password, is_active, "
+        "email_notifications, created_at, updated_at) VALUES (:id, :email, "
+        "'E2E Test User', 'x', true, false, NOW(), NOW()) "
+        "ON CONFLICT (id) DO NOTHING"
+    ), {"id": user_id, "email": email})
+    await session.commit()
+    return _jwt.encode(
+        {
+            "email": email,
+            "tenant_id": tenant_id,
+            "realm_access": {"roles": [role_name]},
+            "exp": int(time.time()) + 3600,
         },
+        "e2e-test-secret-signature-not-verified-0123456789",
+        algorithm="HS256",
+        headers={"kid": "e2e-test"},
     )
 
 
@@ -333,7 +367,7 @@ def test_e2e_approval_decide_via_http_resumes_n8n():
                 with patch("httpx.AsyncClient", return_value=fake):
                     r = await http.post(
                         f"/api/v1/approval-requests/{approval_id}/decide",
-                        json={"decision": "approved"},
+                        json={"decision": "approved", "reason": "Authorized for forensic action"},
                         headers={"Authorization": f"Bearer {token}"},
                     )
             assert r.status_code == 200, r.text
