@@ -20,20 +20,27 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 def detect_mime_type(content: bytes) -> str:
-    """Detecta MIME real desde los bytes del archivo (no confía en el Content-Type del cliente)."""
+    """Detecta MIME real desde los bytes del archivo (no confía en el Content-Type del cliente).
+
+    Las firmas magic-bytes conocidas se chequean ANTES de libmagic. libmagic
+    inspecciona el contenido en profundidad y devuelve ``application/octet-stream``
+    para archivos con firma válida pero cuerpo truncado/incompleto (p. ej. un
+    PNG sin chunk IHDR), lo que hacía que la detección dependiera de si libmagic
+    estaba instalado. Las firmas son autoritativas para estos tipos; libmagic
+    sólo resuelve lo que no matchea una firma conocida.
+    """
+    if content[:4] == b"%PDF":
+        return "application/pdf"
+    if content[:2] in (b"\xff\xd8", b"\xff\xe0", b"\xff\xe1"):
+        return "image/jpeg"
+    if content[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if content[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
     try:
         import magic
         return magic.from_buffer(content, mime=True)
     except Exception:
-        # Fallback: detectar por magic bytes básicos
-        if content[:4] == b"%PDF":
-            return "application/pdf"
-        if content[:2] in (b"\xff\xd8", b"\xff\xe0", b"\xff\xe1"):
-            return "image/jpeg"
-        if content[:8] == b"\x89PNG\r\n\x1a\n":
-            return "image/png"
-        if content[:6] in (b"GIF87a", b"GIF89a"):
-            return "image/gif"
         return "application/octet-stream"
 
 
