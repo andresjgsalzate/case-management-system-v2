@@ -1454,6 +1454,7 @@ def test_approve_posts_to_resume_url_with_decision_payload():
                         decision="approved",
                         approver_user_id=ADMIN_USER_ID,
                         approver_name="Test Operator",
+                        reason="Authorized for forensic action",
                     )
                 row = (await session.execute(_t(
                     "SELECT status, approver_user_id, decided_at, "
@@ -1559,6 +1560,7 @@ def test_approve_signs_resume_when_secret_stored():
                     await uc.approve_or_reject(
                         approval_id=approval_id, decision="approved",
                         approver_user_id=ADMIN_USER_ID, approver_name="Op",
+                        reason="Authorized for forensic action",
                     )
                 await _cleanup_n8n_tenant(session, tenant_id)
                 return captured
@@ -1612,6 +1614,7 @@ def test_approve_marks_resume_failed_when_n8n_unreachable():
                         await uc.approve_or_reject(
                             approval_id=approval_id, decision="approved",
                             approver_user_id=ADMIN_USER_ID, approver_name="Op",
+                            reason="Authorized for forensic action",
                         )
                 row = (await session.execute(_t(
                     "SELECT status, resume_succeeded, resume_error "
