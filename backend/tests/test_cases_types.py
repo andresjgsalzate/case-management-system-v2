@@ -51,7 +51,7 @@ async def test_next_case_number_returns_formatted_string():
     db = _make_mock_db_with_counter(row)
 
     uc = CaseUseCases(db=db)
-    result = await uc._next_case_number(tenant_id=None, prefix="INC")
+    result = await uc._next_case_number(tenant_id=None, case_type="incident")
 
     year = datetime.datetime.utcnow().year
     assert result == f"INC-{year}-000001", f"Unexpected: {result}"
@@ -68,7 +68,7 @@ async def test_next_case_number_sequential_uniqueness():
     uc = CaseUseCases(db=db)
     results = []
     for _ in range(5):
-        results.append(await uc._next_case_number(tenant_id=None, prefix="REQ"))
+        results.append(await uc._next_case_number(tenant_id=None, case_type="request"))
 
     assert len(set(results)) == 5, f"Duplicates found: {results}"
 
@@ -96,7 +96,7 @@ async def test_next_case_number_atomic_under_concurrency():
     uc = CaseUseCases(db=db)
 
     async def gen_one():
-        return await uc._next_case_number(tenant_id=None, prefix="INC")
+        return await uc._next_case_number(tenant_id=None, case_type="incident")
 
     results = await asyncio.gather(*[gen_one() for _ in range(100)])
 
@@ -129,7 +129,7 @@ async def test_next_case_number_raises_when_no_range():
     uc = CaseUseCases(db=mock_session)
 
     with pytest.raises(Exception):
-        await uc._next_case_number(tenant_id=None, prefix="INC")
+        await uc._next_case_number(tenant_id=None, case_type="incident")
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +191,7 @@ async def test_create_with_invalid_case_type_raises():
 
 @pytest.mark.asyncio
 async def test_create_request_uses_REQ_prefix():
-    """case_type='request' → _next_case_number called with 'REQ' → case_number starts REQ-."""
+    """case_type='request' → _next_case_number called with 'request' → case_number starts REQ-."""
     from backend.src.modules.cases.application.use_cases import CaseUseCases
     from backend.src.modules.cases.application.dtos import CreateCaseDTO
 
@@ -219,14 +219,14 @@ async def test_create_request_uses_REQ_prefix():
         mock_bus.publish = AsyncMock()
         result = await uc.create_case(dto=dto, actor_id="user-1", tenant_id=None)
 
-    mock_next.assert_awaited_once_with(None, "REQ")
+    mock_next.assert_awaited_once_with(None, "request")
     assert result.case_number.startswith("REQ-")
     assert result.case_type == "request"
 
 
 @pytest.mark.asyncio
 async def test_create_incident_uses_INC_prefix():
-    """case_type='incident' → _next_case_number called with 'INC' → case_number starts INC-."""
+    """case_type='incident' → _next_case_number called with 'incident' → case_number starts INC-."""
     from backend.src.modules.cases.application.use_cases import CaseUseCases
     from backend.src.modules.cases.application.dtos import CreateCaseDTO
 
@@ -254,7 +254,7 @@ async def test_create_incident_uses_INC_prefix():
         mock_bus.publish = AsyncMock()
         result = await uc.create_case(dto=dto, actor_id="user-1", tenant_id=None)
 
-    mock_next.assert_awaited_once_with(None, "INC")
+    mock_next.assert_awaited_once_with(None, "incident")
     assert result.case_number.startswith("INC-")
     assert result.case_type == "incident"
 
@@ -289,7 +289,7 @@ async def test_create_event_uses_EVT_prefix_and_logged_status():
         mock_bus.publish = AsyncMock()
         result = await uc.create_case(dto=dto, actor_id="user-1", tenant_id=None)
 
-    mock_next.assert_awaited_once_with(None, "EVT")
+    mock_next.assert_awaited_once_with(None, "event")
     # status resolved with 'logged' (the default for event when no initial_status_slug given)
     mock_status.assert_awaited_once_with(None, "logged")
     assert result.case_number.startswith("EVT-")
@@ -452,6 +452,7 @@ def _make_promote_session(case, *, range_current=10):
     - get_case reload (selectinload query returning case again)
     """
     range_row = MagicMock()
+    range_row.prefix = "INC"
     range_row.range_start = 1
     range_row.range_end = 1000
     range_row.current_number = range_current
