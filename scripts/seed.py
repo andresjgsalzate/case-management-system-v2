@@ -27,6 +27,10 @@ from backend.src.core.database import AsyncSessionLocal
 from backend.src.core.security import hash_password
 
 # Import ALL models up-front so SQLAlchemy relationship resolution works
+from backend.src.modules.tenants.infrastructure.models import TenantModel
+from backend.src.modules.alert_reports.infrastructure.models import (
+    AlertReportTemplateModel, AlertReportTemplateVersionModel,
+)
 from backend.src.modules.roles.infrastructure.models import RoleModel, PermissionModel
 from backend.src.modules.users.infrastructure.models import UserModel
 from backend.src.modules.auth.infrastructure.models import UserSessionModel  # needed for UserModel.sessions relationship
@@ -120,6 +124,8 @@ _SOC_L1_PERMS = [
     {"module": "classification", "action": "read",            "scope": "all"},
     {"module": "classification", "action": "create",          "scope": "all"},
     {"module": "security_taxonomies", "action": "read",        "scope": "all"},
+    # Lectura de tipos de documento KB (base, heredado por L2/Admin SOC)
+    {"module": "document_types", "action": "read",            "scope": "all"},
     # Forense read-only (sin acciones destructivas)
     {"module": "forensic",       "action": "read",            "scope": "all"},
     {"module": "forensic",       "action": "launch_ro",       "scope": "all"},
@@ -1067,16 +1073,76 @@ async def seed_security_taxonomy_extras(session) -> None:
     print("OK security_taxonomies extras seeded")
 
 
+async def seed_default_soc_template(session) -> None:
+    """Seed the global SOC standard alert-report template (master spec §7).
+
+    Global (``tenant_id IS NULL``) default template ``soc_standard`` with a
+    single immutable v1 covering the 8 sections operators expect. Idempotent:
+    skips if the template already exists. The circular FK between template and
+    version requires the two-step flush dance (see ``create_template``)."""
+    from sqlalchemy import select
+    from backend.src.modules.alert_reports.infrastructure.models import (
+        AlertReportTemplateModel, AlertReportTemplateVersionModel,
+    )
+
+    exists = (await session.execute(
+        select(AlertReportTemplateModel).where(
+            AlertReportTemplateModel.code == "soc_standard",
+            AlertReportTemplateModel.tenant_id.is_(None),
+        )
+    )).scalar_one_or_none()
+    if exists:
+        print("  ~ soc_standard template already seeded, skipping")
+        return
+
+    # Incident-flow order: what happened, how severe, classification, how the
+    # attacker acted, techniques, evidence, chain-of-custody, what to do next.
+    blocks = [
+        {"type": "alert_metadata", "params": {}},
+        {"type": "priority_calculation", "params": {}},
+        {"type": "triage_analysis", "params": {}},
+        {"type": "behavior_relation", "params": {}},
+        {"type": "mitre_techniques", "params": {}},
+        {"type": "evidence_grid", "params": {}},
+        {"type": "forensic_artifacts_list", "params": {}},
+        {"type": "recommendations", "params": {}},
+    ]
+
+    template = AlertReportTemplateModel(
+        id=str(uuid.uuid4()), tenant_id=None,
+        name="SOC Standard", code="soc_standard",
+        description="Plantilla global estándar de reporte de alerta SOC.",
+        is_default=True, is_active=True,
+    )
+    session.add(template)
+    await session.flush()  # need template.id for the v1 row
+
+    version = AlertReportTemplateVersionModel(
+        id=str(uuid.uuid4()), template_id=template.id, version=1,
+        name_snapshot="SOC Standard",
+        header_config={}, footer_config={}, blocks=blocks,
+        change_summary="Versión inicial (seed)",
+    )
+    session.add(version)
+    await session.flush()  # need version.id for the back-pointer
+
+    template.current_version_id = version.id
+    template.current_version_number = 1
+    await session.commit()
+    print("  + soc_standard template seeded")
+
+
 async def seed_reference_data(session) -> None:
     """Opt-in reference data the integration tests assert on (statuses,
     priorities, SLA, classification, prioritization, SOC teams,
-    security-taxonomies extras). Idempotent."""
+    security-taxonomies extras, default alert-report template). Idempotent."""
     await seed_phase_2(session)
     await seed_phase_3(session)
     await seed_phase_4(session)
     await seed_prioritization(session)
     await seed_soc_teams(session)
     await seed_security_taxonomy_extras(session)
+    await seed_default_soc_template(session)
     print("OK Reference data seeded")
 
 
