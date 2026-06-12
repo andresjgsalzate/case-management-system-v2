@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from backend.src.core.dependencies import DBSession, Pagination
 from backend.src.modules.cases.application.dtos import (
@@ -21,6 +21,13 @@ from backend.src.modules.assignment.application.use_cases import AssignmentUseCa
 from backend.src.modules.archive.application.use_cases import ArchiveUseCases
 from backend.src.core.responses import SuccessResponse, PaginatedResponse
 from backend.src.core.middleware.permission_checker import CurrentUser, PermissionChecker
+from backend.src.modules.service_catalog.application.dtos import CaseCustomValueDTO
+
+
+class CaseCustomValuesUpsertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    values: list[CaseCustomValueDTO]
+
 
 router = APIRouter(prefix="/api/v1/cases", tags=["cases"])
 CasesRead = Depends(PermissionChecker("cases", "read"))
@@ -140,19 +147,15 @@ async def get_case_custom_values(
 @router.put("/{case_id}/custom-values")
 async def upsert_case_custom_values(
     case_id: str,
-    body: dict,
+    body: CaseCustomValuesUpsertRequest,
     db: DBSession,
     current_user: CurrentUser = CasesUpdate,
 ):
     from backend.src.modules.service_catalog.application.use_cases import (
         CaseCustomValueUseCases,
     )
-    from backend.src.modules.service_catalog.application.dtos import CaseCustomValueDTO
-
-    raw_values = body.get("values", [])
-    values = [CaseCustomValueDTO(**v) for v in raw_values]
     cv_uc = CaseCustomValueUseCases(db)
-    await cv_uc.upsert_values(case_id, values, current_user.tenant_id)
+    await cv_uc.upsert_values(case_id, body.values, current_user.tenant_id)
     return SuccessResponse.ok(await cv_uc.list_for_case(case_id))
 
 
