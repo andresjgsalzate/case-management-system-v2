@@ -1207,9 +1207,9 @@ class _MockN8nBridge:
     def __init__(self):
         self.calls: list[dict] = []
 
-    async def trigger_workflow(self, *, case_id, workflow_id, triggered_by):
+    async def trigger_workflow(self, *, case_id, workflow_url, triggered_by):
         self.calls.append({
-            "case_id": case_id, "workflow_id": workflow_id,
+            "case_id": case_id, "workflow_url": workflow_url,
             "triggered_by": triggered_by,
         })
 
@@ -1526,7 +1526,18 @@ def test_process_event_delegate_to_n8n_calls_bridge():
             default_service_item_id=svc_id,
             default_priority_id=prio_id, created_by=actor.id,
         )
-        # Insert taxonomy with delegate_to_n8n + a stub workflow id
+        # n8n_workflows catalog row: process_event resolves the taxonomy's
+        # delegated_workflow_id → this row's workflow_url before triggering.
+        wf_catalog_id = str(_uuid.uuid4())
+        stub_workflow_url = "https://n8n.test/wf/auto-triage-stub"
+        await session.execute(_t(
+            "INSERT INTO n8n_workflows "
+            "(id, tenant_id, name, workflow_url, is_active, requires_approval, "
+            "created_at, updated_at) "
+            "VALUES (:id, NULL, 'Auto-triage stub', :url, true, false, "
+            "NOW(), NOW())"
+        ), {"id": wf_catalog_id, "url": stub_workflow_url})
+        # Insert taxonomy with delegate_to_n8n pointing at the catalog row
         tax_id = str(_uuid.uuid4())
         await session.execute(_t(
             "INSERT INTO security_taxonomies "
@@ -1538,7 +1549,7 @@ def test_process_event_delegate_to_n8n_calls_bridge():
         ), {
             "id": tax_id, "tid": tenant_id,
             "code": f"TEST-N8N-{_uuid.uuid4().hex[:6]}", "n": "n8n delegate test",
-            "wf": "workflow-stub-id", "cb": actor.id,
+            "wf": wf_catalog_id, "cb": actor.id,
         })
         await session.commit()
         map_id = await _create_wazuh_mapping(
@@ -1575,13 +1586,16 @@ def test_process_event_delegate_to_n8n_calls_bridge():
         await _cleanup_wazuh_maps(session, [map_id])
         await _cleanup_taxonomies(session, [tax_id])
         await _cleanup_source(session, source_id)
+        await session.execute(_t(
+            "DELETE FROM n8n_workflows WHERE id = :id"
+        ), {"id": wf_catalog_id})
         return result, case_row
 
     result, case_row = _run_db_query(_go)
     assert result.status == "processed"
     assert case_row[0] == "pending_triage"
     assert len(n8n.calls) == 1
-    assert n8n.calls[0]["workflow_id"] == "workflow-stub-id"
+    assert n8n.calls[0]["workflow_url"] == "https://n8n.test/wf/auto-triage-stub"
     assert n8n.calls[0]["triggered_by"] == "auto_triage"
     assert n8n.calls[0]["case_id"] == result.case_id
 
