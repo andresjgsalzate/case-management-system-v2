@@ -1,3 +1,7 @@
+# pyright: reportUnusedImport=false
+# The model imports below are load-bearing: importing them registers their
+# tables on Base.metadata so SQLAlchemy can resolve FKs/relationships during
+# seeding. They are "unused" only to static analysis — do NOT remove them.
 """
 Database seed script.
 Run from the project root:

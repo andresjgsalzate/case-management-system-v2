@@ -75,3 +75,9 @@ nginx/certs/
 
 # Velociraptor config (contains mTLS certs/secrets — generate locally, don't commit)
 velo-config/
+
+# Local working docs, planning drafts and source spreadsheets — not shipped
+*.xlsx
+docs/plans/
+docs/superpowers/
+docs/REQUERIMIENTOS_TECNICOS_CASE_MANAGEMENT_SYSTEM.md
